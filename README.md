@@ -1,4 +1,4 @@
-# Pixel Obsidian 同步
+# Gray
 
 适用于 Pixel 9 Pro 的原生 Android App（Android 12 及以上）。点击“立即同步”，通过 Termux 执行固定目录 `~/storage/shared/Documents/obsidian` 的 Git 同步。
 
