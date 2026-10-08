@@ -15,8 +15,19 @@ if [ "$(cd "$top" && pwd -P)" != "$(pwd -P)" ]; then
     exit 1
 fi
 gitdir=$(git rev-parse --absolute-git-dir)
-exec 9>"$gitdir/pixel-sync.lock"
-flock -n 9 || { echo '已有同步任务正在执行。' >&2; exit 1; }
+# Android shared storage uses FUSE and may reject flock with ENOSYS.
+# Keep the lock on Termux's private filesystem instead of inside the vault.
+mkdir -p "$HOME/.cache/gray"
+exec 9>"$HOME/.cache/gray/obsidian-sync.lock"
+flock -n -E 75 9 || {
+    rc=$?
+    if [ "$rc" -eq 75 ]; then
+        echo '已有同步任务正在执行。' >&2
+    else
+        echo '无法获取 Termux 私有目录中的同步锁，请检查 Termux 环境。' >&2
+    fi
+    exit "$rc"
+}
 for state in MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD rebase-merge rebase-apply; do
     if [ -e "$gitdir/$state" ]; then echo '仓库有未完成的合并或变基，请先在 Termux 处理。' >&2; exit 1; fi
 done

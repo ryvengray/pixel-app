@@ -77,6 +77,8 @@ Gitee 不运行 GitHub Actions；若只保留 Gitee，可先用本地构建脚�
 
 App 只有收到 Termux 成功退出结果才显示成功；结果通过 PendingIntent 返回并保存在 App 本地，重新打开仍可查看。日志在结束后显示，不是实时输出。超过 10 分钟无回调会显示“结果未知”，这不表示任务已取消；请在 Termux 检查后重试，仓库文件锁防止并发执行。网络 pull/push 各限时 180 秒。Android 强制结束 Termux、网络中断、Git hooks 或凭据助手卡住仍可能导致任务无法完成。
 
+同步锁位于 Termux 私有目录 `~/.cache/gray/obsidian-sync.lock`，避免 Android 共享存储不支持 flock 的问题。
+
 冲突后在 Termux 运行 `git status`，手动解决冲突并完成合并提交，再点击同步。App 不会自动丢弃笔记或撤销提交。
 
 在提供 Git、Bash、flock、timeout 的 Linux/Termux 环境运行 `bash tests/sync-test.sh`，验证提交推送、无变化、分叉合并和冲突停止。测试仅使用临时仓库。
