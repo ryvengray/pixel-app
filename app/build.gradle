@@ -1,0 +1,42 @@
+plugins { id 'com.android.application' }
+def appVersion = new Properties()
+file('version.properties').withInputStream { appVersion.load(it) }
+def signing = new Properties()
+def signingFile = rootProject.file('.signing/signing.properties')
+if (signingFile.exists()) signingFile.withInputStream { signing.load(it) }
+def signingValue = { name -> System.getenv(name) ?: signing.getProperty(name) }
+def signingReady = ['RELEASE_STORE_FILE', 'RELEASE_STORE_PASSWORD', 'RELEASE_KEY_ALIAS', 'RELEASE_KEY_PASSWORD'].every { signingValue(it) }
+android {
+    namespace 'dev.pixel.sync'
+    compileSdk 35
+    defaultConfig {
+        applicationId 'dev.pixel.sync'
+        minSdk 31
+        targetSdk 35
+        versionCode appVersion.getProperty('VERSION_CODE').toInteger()
+        versionName appVersion.getProperty('VERSION_NAME')
+    }
+    signingConfigs {
+        if (signingReady) {
+            release {
+                storeFile rootProject.file(signingValue('RELEASE_STORE_FILE'))
+                storePassword signingValue('RELEASE_STORE_PASSWORD')
+                keyAlias signingValue('RELEASE_KEY_ALIAS')
+                keyPassword signingValue('RELEASE_KEY_PASSWORD')
+            }
+        }
+    }
+    buildTypes {
+        release {
+            if (signingReady) signingConfig signingConfigs.release
+        }
+    }
+}
+tasks.register('checkReleaseSigning') {
+    doLast {
+        if (!signingReady) throw new GradleException('Missing release signing configuration. Run scripts/New-ReleaseKey.ps1 or set RELEASE_* environment variables.')
+    }
+}
+tasks.configureEach {
+    if (name == 'preReleaseBuild') dependsOn 'checkReleaseSigning'
+}

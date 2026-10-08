@@ -1,0 +1,11 @@
+.gradle/
+.gradle-user/
+**/build/
+local.properties
+.idea/
+*.iml
+.signing/
+.tools/
+dist/
+*.jks
+*.keystore
