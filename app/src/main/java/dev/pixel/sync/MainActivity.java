@@ -1,94 +1,78 @@
 package dev.pixel.sync;
-
 import android.app.Activity;
-import android.app.PendingIntent;
+import android.app.Dialog;
 import android.content.Intent;
 import android.content.SharedPreferences;
-import android.content.pm.PackageManager;
-import android.net.Uri;
+import android.content.res.Configuration;
+import android.graphics.Color;
+import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
-import android.os.Handler;
-import android.provider.Settings;
-import android.view.View;
+import android.view.*;
 import android.widget.*;
-import java.nio.charset.StandardCharsets;
-import java.util.UUID;
 
 public class MainActivity extends Activity {
-    private static final String PERMISSION = "com.termux.permission.RUN_COMMAND";
-    private SharedPreferences prefs;
-    private TextView status, log;
-    private Button sync;
-    private final Handler handler = new Handler();
-    private final Runnable refresh = new Runnable() {
-        public void run() { render(); handler.postDelayed(this, 1000); }
-    };
-    @Override public void onCreate(Bundle state) {
-        super.onCreate(state);
-        prefs = getSharedPreferences("sync", 0);
-        LinearLayout body = new LinearLayout(this);
-        body.setOrientation(LinearLayout.VERTICAL);
-        body.setPadding(48, 48, 48, 48);
-        body.setOnApplyWindowInsetsListener((v, insets) -> {
-            android.graphics.Insets bars = insets.getInsets(android.view.WindowInsets.Type.systemBars());
-            v.setPadding(48, bars.top + 32, 48, bars.bottom + 32); return insets;
-        });
-        TextView title = new TextView(this); title.setText("Obsidian 一键同步"); title.setTextSize(26); body.addView(title);
-        TextView path = new TextView(this); path.setText("~/storage/shared/Documents/obsidian\n\n检查 → commit → pull → push\n"); body.addView(path);
-        status = new TextView(this); status.setTextSize(20); body.addView(status);
-        sync = new Button(this); sync.setText("立即同步"); sync.setOnClickListener(v -> startSync()); body.addView(sync);
-        Button settings = new Button(this); settings.setText("调用权限设置");
-        settings.setOnClickListener(v -> startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + getPackageName())))); body.addView(settings);
-        Button termux = new Button(this); termux.setText("打开 Termux"); termux.setOnClickListener(v -> {
-            Intent launch = getPackageManager().getLaunchIntentForPackage("com.termux");
-            if (launch != null) startActivity(launch); else Toast.makeText(this, "请先安装 Termux", Toast.LENGTH_LONG).show();
-        }); body.addView(termux);
-        TextView help = new TextView(this); help.setText("首次使用请按 README 配置 Termux、存储权限和 Git 认证。执行期间请暂停编辑笔记。若长时间没有结果，请到 Termux 检查任务；重新点击会由仓库锁防止并发执行。\n"); body.addView(help);
-        ScrollView scroll = new ScrollView(this); log = new TextView(this); log.setTextIsSelectable(true); scroll.addView(log); body.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
-        setContentView(body);
-    }
-    @Override public void onResume() { super.onResume(); handler.post(refresh); }
-    @Override public void onPause() { super.onPause(); handler.removeCallbacks(refresh); }
-    private void render() {
-        boolean running = prefs.getBoolean("running", false);
-        boolean stale = running && System.currentTimeMillis() - prefs.getLong("started", 0) > 600000;
-        status.setText(stale ? "结果未知：请检查 Termux 后重试" : prefs.getString("status", "准备就绪"));
-        sync.setEnabled(!running || stale);
-        log.setText(prefs.getString("log", "执行日志会在任务结束后显示。"));
-    }
-    private void startSync() {
-        try {
-            getPackageManager().getPackageInfo("com.termux", 0);
-            if (checkSelfPermission(PERMISSION) != PackageManager.PERMISSION_GRANTED) {
-                requestPermissions(new String[]{PERMISSION}, 1); return;
-            }
-            String script;
-            try (java.io.InputStream stream = getAssets().open("sync.sh")) {
-                java.io.ByteArrayOutputStream buffer = new java.io.ByteArrayOutputStream();
-                byte[] bytes = new byte[4096]; int count;
-                while ((count = stream.read(bytes)) != -1) buffer.write(bytes, 0, count);
-                script = new String(buffer.toByteArray(), StandardCharsets.UTF_8);
-            }
-            String id = UUID.randomUUID().toString();
-            Intent callback = new Intent(this, ResultReceiver.class).setData(Uri.parse("pixelsync://result/" + id)).putExtra("runId", id);
-            PendingIntent result = PendingIntent.getBroadcast(this, 0, callback, PendingIntent.FLAG_ONE_SHOT | PendingIntent.FLAG_MUTABLE);
-            Intent command = new Intent("com.termux.RUN_COMMAND").setClassName("com.termux", "com.termux.app.RunCommandService");
-            command.putExtra("com.termux.RUN_COMMAND_PATH", "/data/data/com.termux/files/usr/bin/bash");
-            command.putExtra("com.termux.RUN_COMMAND_ARGUMENTS", new String[]{"-c", script});
-            command.putExtra("com.termux.RUN_COMMAND_WORKDIR", "/data/data/com.termux/files/home");
-            command.putExtra("com.termux.RUN_COMMAND_BACKGROUND", true);
-            command.putExtra("com.termux.RUN_COMMAND_PENDING_INTENT", result);
-            prefs.edit().putString("runId", id).putBoolean("running", true).putLong("started", System.currentTimeMillis())
-                    .putString("status", "同步执行中…").putString("log", "等待 Termux 返回结果。最多等待网络步骤各 180 秒。").commit();
-            if (startService(command) == null) throw new IllegalStateException("无法启动 Termux 服务");
-        } catch (Exception e) {
-            prefs.edit().putBoolean("running", false).putString("status", "启动失败")
-                    .putString("log", "请确认已安装 Termux、授权运行命令并启用 allow-external-apps。\n" + e).apply();
-        }
-        render();
-    }
-    @Override public void onRequestPermissionsResult(int code, String[] permissions, int[] grants) {
-        super.onRequestPermissionsResult(code, permissions, grants);
-        if (code == 1 && grants.length > 0 && grants[0] == PackageManager.PERMISSION_GRANTED) startSync();
-    }
+ private PetScene scene;
+ private SharedPreferences preferences;
+ private boolean dark;
+ private FrameLayout overlay;
+ private TextView title,caption,hint,menuButton;
+ private Dialog menu;
+ private int foreground,secondary;
+ private int dp(float n){return Math.round(n*getResources().getDisplayMetrics().density);}
+ private boolean systemDark(){return (getResources().getConfiguration().uiMode&Configuration.UI_MODE_NIGHT_MASK)==Configuration.UI_MODE_NIGHT_YES;}
+ @Override public void onCreate(Bundle state){
+  super.onCreate(state);preferences=getSharedPreferences("home",0);
+  int choice=preferences.getInt("theme",0);dark=choice==0?systemDark():choice==2;
+  getWindow().setDecorFitsSystemWindows(false);getWindow().setStatusBarColor(Color.TRANSPARENT);getWindow().setNavigationBarColor(Color.TRANSPARENT);
+  FrameLayout root=new FrameLayout(this);
+  scene=new PetScene(this);scene.setTheme(dark);scene.setMoving(!preferences.getBoolean("reduceMotion",false));
+  root.addView(scene,new FrameLayout.LayoutParams(-1,-1));overlay=new FrameLayout(this);root.addView(overlay,new FrameLayout.LayoutParams(-1,-1));
+  title=text("Gray",23);title.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));
+  FrameLayout.LayoutParams header=new FrameLayout.LayoutParams(-2,-2,Gravity.TOP|Gravity.LEFT);header.leftMargin=dp(28);header.topMargin=dp(26);overlay.addView(title,header);
+  menuButton=text("•••",22);menuButton.setGravity(Gravity.CENTER);menuButton.setContentDescription("打开功能和外观菜单");menuButton.setOnClickListener(v->showMenu());
+  FrameLayout.LayoutParams button=new FrameLayout.LayoutParams(dp(52),dp(48),Gravity.TOP|Gravity.RIGHT);button.topMargin=dp(18);button.rightMargin=dp(20);overlay.addView(menuButton,button);
+  LinearLayout greeting=new LinearLayout(this);greeting.setOrientation(LinearLayout.VERTICAL);greeting.setGravity(Gravity.CENTER);
+  caption=text("在这里，陪着你",19);caption.setGravity(Gravity.CENTER);greeting.addView(caption);
+  hint=text("轻触我，打个招呼",12);hint.setGravity(Gravity.CENTER);hint.setPadding(0,dp(12),0,0);greeting.addView(hint);
+  FrameLayout.LayoutParams gp=new FrameLayout.LayoutParams(-1,-2,Gravity.BOTTOM);gp.bottomMargin=dp(110);overlay.addView(greeting,gp);
+  TextView petTouch=new TextView(this);petTouch.setContentDescription("玉绿色宠物，点击让它跳一跳，长按打开菜单");
+  petTouch.setOnClickListener(v->{scene.react();hint.setText("很高兴见到你");hint.removeCallbacks(resetHint);hint.postDelayed(resetHint,2500);});
+  petTouch.setOnLongClickListener(v->{showMenu();return true;});
+  FrameLayout.LayoutParams pp=new FrameLayout.LayoutParams(dp(290),dp(300),Gravity.CENTER);pp.bottomMargin=dp(30);overlay.addView(petTouch,pp);
+  root.setOnApplyWindowInsetsListener((v,insets)->{android.graphics.Insets safe=insets.getInsets(WindowInsets.Type.systemBars()|WindowInsets.Type.displayCutout());overlay.setPadding(safe.left,safe.top,safe.right,safe.bottom);return insets;});
+  setContentView(root);applyColors();
+ }
+ private final Runnable resetHint=()->{if(hint!=null)hint.setText("轻触我，打个招呼");};
+ private TextView text(String value,int size){TextView v=new TextView(this);v.setText(value);v.setTextSize(size);return v;}
+ private GradientDrawable surface(int color,int radius){GradientDrawable d=new GradientDrawable();d.setColor(color);d.setCornerRadius(dp(radius));return d;}
+ private void applyColors(){
+  foreground=Color.parseColor(dark?"#E5EDE3":"#263C31");secondary=Color.parseColor(dark?"#92A99A":"#708675");
+  title.setTextColor(foreground);caption.setTextColor(foreground);hint.setTextColor(secondary);menuButton.setTextColor(foreground);
+  menuButton.setBackground(surface(Color.parseColor(dark?"#263D33":"#DDE8DC"),24));scene.setTheme(dark);
+  WindowInsetsController controller=getWindow().getInsetsController();if(controller!=null){
+   int appearance=WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS|WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;
+   controller.setSystemBarsAppearance(dark?0:appearance,appearance);controller.setSystemBarsBehavior(WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);controller.hide(WindowInsets.Type.systemBars());
+  }
+ }
+ private void showMenu(){
+  if(menu!=null&&menu.isShowing())return;menu=new Dialog(this);
+  LinearLayout sheet=new LinearLayout(this);sheet.setOrientation(LinearLayout.VERTICAL);sheet.setPadding(dp(24),dp(18),dp(24),dp(24));sheet.setBackground(surface(Color.parseColor(dark?"#172B22":"#F5F7F0"),28));
+  TextView heading=text("你的 Gray",22);heading.setTextColor(foreground);heading.setPadding(0,0,0,dp(16));sheet.addView(heading);
+  sheet.addView(menuAction("Obsidian 同步",()->{menu.dismiss();startActivity(new Intent(this,SyncActivity.class));}));
+  TextView label=text("外观",13);label.setTextColor(secondary);label.setPadding(0,dp(20),0,dp(8));sheet.addView(label);
+  LinearLayout themes=new LinearLayout(this);String[] labels={"跟随系统","浅色","深色"};
+  for(int i=0;i<labels.length;i++){final int choice=i;Button theme=menuAction(labels[i],()->{
+   preferences.edit().putInt("theme",choice).apply();dark=choice==0?systemDark():choice==2;menu.dismiss();applyColors();showMenu();
+  });if(preferences.getInt("theme",0)==i)theme.setText("✓ "+labels[i]);themes.addView(theme,new LinearLayout.LayoutParams(0,dp(52),1));}sheet.addView(themes);
+  Switch reduce=new Switch(this);reduce.setText("减少动态效果");reduce.setTextColor(foreground);reduce.setPadding(0,dp(18),0,dp(18));reduce.setChecked(!scene.isMoving());
+  reduce.setOnCheckedChangeListener((v,checked)->{preferences.edit().putBoolean("reduceMotion",checked).apply();scene.setMoving(!checked);});sheet.addView(reduce);
+  TextView about=text("文字聊天正在准备中",12);about.setTextColor(secondary);sheet.addView(about);sheet.addView(menuAction("回到宠物",()->menu.dismiss()));
+  menu.setContentView(sheet);Window window=menu.getWindow();if(window!=null){window.setBackgroundDrawableResource(android.R.color.transparent);window.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);window.setDimAmount(.25f);window.setGravity(Gravity.BOTTOM);}
+  menu.setOnDismissListener(d->applyColors());menu.show();if(window!=null)window.setLayout(-1,-2);
+ }
+ private Button menuAction(String label,Runnable action){Button b=new Button(this);b.setText(label);b.setAllCaps(false);b.setTextColor(foreground);b.setBackground(new android.graphics.drawable.RippleDrawable(android.content.res.ColorStateList.valueOf(Color.parseColor(dark?"#406651":"#CADBC7")),surface(Color.parseColor(dark?"#294536":"#E3ECDC"),16),null));b.setElevation(0);b.setMinHeight(dp(48));b.setOnClickListener(v->action.run());return b;}
+ @Override public void onResume(){super.onResume();if(preferences.getInt("theme",0)==0)dark=systemDark();scene.resumeScene();applyColors();}
+ @Override public void onPause(){hint.removeCallbacks(resetHint);scene.pauseScene();super.onPause();}
+ @Override public void onDestroy(){if(menu!=null)menu.dismiss();super.onDestroy();}
 }
