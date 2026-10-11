@@ -4,7 +4,18 @@
 
 首页是全屏动态背景和实时 3D 玉绿色圆润三角形宠物。宠物会呼吸、漂浮、眨眼、轻微扭动，轻触时弹跳并变换嘴型。右上角小圆钮或长按宠物可展开底部菜单，进入 Obsidian 同步、选择跟随系统/浅色/深色主题、开启减少动态效果。主题偏好会保留，离开首页时暂停渲染。系统栏默认隐藏，从屏幕边缘滑动可临时唤出。
 
-文字聊天尚未接入；当前点击宠物的回应是本地互动，不是模型回复。
+文字聊天已接入私有助理服务：从右上角菜单进入“和 Gray 聊聊”。完整对话和长期记忆以 Pixel 本地数据库为主，服务端仅保留后台任务所需的同步记忆副本。可在“我的长期记忆”中查看、修正、手动添加或删除记忆。
+
+## 私人助理服务
+
+服务端代码在 [`server/`](server/README.md)，与 Android App 保持在同一个项目中。它负责调用 DeepSeek、执行提醒和保存待推送消息。将 `server/.env.example` 复制为 `server/.env`，填入带 `/gray` context 的 frp 公网 HTTPS 地址和 `DEEPSEEK_API_KEY` 后，在项目根目录运行 `docker compose up -d --build`；`.env`、服务端数据库和 Firebase 服务账户文件均被 Git 忽略。完整的 Docker、frp 和 Nginx 配置见 [`server/DEPLOYMENT.md`](server/DEPLOYMENT.md)。手机通过一次性二维码配对，不需要输入长期访问令牌。
+
+App 的“助理设置”包含两种连接方式：
+
+- 正常情况：调用你本地电脑上的私有服务。手机不保留服务端 DeepSeek Key。
+- 服务端不可用时：可选择配置个人 DeepSeek Key 作为手机直连兜底。该 Key 与服务访问令牌都由 Android Keystore 加密保存，不写入 APK、数据库或 Git。
+
+没有网络时，App 仍可查看、编辑记忆和历史，但无法获得模型回复；服务端恢复后才能继续后台提醒和主动通知。FCM 的服务端发送能力已预留；待创建 Firebase 项目并接入 Android 设备注册后，服务端会用其服务账户发送系统推送。
 
 适用于 Pixel 9 Pro 的原生 Android App（Android 12 及以上）。点击“立即同步”，通过 Termux 执行固定目录 `~/storage/shared/Documents/obsidian` 的 Git 同步。
 

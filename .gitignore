@@ -9,3 +9,10 @@ local.properties
 dist/
 *.jks
 *.keystore
+.env
+server/.env
+server/data/
+server/private/
+google-services.json
+__pycache__/
+*.py[cod]
