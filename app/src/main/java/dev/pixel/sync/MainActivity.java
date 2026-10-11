@@ -59,6 +59,9 @@ public class MainActivity extends Activity {
   if(menu!=null&&menu.isShowing())return;menu=new Dialog(this);
   LinearLayout sheet=new LinearLayout(this);sheet.setOrientation(LinearLayout.VERTICAL);sheet.setPadding(dp(24),dp(18),dp(24),dp(24));sheet.setBackground(surface(Color.parseColor(dark?"#172B22":"#F5F7F0"),28));
   TextView heading=text("你的 Gray",22);heading.setTextColor(foreground);heading.setPadding(0,0,0,dp(16));sheet.addView(heading);
+  sheet.addView(menuAction("和 Gray 聊聊",()->{menu.dismiss();startActivity(new Intent(this,ChatActivity.class));}));
+  sheet.addView(menuAction("我的长期记忆",()->{menu.dismiss();startActivity(new Intent(this,MemoryActivity.class));}));
+  sheet.addView(menuAction("助理设置",()->{menu.dismiss();startActivity(new Intent(this,AssistantSettingsActivity.class));}));
   sheet.addView(menuAction("Obsidian 同步",()->{menu.dismiss();startActivity(new Intent(this,SyncActivity.class));}));
   TextView label=text("外观",13);label.setTextColor(secondary);label.setPadding(0,dp(20),0,dp(8));sheet.addView(label);
   LinearLayout themes=new LinearLayout(this);String[] labels={"跟随系统","浅色","深色"};
@@ -67,7 +70,7 @@ public class MainActivity extends Activity {
   });if(preferences.getInt("theme",0)==i)theme.setText("✓ "+labels[i]);themes.addView(theme,new LinearLayout.LayoutParams(0,dp(52),1));}sheet.addView(themes);
   Switch reduce=new Switch(this);reduce.setText("减少动态效果");reduce.setTextColor(foreground);reduce.setPadding(0,dp(18),0,dp(18));reduce.setChecked(!scene.isMoving());
   reduce.setOnCheckedChangeListener((v,checked)->{preferences.edit().putBoolean("reduceMotion",checked).apply();scene.setMoving(!checked);});sheet.addView(reduce);
-  TextView about=text("文字聊天正在准备中",12);about.setTextColor(secondary);sheet.addView(about);sheet.addView(menuAction("回到宠物",()->menu.dismiss()));
+  TextView about=text("聊天和记忆由你的私有服务与本地副本共同管理",12);about.setTextColor(secondary);sheet.addView(about);sheet.addView(menuAction("回到宠物",()->menu.dismiss()));
   menu.setContentView(sheet);Window window=menu.getWindow();if(window!=null){window.setBackgroundDrawableResource(android.R.color.transparent);window.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);window.setDimAmount(.25f);window.setGravity(Gravity.BOTTOM);}
   menu.setOnDismissListener(d->applyColors());menu.show();if(window!=null)window.setLayout(-1,-2);
  }

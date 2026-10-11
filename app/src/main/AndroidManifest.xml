@@ -1,11 +1,16 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="com.termux.permission.RUN_COMMAND" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-feature android:glEsVersion="0x00020000" android:required="true" />
     <queries><package android:name="com.termux" /></queries>
     <application android:label="Gray" android:theme="@android:style/Theme.Material.Light.NoActionBar" android:allowBackup="false" android:supportsRtl="true">
         <activity android:name=".MainActivity" android:exported="true">
             <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter>
         </activity>
+        <activity android:name=".ChatActivity" android:exported="false" />
+        <activity android:name=".MemoryActivity" android:exported="false" />
+        <activity android:name=".AssistantSettingsActivity" android:exported="false" />
         <receiver android:name=".ResultReceiver" android:exported="false" />
         <activity android:name=".SyncActivity" android:exported="false" />
     </application>

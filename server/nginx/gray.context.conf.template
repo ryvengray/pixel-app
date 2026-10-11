@@ -1,0 +1,29 @@
+# Install this snippet in the HTTPS virtual host that already owns your public
+# domain. Replace FRP_REMOTE_PORT with Gray's dedicated frps TCP port.
+#
+# FRP_REMOTE_PORT is the TCP port exposed by frps for this Gray service.
+# Keep that port blocked from the public Internet: only Nginx on this host
+# should reach it through 127.0.0.1.
+
+# Ensure https://PUBLIC_DOMAIN/gray resolves consistently.
+location = /gray {
+    return 308 /gray/;
+}
+
+# This context prefix is intentionally stripped before traffic reaches FastAPI.
+# Gray consequently keeps routes such as /v1/chat rather than /gray/v1/chat.
+location /gray/ {
+    proxy_pass http://127.0.0.1:FRP_REMOTE_PORT/;
+    proxy_http_version 1.1;
+
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-Prefix /gray;
+
+    client_max_body_size 1m;
+    proxy_connect_timeout 10s;
+    proxy_send_timeout 90s;
+    proxy_read_timeout 90s;
+}
