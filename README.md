@@ -94,6 +94,7 @@ git push origin v1.0.0
 
 ```bash
 gh auth login
+bash scripts/New-ReleaseKey.sh
 bash scripts/Setup-GitHubSigningSecrets.sh ryvengray/pixel-app
 ```
 
