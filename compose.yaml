@@ -1,4 +1,14 @@
 services:
+  gray-data-permissions:
+    build:
+      context: ./server
+    container_name: gray-data-permissions
+    user: "0:0"
+    restart: "no"
+    command: ["sh", "-c", "mkdir -p /data && chown -R 10001:10001 /data"]
+    volumes:
+      - ./server/data:/data
+
   gray-service:
     build:
       context: ./server
@@ -16,6 +26,9 @@ services:
     secrets:
       - source: firebase_service_account
         target: firebase-service-account.json
+    depends_on:
+      gray-data-permissions:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:8787/health', timeout=3)"]
       interval: 30s

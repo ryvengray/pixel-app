@@ -34,6 +34,8 @@ FIREBASE_SERVICE_ACCOUNT_FILE=/run/secrets/firebase-service-account.json
 
 将 Firebase Admin SDK 的服务账号 JSON 放在 `server/private/firebase-service-account.json`。Compose 会以只读 Docker Secret 挂载到 `/run/secrets/firebase-service-account.json`；该文件不会进入 Git。
 
+Compose 启动时会先运行一个一次性的权限初始化容器，将 `server/data/` 的属主设置为服务用户；这样 Ubuntu 上首次自动创建的 root 目录也可以被 SQLite 写入。
+
 ## 2. 启动本地 Docker 服务
 
 确保 Docker Desktop 正在运行，然后在仓库根目录执行：
