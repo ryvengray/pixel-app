@@ -33,6 +33,10 @@ public final class AssistantApi {
     public static void syncMemory(Context context,AssistantStore.Memory memory)throws Exception{
         String url=serverUrl(context),token=secret(context,"device_token");if(url.isEmpty()||token.isEmpty())return;JSONObject body=new JSONObject().put("id",memory.id).put("category",memory.category).put("fact",memory.fact).put("confidence",memory.confidence).put("source",memory.source).put("revision",memory.revision).put("deleted",memory.deleted).put("updated_at",memory.updatedAt);post(url+"/v1/memories/"+URLEncoder.encode(memory.id,"UTF-8"),token,body);
     }
+    public static void registerDevice(Context context,String fcmToken)throws Exception{
+        String url=serverUrl(context),token=secret(context,"device_token");if(url.isEmpty()||token.isEmpty()||fcmToken==null||fcmToken.isEmpty())return;
+        post(url+"/v1/devices",token,new JSONObject().put("fcm_token",fcmToken));
+    }
     public static void claimPairing(Context context,String rawCode,String deviceName)throws Exception{
         JSONObject code=new JSONObject(rawCode);if(code.optInt("version")!=1)throw new IOException("这不是 Gray 的配对二维码。");String endpoint=code.optString("endpoint","");String secret=code.optString("secret","");if(!endpoint.startsWith("https://")||secret.isEmpty())throw new IOException("二维码内容无效。");
         JSONObject result=new JSONObject(post(endpoint,"",new JSONObject().put("secret",secret).put("device_name",deviceName)));String deviceToken=result.getString("device_token");int marker=endpoint.indexOf("/v1/pairings/");if(marker<0)throw new IOException("二维码服务地址无效。");String base=endpoint.substring(0,marker);context.getSharedPreferences("gray_settings",Context.MODE_PRIVATE).edit().putString("server_url",base).apply();new SecureStore(context).put("device_token",deviceToken);

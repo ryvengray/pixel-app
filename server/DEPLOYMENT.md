@@ -27,10 +27,12 @@ DEEPSEEK_API_KEY=你的DeepSeek密钥
 DEEPSEEK_BASE_URL=https://api.deepseek.com
 DEEPSEEK_MODEL=deepseek-chat
 DATABASE_PATH=./data/gray.db
-FIREBASE_SERVICE_ACCOUNT_FILE=
+FIREBASE_SERVICE_ACCOUNT_FILE=/run/secrets/firebase-service-account.json
 ```
 
 `GRAY_PUBLIC_BASE_URL` 必须和 Nginx 的真实 HTTPS 地址及 context 完全一致，且不以 `/` 结尾。`.env` 不提交 Git。
+
+将 Firebase Admin SDK 的服务账号 JSON 放在 `server/private/firebase-service-account.json`。Compose 会以只读 Docker Secret 挂载到 `/run/secrets/firebase-service-account.json`；该文件不会进入 Git。
 
 ## 2. 启动本地 Docker 服务
 

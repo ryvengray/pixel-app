@@ -18,4 +18,9 @@ foreach ($name in @('RELEASE_STORE_PASSWORD', 'RELEASE_KEY_ALIAS', 'RELEASE_KEY_
     $properties[$name] | & $Gh secret set $name --repo $Repository
     if ($LASTEXITCODE -ne 0) { throw "Failed to set $name" }
 }
-Write-Host "Signing secrets configured for $Repository."
+$firebaseConfig = Join-Path $projectRoot 'app/google-services.json'
+if (-not (Test-Path -LiteralPath $firebaseConfig)) { throw 'Missing app/google-services.json. Download it from Firebase Console first.' }
+$firebaseBase64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes($firebaseConfig))
+$firebaseBase64 | & $Gh secret set FIREBASE_ANDROID_CONFIG_BASE64 --repo $Repository
+if ($LASTEXITCODE -ne 0) { throw 'Failed to set FIREBASE_ANDROID_CONFIG_BASE64' }
+Write-Host "Signing and Firebase secrets configured for $Repository."

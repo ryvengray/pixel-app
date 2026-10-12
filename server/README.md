@@ -28,6 +28,6 @@ It prints a one-time QR code that expires after ten minutes. In Gray, open “�
 
 The app attaches the device token as a Bearer header for each request. A later device-management screen can revoke an individual device without affecting others.
 
-FCM is optional at first. After creating a Firebase service account, save its JSON as `server/private/firebase-service-account.json` and retain the path in `.env.example`. The entire `private/` directory is ignored by Git. A registered device then receives reminders as system notifications; every reminder is also retained in the message inbox for later retrieval.
+FCM is wired into both sides. Save the Firebase service-account JSON as `server/private/firebase-service-account.json`; Compose mounts it as the read-only Docker Secret `/run/secrets/firebase-service-account.json`, and the path is already configured in `.env.example`. The entire `private/` directory is ignored by Git. After QR pairing, the app registers its FCM token automatically and receives reminders as system notifications; every reminder is also retained in the message inbox for later retrieval.
 
 The phone is the source of truth for the user’s complete long-term memory. This service retains only the synchronized memory projection necessary for service-side reminders and proactive work. Delete events are tombstones and remove the service copy.

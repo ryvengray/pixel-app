@@ -6,7 +6,9 @@ import android.os.Bundle;
 import android.text.InputType;
 import android.view.*;
 import android.widget.*;
-import com.google.android.gms.tasks.Task;
+import android.Manifest;
+import android.content.pm.PackageManager;
+import android.os.Build;
 import com.google.mlkit.vision.barcode.common.Barcode;
 import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions;
 import com.google.mlkit.vision.codescanner.GmsBarcodeScanning;
@@ -32,6 +34,6 @@ public class AssistantSettingsActivity extends Activity {
         TextView note=new TextView(this);note.setText("先在本地电脑运行 docker compose exec gray-service python -m app.pairing，它会显示一个十分钟有效的二维码。服务端密钥只保存在本地电脑的 server/.env，绝不填写到这里。\n\n长期记忆始终以手机为主库。服务端只保存同步副本，用来运行提醒和主动任务。");body.addView(note);
     }
     private void scanPairing(){GmsBarcodeScannerOptions options=new GmsBarcodeScannerOptions.Builder().setBarcodeFormats(Barcode.FORMAT_QR_CODE).build();GmsBarcodeScanning.getClient(this,options).startScan().addOnSuccessListener(barcode->{String raw=barcode.getRawValue();if(raw==null)return;pair(raw);}).addOnFailureListener(error->Toast.makeText(this,"无法扫描二维码："+error.getMessage(),Toast.LENGTH_LONG).show());}
-    private void pair(String code){new Thread(()->{try{AssistantApi.claimPairing(this,code,android.os.Build.MODEL);runOnUiThread(()->{endpoint.setText(getSharedPreferences("gray_settings",MODE_PRIVATE).getString("server_url",""));Toast.makeText(this,"这台设备已配对",Toast.LENGTH_SHORT).show();});}catch(Exception e){runOnUiThread(()->Toast.makeText(this,"配对失败："+e.getMessage(),Toast.LENGTH_LONG).show());}}).start();}
+    private void pair(String code){new Thread(()->{try{AssistantApi.claimPairing(this,code,android.os.Build.MODEL);runOnUiThread(()->{endpoint.setText(getSharedPreferences("gray_settings",MODE_PRIVATE).getString("server_url",""));FcmManager.refresh(this);if(Build.VERSION.SDK_INT>=33&&checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED)requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS},42);Toast.makeText(this,"这台设备已配对，正在启用提醒",Toast.LENGTH_SHORT).show();});}catch(Exception e){runOnUiThread(()->Toast.makeText(this,"配对失败："+e.getMessage(),Toast.LENGTH_LONG).show());}}).start();}
     private void save(){try{getSharedPreferences("gray_settings",MODE_PRIVATE).edit().putString("server_url",endpoint.getText().toString().trim().replaceAll("/+$","")).apply();SecureStore secure=new SecureStore(this);secure.put("deepseek_key",deepseekKey.getText().toString());Toast.makeText(this,"已保存",Toast.LENGTH_SHORT).show();finish();}catch(Exception e){Toast.makeText(this,"无法安全保存："+e.getMessage(),Toast.LENGTH_LONG).show();}}
 }

@@ -1,4 +1,7 @@
-plugins { id 'com.android.application' }
+plugins {
+    id 'com.android.application'
+    id 'com.google.gms.google-services'
+}
 def appVersion = new Properties()
 file('version.properties').withInputStream { appVersion.load(it) }
 def signing = new Properties()
@@ -34,6 +37,8 @@ android {
 }
 dependencies {
     implementation 'com.google.android.gms:play-services-code-scanner:16.1.0'
+    implementation platform('com.google.firebase:firebase-bom:34.19.0')
+    implementation 'com.google.firebase:firebase-messaging'
 }
 tasks.register('checkReleaseSigning') {
     doLast {

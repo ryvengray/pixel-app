@@ -15,7 +15,7 @@ App 的“助理设置”包含两种连接方式：
 - 正常情况：调用你本地电脑上的私有服务。手机不保留服务端 DeepSeek Key。
 - 服务端不可用时：可选择配置个人 DeepSeek Key 作为手机直连兜底。该 Key 与服务访问令牌都由 Android Keystore 加密保存，不写入 APK、数据库或 Git。
 
-没有网络时，App 仍可查看、编辑记忆和历史，但无法获得模型回复；服务端恢复后才能继续后台提醒和主动通知。FCM 的服务端发送能力已预留；待创建 Firebase 项目并接入 Android 设备注册后，服务端会用其服务账户发送系统推送。
+没有网络时，App 仍可查看、编辑记忆和历史，但无法获得模型回复；服务端恢复后才能继续后台提醒和主动通知。Android 端已接入 Firebase Cloud Messaging：扫码配对后会自动注册设备令牌，服务端使用 Firebase 服务账户发送系统推送。Android 13 及以上首次配对时会请求通知权限。
 
 适用于 Pixel 9 Pro 的原生 Android App（Android 12 及以上）。点击“立即同步”，通过 Termux 执行固定目录 `~/storage/shared/Documents/obsidian` 的 Git 同步。
 
@@ -87,6 +87,25 @@ git push origin v1.0.0
 推送 `v*` 标签将自动测试、构建、验证签名，并发布一个含 APK 的 GitHub Release。标签必须与 `app/version.properties` 的 `VERSION_NAME` 一致，例如 `v1.0.0`。Obtainium 添加该 GitHub 仓库链接即可获取 Release APK，不需要自己下载 Actions artifacts。每个 Release 仅提供一个通用 APK，适用于 Pixel 9 Pro。
 
 后续发布前，将 `VERSION_CODE` 增加为更大的整数，并更新 `VERSION_NAME`；提交推送后创建对应新标签。不更换包名或签名密钥，不复用旧标签。
+
+### Ubuntu 自动发布
+
+在 Ubuntu 服务器安装 JDK 17、Android SDK Platform 35 和 Build Tools 35.0.0，设置 `ANDROID_HOME`（或 `ANDROID_SDK_ROOT`）后，将同一份 `.signing/` 私有签名目录安全地放入项目根目录。首次登录 GitHub CLI 并配置 Actions 签名密钥：
+
+```bash
+gh auth login
+bash scripts/Setup-GitHubSigningSecrets.sh ryvengray/pixel-app
+```
+
+发布时不传版本号，脚本会显示当前版本，并提供“主版本升级”“功能更新”“修复更新”三项选择；也可直接传入确定的版本号以跳过菜单。随后脚本自动递增 `VERSION_CODE`、构建及校验已签名 APK、提交版本修改、推送分支和 `v*` 标签：
+
+```bash
+bash scripts/release-ubuntu.sh
+# 或直接指定版本号
+bash scripts/release-ubuntu.sh 1.2.0
+```
+
+标签推送会触发 GitHub Actions 创建 GitHub Release，Obtainium 继续使用同一仓库链接追踪更新。脚本会拒绝脏工作区、已存在标签、缺失 SDK 或签名文件，避免发布不可安装的更新。
 
 Gitee 不运行 GitHub Actions；若只保留 Gitee，可先用本地构建脚本生成签名 APK，再上传到 Gitee 的 Release，但 Obtainium 需要另行验证并配置通用 HTML 来源。
 

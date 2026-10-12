@@ -11,6 +11,11 @@
         <activity android:name=".ChatActivity" android:exported="false" />
         <activity android:name=".MemoryActivity" android:exported="false" />
         <activity android:name=".AssistantSettingsActivity" android:exported="false" />
+        <service android:name=".GrayFirebaseMessagingService" android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
         <receiver android:name=".ResultReceiver" android:exported="false" />
         <activity android:name=".SyncActivity" android:exported="false" />
     </application>

@@ -1,0 +1,32 @@
+package dev.pixel.sync;
+
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.app.PendingIntent;
+import android.content.Context;
+import android.content.Intent;
+import android.os.Build;
+import com.google.firebase.messaging.FirebaseMessagingService;
+import com.google.firebase.messaging.RemoteMessage;
+
+/** Receives Gray's reminder payloads and keeps the server token current. */
+public class GrayFirebaseMessagingService extends FirebaseMessagingService {
+    private static final String CHANNEL = "gray_reminders";
+    @Override public void onNewToken(String token) { FcmManager.register(this, token); }
+    @Override public void onMessageReceived(RemoteMessage message) {
+        String title = message.getNotification() == null ? "Gray" : message.getNotification().getTitle();
+        String body = message.getNotification() == null ? message.getData().get("body") : message.getNotification().getBody();
+        if (title == null || title.isEmpty()) title = "Gray";
+        if (body == null || body.isEmpty()) body = "你有一条新的 Gray 消息";
+        showNotification(title, body);
+    }
+    private void showNotification(String title, String body) {
+        NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+        if (Build.VERSION.SDK_INT >= 26) manager.createNotificationChannel(new NotificationChannel(CHANNEL, "Gray 提醒", NotificationManager.IMPORTANCE_DEFAULT));
+        Intent open = new Intent(this, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        PendingIntent pending = PendingIntent.getActivity(this, 0, open, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+        android.app.Notification.Builder builder = Build.VERSION.SDK_INT >= 26 ? new android.app.Notification.Builder(this, CHANNEL) : new android.app.Notification.Builder(this);
+        builder.setSmallIcon(android.R.drawable.ic_dialog_info).setContentTitle(title).setContentText(body).setAutoCancel(true).setContentIntent(pending);
+        try { manager.notify((int) (System.currentTimeMillis() & 0x7fffffff), builder.build()); } catch (SecurityException ignored) { }
+    }
+}
