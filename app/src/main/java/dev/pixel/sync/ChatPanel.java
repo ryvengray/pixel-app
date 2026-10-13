@@ -2,9 +2,12 @@ package dev.pixel.sync;
 
 import android.content.Context;
 import android.graphics.Color;
+import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Handler;
 import android.os.Looper;
+import android.text.TextWatcher;
+import android.text.Editable;
 import android.view.*;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodManager;
@@ -12,177 +15,175 @@ import android.widget.*;
 import java.util.*;
 import java.util.concurrent.*;
 
-/** Chat panel embedded in the home screen: message timeline plus a messaging-style composer. */
+/** A warm, character-led chat surface embedded in the home screen. */
 public final class ChatPanel extends FrameLayout {
     private final ExecutorService network=Executors.newSingleThreadExecutor();
     private final Handler main=new Handler(Looper.getMainLooper());
     private final Runnable onReply,onClose;
     private final AssistantStore store;
-    private LinearLayout timeline;
+    private LinearLayout timeline, welcome;
     private ScrollView scroll;
     private EditText input;
-    private Button send;
-    private TextView status,close;
+    private TextView send,status,close,name;
+    private FrameLayout badge;
+    private View divider,composerSurface;
     private boolean dark;
-    private int foreground,secondary;
+    private boolean busy;
+    private int foreground,secondary,surfaceColor,cardColor,borderColor,accent;
     private int dp(float n){return Math.round(n*getResources().getDisplayMetrics().density);}
 
     public ChatPanel(Context context,Runnable onReply,Runnable onClose){
         super(context);
         this.onReply=onReply;this.onClose=onClose;
         store=new AssistantStore(context);
+        setClipToPadding(false);
         LinearLayout column=new LinearLayout(context);
         column.setOrientation(LinearLayout.VERTICAL);
-        column.setPadding(dp(18),dp(10),dp(18),dp(12));
+        column.setPadding(dp(20),dp(10),dp(20),dp(12));
         addView(column,new FrameLayout.LayoutParams(-1,-1));
 
         LinearLayout header=new LinearLayout(context);
         header.setGravity(Gravity.CENTER_VERTICAL);
-        status=text("你的完整记忆保存在这台手机上",12);
-        header.addView(status,new LinearLayout.LayoutParams(0,-2,1));
-        close=text("✕",17);
-        close.setGravity(Gravity.CENTER);
-        close.setContentDescription("关闭聊天");
+        header.setPadding(0,0,0,dp(8));
+        badge=assistantMark(38);
+        LinearLayout.LayoutParams mp=new LinearLayout.LayoutParams(dp(38),dp(38));
+        mp.rightMargin=dp(11);header.addView(badge,mp);
+        LinearLayout identity=new LinearLayout(context);identity.setOrientation(LinearLayout.VERTICAL);
+        name=text("Gray",17);name.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));name.setTextColor(foreground);
+        status=text("你的随身小助手",12);status.setTextColor(secondary);
+        identity.addView(name);identity.addView(status);
+        header.addView(identity,new LinearLayout.LayoutParams(0,-2,1));
+        close=text("×",27);close.setGravity(Gravity.CENTER);close.setContentDescription("关闭聊天");
         close.setOnClickListener(v->{if(onClose!=null)onClose.run();});
-        header.addView(close,new LinearLayout.LayoutParams(dp(40),dp(40)));
+        header.addView(close,new LinearLayout.LayoutParams(dp(42),dp(42)));
         column.addView(header);
 
-        scroll=new ScrollView(context);
-        timeline=new LinearLayout(context);
-        timeline.setOrientation(LinearLayout.VERTICAL);
-        timeline.setPadding(0,dp(6),0,dp(6));
-        scroll.addView(timeline);
+        divider=new View(context);divider.setBackgroundColor(borderColor);
+        LinearLayout.LayoutParams dpv=new LinearLayout.LayoutParams(-1,dp(1));dpv.bottomMargin=dp(7);column.addView(divider,dpv);
+
+        scroll=new ScrollView(context);scroll.setFillViewport(true);scroll.setClipToPadding(false);
+        timeline=new LinearLayout(context);timeline.setOrientation(LinearLayout.VERTICAL);timeline.setPadding(0,dp(10),0,dp(16));
+        scroll.addView(timeline,new ScrollView.LayoutParams(-1,-2));
         column.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
 
-        LinearLayout composer=new LinearLayout(context);
-        composer.setGravity(Gravity.BOTTOM);
-        input=new EditText(context);
-        input.setHint("和 Gray 说点什么");
-        input.setMaxLines(4);
+        LinearLayout composerWrap=new LinearLayout(context);composerWrap.setOrientation(LinearLayout.VERTICAL);
+        composerWrap.setPadding(dp(7),dp(5),dp(6),dp(5));
+        composerWrap.setBackground(rounded(Color.WHITE,24,Color.LTGRAY,1));
+        LinearLayout composer=new LinearLayout(context);composer.setGravity(Gravity.BOTTOM|Gravity.CENTER_VERTICAL);
+        input=new EditText(context);input.setHint("跟 Gray 说说你的想法…");input.setTextSize(15);
+        input.setPadding(dp(12),dp(10),dp(8),dp(10));input.setMinHeight(dp(46));input.setMaxLines(4);
+        input.setBackgroundColor(Color.TRANSPARENT);
         input.setInputType(android.text.InputType.TYPE_CLASS_TEXT|android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE|android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
         input.setImeOptions(EditorInfo.IME_ACTION_SEND);
         input.setOnEditorActionListener((v,actionId,event)->{if(actionId==EditorInfo.IME_ACTION_SEND){sendMessage();return true;}return false;});
+        input.setOnFocusChangeListener((v,focused)->updateComposerSurface(focused));
         composer.addView(input,new LinearLayout.LayoutParams(0,-2,1));
-        send=new Button(context);
-        send.setText("发送");
-        send.setAllCaps(false);
-        send.setMinHeight(dp(44));
+        send=text("↑",22);send.setGravity(Gravity.CENTER);send.setContentDescription("发送消息");
         send.setOnClickListener(v->sendMessage());
-        LinearLayout.LayoutParams sp=new LinearLayout.LayoutParams(-2,-2);
-        sp.leftMargin=dp(10);
-        composer.addView(send,sp);
-        column.addView(composer);
+        composer.addView(send,new LinearLayout.LayoutParams(dp(44),dp(44)));
+        composerWrap.addView(composer);
+        composerSurface=composerWrap;
+        column.addView(composerWrap);
+        input.addTextChangedListener(new TextWatcher(){
+            public void beforeTextChanged(CharSequence s,int start,int count,int after){}
+            public void onTextChanged(CharSequence s,int start,int before,int count){setSending(s.length()>0&&!busy);}
+            public void afterTextChanged(Editable e){}
+        });
+        setSending(false);
         setElevation(dp(8));
     }
 
     public void setTheme(boolean value){
         dark=value;
-        foreground=Color.parseColor(dark?"#E5EDE3":"#263C31");
-        secondary=Color.parseColor(dark?"#92A99A":"#708675");
-        setBackground(surface(Color.parseColor(dark?"#172B22":"#F5F7F0"),26,26,0,0));
-        status.setTextColor(secondary);
-        close.setTextColor(foreground);
-        input.setTextColor(foreground);
-        input.setHintTextColor(secondary);
-        GradientDrawable field=new GradientDrawable();
-        field.setColor(Color.parseColor(dark?"#294536":"#FFFFFF"));
-        field.setCornerRadius(dp(22));
-        field.setStroke(dp(1),Color.parseColor(dark?"#4D6156":"#C6D4C4"));
-        input.setBackground(field);
-        setSending(send.isEnabled());
+        foreground=Color.parseColor(dark?"#E8F0E8":"#263C31");
+        secondary=Color.parseColor(dark?"#9DB1A2":"#758779");
+        surfaceColor=Color.parseColor(dark?"#172B22":"#F8FAF5");
+        cardColor=Color.parseColor(dark?"#24392E":"#FFFFFF");
+        borderColor=Color.parseColor(dark?"#354B3E":"#E1E9DF");
+        accent=Color.parseColor(dark?"#83B88F":"#39644D");
+        setBackground(surface(surfaceColor,28,28,0,0));
+        status.setTextColor(secondary);close.setTextColor(secondary);name.setTextColor(foreground);
+        divider.setBackgroundColor(borderColor);updateComposerSurface(input.hasFocus());
+        badge.setBackground(rounded(Color.parseColor(dark?"#3B6148":"#DCEBDD"),19,0,0));
+        TextView glyph=(TextView)badge.getChildAt(0);glyph.setTextColor(accent);
+        input.setTextColor(foreground);input.setHintTextColor(secondary);
+        setSending(input.length()>0&&!busy);
         render();
     }
 
-    public void open(){
-        render();
-        input.postDelayed(()->{
-            input.requestFocus();
-            ((InputMethodManager)getContext().getSystemService(Context.INPUT_METHOD_SERVICE)).showSoftInput(input,0);
-        },180);
-    }
-
-    public void close(){
-        ((InputMethodManager)getContext().getSystemService(Context.INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(input.getWindowToken(),0);
-    }
-
+    public void open(){render();input.postDelayed(()->{input.requestFocus();((InputMethodManager)getContext().getSystemService(Context.INPUT_METHOD_SERVICE)).showSoftInput(input,0);},180);}
+    public void close(){((InputMethodManager)getContext().getSystemService(Context.INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(input.getWindowToken(),0);}
     public void shutdown(){network.shutdownNow();}
 
     private void render(){
-        timeline.removeAllViews();
-        int maxWidth=(int)(getResources().getDisplayMetrics().widthPixels*0.78f);
-        for(AssistantStore.Message message:store.recentMessages(80)){
-            TextView view=bubble(message.role,message.content);
-            view.setMaxWidth(maxWidth);
-            timeline.addView(view);
-        }
+        timeline.removeAllViews();List<AssistantStore.Message> messages=store.recentMessages(80);
+        if(messages.isEmpty())addWelcome();
+        else for(AssistantStore.Message message:messages)addMessageRow(message.role,message.content);
         scroll.post(()->scroll.fullScroll(View.FOCUS_DOWN));
     }
 
-    private TextView bubble(String role,String content){
-        TextView view=text(content,16);
+    private void addWelcome(){
+        welcome=new LinearLayout(getContext());welcome.setOrientation(LinearLayout.VERTICAL);
+        welcome.setPadding(dp(17),dp(16),dp(17),dp(16));welcome.setBackground(rounded(cardColor,20,borderColor,1));
+        TextView hello=text("嗨，我是 Gray",20);hello.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));hello.setTextColor(foreground);
+        TextView blurb=text("我在这里陪你整理想法、记住重要的事，也可以一步步帮你完成任务。你想从哪里开始？",14);
+        blurb.setTextColor(secondary);blurb.setLineSpacing(dp(3),1f);blurb.setPadding(0,dp(7),0,0);
+        welcome.addView(hello);welcome.addView(blurb);
+        LinearLayout.LayoutParams wp=new LinearLayout.LayoutParams(-1,-2);wp.bottomMargin=dp(18);timeline.addView(welcome,wp);
+        TextView promptLabel=text("试着这样开始",12);promptLabel.setTextColor(secondary);promptLabel.setPadding(dp(2),0,0,dp(8));timeline.addView(promptLabel);
+        addSuggestion("帮我把一个想法理清楚");addSuggestion("记住一件对我很重要的事");addSuggestion("我今天有点累，陪我聊聊");
+    }
+
+    private void addSuggestion(String label){
+        TextView chip=text(label,13);chip.setTextColor(foreground);chip.setPadding(dp(14),dp(10),dp(14),dp(10));chip.setBackground(rounded(cardColor,18,borderColor,1));
+        chip.setOnClickListener(v->{input.setText(label);input.setSelection(input.length());sendMessage();});
+        LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-2,-2);p.bottomMargin=dp(8);timeline.addView(chip,p);
+    }
+
+    private void addMessageRow(String role,String content){
         boolean assistant="assistant".equals(role);
-        view.setTextColor(Color.parseColor(assistant?(dark?"#E5EDE3":"#263C31"):"#FFFFFF"));
-        view.setPadding(dp(14),dp(10),dp(14),dp(10));
-        GradientDrawable bg=new GradientDrawable();
-        bg.setColor(Color.parseColor(assistant?(dark?"#294536":"#E3ECDC"):"#39644D"));
-        bg.setCornerRadius(dp(16));
-        view.setBackground(bg);
-        LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-2,-2);
-        p.gravity=assistant?Gravity.LEFT:Gravity.RIGHT;
-        p.topMargin=dp(7);
-        view.setLayoutParams(p);
-        return view;
-    }
-
-    private void addBubble(String role,String content){
-        TextView view=bubble(role,content);
-        view.setMaxWidth((int)(getResources().getDisplayMetrics().widthPixels*0.78f));
-        timeline.addView(view);
-        scroll.post(()->scroll.fullScroll(View.FOCUS_DOWN));
+        LinearLayout row=new LinearLayout(getContext());row.setOrientation(LinearLayout.HORIZONTAL);row.setGravity(Gravity.TOP);
+        if(assistant){View mark=assistantMark(26);LinearLayout.LayoutParams a=new LinearLayout.LayoutParams(dp(26),dp(26));a.rightMargin=dp(8);a.topMargin=dp(2);row.addView(mark,a);}
+        TextView bubble=text(content,15);bubble.setTextColor(assistant?foreground:Color.WHITE);bubble.setLineSpacing(dp(2),1f);
+        bubble.setPadding(dp(14),dp(11),dp(14),dp(11));bubble.setBackground(rounded(assistant?cardColor:accent,18,assistant?borderColor:accent,assistant?1:0));
+        bubble.setMaxWidth((int)(getResources().getDisplayMetrics().widthPixels*.70f));
+        LinearLayout.LayoutParams bp=new LinearLayout.LayoutParams(-2,-2);bp.weight=0;bp.bottomMargin=dp(4);
+        row.addView(bubble,bp);
+        if(!assistant){View spacer=new View(getContext());row.addView(spacer,new LinearLayout.LayoutParams(0,1,1));}
+        LinearLayout.LayoutParams rp=new LinearLayout.LayoutParams(-1,-2);rp.bottomMargin=dp(8);timeline.addView(row,rp);
     }
 
     private void sendMessage(){
-        String text=input.getText().toString().trim();
-        if(text.isEmpty()||!send.isEnabled())return;
-        input.setText("");
-        store.addMessage("user",text);
-        addBubble("user",text);
-        setSending(false);
-        status.setText("Gray 正在想…");
-        List<AssistantStore.Message> messages=store.recentMessages(18);
-        List<AssistantStore.Memory> memories=store.memories(false);
+        String message=input.getText().toString().trim();if(message.isEmpty()||!send.isEnabled())return;
+        input.setText("");if(welcome!=null){timeline.removeAllViews();welcome=null;}
+        store.addMessage("user",message);addMessageRow("user",message);busy=true;setSending(false);status.setText("正在认真听你说…");
+        List<AssistantStore.Message> messages=store.recentMessages(18);List<AssistantStore.Memory> memories=store.memories(false);
         network.execute(()->{
             try{
                 AssistantApi.Reply reply=AssistantApi.chat(getContext(),messages,memories);
                 for(AssistantStore.Memory memory:reply.memories)store.upsertMemory(memory);
                 store.addMessage("assistant",reply.content);
-                main.post(()->{
-                    addBubble("assistant",reply.content);
-                    status.setText(reply.directFallback?"服务端不可用，已使用本地密钥直连":"已使用你的本地记忆");
-                    setSending(true);
-                    scroll.post(()->scroll.fullScroll(View.FOCUS_DOWN));
-                    if(onReply!=null)onReply.run();
-                });
-            }catch(Exception e){
-                main.post(()->{status.setText("没有发出消息："+e.getMessage());setSending(true);});
-            }
+                main.post(()->{addMessageRow("assistant",reply.content);status.setText(reply.directFallback?"已通过本地密钥连接":"我在这里，继续说吧");busy=false;setSending(input.length()>0);scroll.post(()->scroll.fullScroll(View.FOCUS_DOWN));if(onReply!=null)onReply.run();});
+            }catch(Exception e){main.post(()->{status.setText("消息没有发出，请重试");busy=false;setSending(input.length()>0);});}
         });
     }
 
     private void setSending(boolean enabled){
-        send.setEnabled(enabled);
-        GradientDrawable d=new GradientDrawable();
-        d.setColor(Color.parseColor(enabled?(dark?"#4A7A5F":"#39644D"):(dark?"#3A4D41":"#B9C9BA")));
-        d.setCornerRadius(dp(20));
-        send.setBackground(d);
-        send.setTextColor(enabled?Color.WHITE:Color.parseColor(dark?"#7E9388":"#8AA08F"));
+        send.setEnabled(enabled);send.setAlpha(enabled?1f:.55f);
+        send.setTextColor(Color.WHITE);send.setBackground(rounded(enabled?accent:Color.parseColor(dark?"#506558":"#AAB9AA"),22,0,0));
     }
 
-    private TextView text(String value,int size){TextView v=new TextView(getContext());v.setText(value);v.setTextSize(size);return v;}
-    private GradientDrawable surface(int color,int tl,int tr,int br,int bl){
-        GradientDrawable d=new GradientDrawable();
-        d.setColor(color);
-        d.setCornerRadii(new float[]{dp(tl),dp(tl),dp(tr),dp(tr),dp(br),dp(br),dp(bl),dp(bl)});
-        return d;
+    private void updateComposerSurface(boolean focused){
+        if(composerSurface!=null)composerSurface.setBackground(rounded(cardColor==0?Color.WHITE:cardColor,23,focused?accent:borderColor,focused?2:1));
     }
+
+    private View assistantMark(int size){
+        FrameLayout mark=new FrameLayout(getContext());mark.setBackground(rounded(Color.parseColor(dark?"#3B6148":"#DCEBDD"),size/2,0,0));
+        TextView glyph=text("✦",17);glyph.setTextColor(accent);glyph.setGravity(Gravity.CENTER);mark.addView(glyph,new FrameLayout.LayoutParams(-1,-1));
+        View dot=new View(getContext());dot.setBackground(rounded(Color.parseColor("#75B77C"),5,Color.parseColor(dark?"#172B22":"#F8FAF5"),dp(1)));
+        FrameLayout.LayoutParams p=new FrameLayout.LayoutParams(dp(9),dp(9),Gravity.BOTTOM|Gravity.RIGHT);mark.addView(dot,p);return mark;
+    }
+    private TextView text(String value,int size){TextView v=new TextView(getContext());v.setText(value);v.setTextSize(size);return v;}
+    private GradientDrawable rounded(int color,int radius,int strokeColor,int stroke){GradientDrawable d=new GradientDrawable();d.setColor(color);d.setCornerRadius(dp(radius));if(stroke>0)d.setStroke(dp(stroke),strokeColor);return d;}
+    private GradientDrawable surface(int color,int tl,int tr,int br,int bl){GradientDrawable d=new GradientDrawable();d.setColor(color);d.setCornerRadii(new float[]{dp(tl),dp(tl),dp(tr),dp(tr),dp(br),dp(br),dp(bl),dp(bl)});return d;}
 }

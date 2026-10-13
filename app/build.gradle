@@ -19,6 +19,20 @@ android {
         versionCode appVersion.getProperty('VERSION_CODE').toInteger()
         versionName appVersion.getProperty('VERSION_NAME')
     }
+    buildFeatures { buildConfig true }
+    flavorDimensions += 'environment'
+    productFlavors {
+        dev {
+            dimension 'environment'
+            applicationIdSuffix '.dev'
+            versionNameSuffix '-dev'
+            buildConfigField 'boolean', 'ENABLE_FCM', 'false'
+        }
+        prod {
+            dimension 'environment'
+            buildConfigField 'boolean', 'ENABLE_FCM', 'true'
+        }
+    }
     signingConfigs {
         if (signingReady) {
             release {
@@ -47,4 +61,7 @@ tasks.register('checkReleaseSigning') {
 }
 tasks.configureEach {
     if (name == 'preReleaseBuild') dependsOn 'checkReleaseSigning'
+    // The development flavor intentionally has no Firebase app registration.
+    // Push is disabled there so testing cannot register against production.
+    if (name.startsWith('processDev') && name.endsWith('GoogleServices')) enabled = false
 }

@@ -48,20 +48,44 @@ git branch -vv
 
 安装 App 后，授予“在 Termux 环境中运行命令”权限；如果弹窗未出现，打开 App 内“调用权限设置”，检查附加权限。保持 Termux 正常运行，必要时在系统设置中允许其后台运行。同步时暂停在 Obsidian 编辑；完成后日志若提示又有变化，再同步一次。
 
-## 构建安装
+## Android Studio 运行与构建
 
-使用 Android Studio 打开此目录，安装 Android SDK 35，使用 JDK 17 和 Gradle 8.11.1。可通过 Android Studio 的 Build APK(s) 构建；或安装 Gradle 后运行：
+项目提供两个构建变体：
 
-```powershell
-gradle assembleDebug
-adb install -r app/build/outputs/apk/debug/app-debug.apk
+| 变体 | 用途 | 应用名称 | 包名 | 推送 |
+| --- | --- | --- | --- | --- |
+| `devDebug` | 本机开发、调试 | Gray Dev | `dev.pixel.sync.dev` | 关闭 |
+| `prodDebug` | 调试正式配置 | Gray | `dev.pixel.sync` | 使用正式 Firebase 配置 |
+| `prodRelease` | 正式发布 | Gray | `dev.pixel.sync` | 使用正式 Firebase 配置 |
+
+日常开发请运行 `devDebug`。它和正式版包名不同，可以同时安装；聊天记录、应用设置和加密密钥也分别保存在各自应用空间。开发版没有 Firebase 注册配置，因此不会注册或接收正式推送。
+
+### 在 Android Studio 中运行开发版
+
+1. 在 Android Studio 选择 **File > Open**，打开本项目根目录（包含 `settings.gradle` 的目录）。
+2. 等待 Gradle Sync 完成。项目使用 Android SDK 35、JDK 17 和 Gradle 8.11.1；如果提示缺少 SDK 或 JDK，请在 SDK Manager 安装 SDK Platform 35，并在 **Settings > Build, Execution, Deployment > Build Tools > Gradle** 将 Gradle JDK 设为 JDK 17。
+3. 打开 **View > Tool Windows > Build Variants**。
+4. 在 `app` 模块的 **Active Build Variant** 下拉框中选择 **`devDebug`**。
+5. 连接 Android 手机并开启 USB 调试，或启动 Android 虚拟设备；在工具栏设备列表中选择目标设备。
+6. 选择运行配置 **app**，点击工具栏的绿色 **Run ▶** 按钮。首次安装显示为 **Gray Dev**。
+
+修改应用后再次点击 **Run**，Android Studio 只会更新开发版，不会覆盖已安装的正式版。卸载开发版也不会删除正式版的应用数据。
+
+### 构建正式版
+
+需要在 Android Studio 调试正式配置时选择 `prodDebug`。要构建可发布的正式 APK，请先按下方“正式打包与 Obtainium 更新”配置固定签名密钥，再在 Build Variants 选择 `prodRelease`，然后选择 **Build > Generate App Bundles or APKs > Build APKs**。正式版包名保持 `dev.pixel.sync`，可作为独立安装包更新已安装的正式版。
+
+也可通过 Gradle 构建开发版和正式调试版：
+
+```bash
+./gradlew :app:assembleDevDebug :app:assembleProdDebug
 ```
 
-调试 APK 路径：`app/build/outputs/apk/debug/app-debug.apk`。正式更新请使用下方固定签名的 Release APK。
+APK 分别输出到 `app/build/outputs/apk/dev/debug/` 和 `app/build/outputs/apk/prod/debug/`。正式发布请使用下方固定签名的 `prodRelease`，不要把 debug APK 当作正式更新包。
 
 ## 正式打包与 Obtainium 更新
 
-应用包名固定为 `dev.pixel.sync`。正式版使用同一个签名密钥，更新时必须保留该密钥。密钥和密码存放于 `.signing/`，已经被 Git 忽略；请将整个目录安全备份，勿提交到公开仓库。已安装 debug 版本时，首次切换 release 签名需要卸载 debug App 后重新安装（Obsidian 文件仍在共享目录）。
+正式版包名固定为 `dev.pixel.sync`，开发版包名为 `dev.pixel.sync.dev`。正式版使用同一个签名密钥，更新时必须保留该密钥。密钥和密码存放于 `.signing/`，已经被 Git 忽略；请将整个目录安全备份，勿提交到公开仓库。首次切换到正式签名时，如果 Android 提示签名不匹配，请卸载旧的同包名应用后重新安装；开发版与正式版包名不同，不需要互相卸载。
 
 首次创建密钥，然后构建：
 
