@@ -125,6 +125,7 @@ public class MainActivity extends Activity {
   sheet.addView(menuAction("我的长期记忆",()->{menu.dismiss();startActivity(new Intent(this,MemoryActivity.class));}));
   sheet.addView(menuAction("助理设置",()->{menu.dismiss();startActivity(new Intent(this,AssistantSettingsActivity.class));}));
   sheet.addView(menuAction("Obsidian 同步",()->{menu.dismiss();startActivity(new Intent(this,SyncActivity.class));}));
+  sheet.addView(menuAction("打印文件",()->{menu.dismiss();startActivity(new Intent(this,PrintActivity.class));}));
   TextView label=text("外观",13);label.setTextColor(secondary);label.setPadding(0,dp(20),0,dp(8));sheet.addView(label);
   LinearLayout themes=new LinearLayout(this);String[] labels={"跟随系统","浅色","深色"};
   for(int i=0;i<labels.length;i++){final int choice=i;Button theme=menuAction(labels[i],()->{

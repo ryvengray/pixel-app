@@ -14,13 +14,13 @@ services:
       context: ./server
     container_name: gray-service
     restart: unless-stopped
+    network_mode: host
     env_file:
       - ./server/.env
     environment:
       DATABASE_PATH: /data/gray.db
       FIREBASE_SERVICE_ACCOUNT_FILE: /run/secrets/firebase-service-account.json
-    ports:
-      - "127.0.0.1:8787:8787"
+    command: ["uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8787", "--proxy-headers"]
     volumes:
       - ./server/data:/data
     secrets:

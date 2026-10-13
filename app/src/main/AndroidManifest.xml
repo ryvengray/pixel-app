@@ -17,5 +17,6 @@
         </service>
         <receiver android:name=".ResultReceiver" android:exported="false" />
         <activity android:name=".SyncActivity" android:exported="false" />
+        <activity android:name=".PrintActivity" android:exported="false" />
     </application>
 </manifest>
