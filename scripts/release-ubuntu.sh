@@ -115,14 +115,14 @@ printf 'Building %s (VERSION_CODE %s) from branch %s…\n' "$tag" "$next_code" "
 sed -i "s/^VERSION_CODE=.*/VERSION_CODE=$next_code/; s/^VERSION_NAME=.*/VERSION_NAME=$release_version/" "$version_file"
 
 bash tests/sync-test.sh
-bash gradlew --no-daemon assembleRelease
+bash gradlew --no-daemon assembleProdRelease
 
-apk_source="app/build/outputs/apk/release/app-release.apk"
+apk_source="app/build/outputs/apk/prod/release/app-prod-release.apk"
 [[ -f "$apk_source" ]] || die "Release APK was not generated."
 "$apksigner" verify --verbose "$apk_source"
 
 mkdir -p dist
-apk_name="pixel-obsidian-sync-$release_version.apk"
+apk_name="gray-$release_version.apk"
 cp "$apk_source" "dist/$apk_name"
 (cd dist && sha256sum "$apk_name" > SHA256SUMS)
 

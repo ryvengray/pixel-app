@@ -60,7 +60,7 @@ tasks.register('checkReleaseSigning') {
     }
 }
 tasks.configureEach {
-    if (name == 'preReleaseBuild') dependsOn 'checkReleaseSigning'
+    if (name in ['preReleaseBuild', 'preProdReleaseBuild']) dependsOn 'checkReleaseSigning'
     // The development flavor intentionally has no Firebase app registration.
     // Push is disabled there so testing cannot register against production.
     if (name.startsWith('processDev') && name.endsWith('GoogleServices')) enabled = false
