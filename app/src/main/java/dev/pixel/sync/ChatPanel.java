@@ -22,6 +22,7 @@ public final class ChatPanel extends FrameLayout {
     private final Runnable onReply,onClose;
     private final AssistantStore store;
     private LinearLayout timeline, welcome;
+    private View typingRow;
     private ScrollView scroll;
     private EditText input;
     private TextView send,status,close,name;
@@ -119,7 +120,7 @@ public final class ChatPanel extends FrameLayout {
         timeline.removeAllViews();List<AssistantStore.Message> messages=store.recentMessages(80);
         if(messages.isEmpty())addWelcome();
         else for(AssistantStore.Message message:messages)addMessageRow(message.role,message.content);
-        scroll.post(()->scroll.fullScroll(View.FOCUS_DOWN));
+        scrollToLatest(false);
     }
 
     private void addWelcome(){
@@ -149,24 +150,35 @@ public final class ChatPanel extends FrameLayout {
         bubble.setMaxWidth((int)(getResources().getDisplayMetrics().widthPixels*.70f));
         LinearLayout.LayoutParams bp=new LinearLayout.LayoutParams(-2,-2);bp.weight=0;bp.bottomMargin=dp(4);
         row.addView(bubble,bp);
-        if(!assistant){View spacer=new View(getContext());row.addView(spacer,new LinearLayout.LayoutParams(0,1,1));}
+        if(!assistant){
+            View spacer=new View(getContext());row.addView(spacer,new LinearLayout.LayoutParams(0,1,1));
+            FrameLayout userMark=userMark(28);LinearLayout.LayoutParams a=new LinearLayout.LayoutParams(dp(28),dp(28));a.leftMargin=dp(8);a.topMargin=dp(2);row.addView(userMark,a);
+        }
         LinearLayout.LayoutParams rp=new LinearLayout.LayoutParams(-1,-2);rp.bottomMargin=dp(8);timeline.addView(row,rp);
     }
 
     private void sendMessage(){
         String message=input.getText().toString().trim();if(message.isEmpty()||!send.isEnabled())return;
         input.setText("");if(welcome!=null){timeline.removeAllViews();welcome=null;}
-        store.addMessage("user",message);addMessageRow("user",message);busy=true;setSending(false);status.setText("正在认真听你说…");
+        store.addMessage("user",message);addMessageRow("user",message);typingRow=addTypingRow();scrollToLatest(true);busy=true;setSending(false);status.setText("正在认真听你说…");
         List<AssistantStore.Message> messages=store.recentMessages(18);List<AssistantStore.Memory> memories=store.memories(false);
         network.execute(()->{
             try{
                 AssistantApi.Reply reply=AssistantApi.chat(getContext(),messages,memories);
                 for(AssistantStore.Memory memory:reply.memories)store.upsertMemory(memory);
                 store.addMessage("assistant",reply.content);
-                main.post(()->{addMessageRow("assistant",reply.content);status.setText(reply.directFallback?"已通过本地密钥连接":"我在这里，继续说吧");busy=false;setSending(input.length()>0);scroll.post(()->scroll.fullScroll(View.FOCUS_DOWN));if(onReply!=null)onReply.run();});
-            }catch(Exception e){main.post(()->{status.setText("消息没有发出，请重试");busy=false;setSending(input.length()>0);});}
+                main.post(()->{removeTypingRow();addMessageRow("assistant",reply.content);status.setText(reply.directFallback?"已通过本地密钥连接":"我在这里，继续说吧");busy=false;setSending(input.length()>0);scrollToLatest(true);if(onReply!=null)onReply.run();});
+            }catch(Exception e){main.post(()->{removeTypingRow();addMessageRow("assistant","刚才连接不太顺利，请稍后再试一次。");status.setText("暂时没有连上");busy=false;setSending(input.length()>0);scrollToLatest(true);});}
         });
     }
+
+    private View addTypingRow(){
+        LinearLayout row=new LinearLayout(getContext());row.setOrientation(LinearLayout.HORIZONTAL);row.setGravity(Gravity.TOP);
+        View mark=assistantMark(26);LinearLayout.LayoutParams avatar=new LinearLayout.LayoutParams(dp(26),dp(26));avatar.rightMargin=dp(8);avatar.topMargin=dp(2);row.addView(mark,avatar);
+        TextView label=text("正在组织回复…",13);label.setTextColor(secondary);label.setPadding(dp(13),dp(10),dp(13),dp(10));label.setBackground(rounded(cardColor,16,borderColor,1));
+        row.addView(label,new LinearLayout.LayoutParams(-2,-2));LinearLayout.LayoutParams params=new LinearLayout.LayoutParams(-1,-2);params.bottomMargin=dp(8);timeline.addView(row,params);return row;
+    }
+    private void removeTypingRow(){if(typingRow!=null){timeline.removeView(typingRow);typingRow=null;}}
 
     private void setSending(boolean enabled){
         send.setEnabled(enabled);send.setAlpha(enabled?1f:.55f);
@@ -182,6 +194,21 @@ public final class ChatPanel extends FrameLayout {
         TextView glyph=text("✦",17);glyph.setTextColor(accent);glyph.setGravity(Gravity.CENTER);mark.addView(glyph,new FrameLayout.LayoutParams(-1,-1));
         View dot=new View(getContext());dot.setBackground(rounded(Color.parseColor("#75B77C"),5,Color.parseColor(dark?"#172B22":"#F8FAF5"),dp(1)));
         FrameLayout.LayoutParams p=new FrameLayout.LayoutParams(dp(9),dp(9),Gravity.BOTTOM|Gravity.RIGHT);mark.addView(dot,p);return mark;
+    }
+    private FrameLayout userMark(int size){
+        FrameLayout mark=new FrameLayout(getContext());
+        mark.setContentDescription("我的头像占位");
+        mark.setBackground(rounded(Color.parseColor(dark?"#354A5D":"#DFE8F1"),size/2,0,0));
+        TextView glyph=text("我",12);glyph.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));
+        glyph.setTextColor(Color.parseColor(dark?"#D5E4F0":"#49647B"));glyph.setGravity(Gravity.CENTER);
+        mark.addView(glyph,new FrameLayout.LayoutParams(-1,-1));return mark;
+    }
+    private void scrollToLatest(boolean smooth){
+        if(scroll==null)return;
+        scroll.post(()->{
+            int bottom=Math.max(0,timeline.getHeight()-scroll.getHeight());
+            if(smooth)scroll.smoothScrollTo(0,bottom);else scroll.scrollTo(0,bottom);
+        });
     }
     private TextView text(String value,int size){TextView v=new TextView(getContext());v.setText(value);v.setTextSize(size);return v;}
     private GradientDrawable rounded(int color,int radius,int strokeColor,int stroke){GradientDrawable d=new GradientDrawable();d.setColor(color);d.setCornerRadius(dp(radius));if(stroke>0)d.setStroke(dp(stroke),strokeColor);return d;}
