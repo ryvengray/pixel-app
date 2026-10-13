@@ -114,12 +114,98 @@ git push origin v1.0.0
 
 ### Ubuntu 自动发布
 
-在 Ubuntu 服务器安装 JDK 17、Android SDK Platform 35 和 Build Tools 35.0.0，设置 `ANDROID_HOME`（或 `ANDROID_SDK_ROOT`）后，将同一份 `.signing/` 私有签名目录安全地放入项目根目录。首次登录 GitHub CLI 并配置 Actions 签名密钥：
+以下步骤用于全新 Ubuntu 发布机。`gh` 使用 HTTPS 凭据推送代码和标签；GitHub Actions 已配置的签名 Secrets 会留在仓库中，不需要因更换电脑重新设置。
+
+#### 安装 GitHub CLI、JDK 和 Android SDK
+
+安装系统依赖和 GitHub CLI 官方 APT 源（命令参考 [GitHub CLI Linux 安装说明](https://github.com/cli/cli/blob/trunk/docs/install_linux.md)）：
 
 ```bash
-gh auth login
-bash scripts/New-ReleaseKey.sh
-bash scripts/Setup-GitHubSigningSecrets.sh ryvengray/pixel-app
+sudo apt update
+sudo apt install -y ca-certificates curl gnupg git openjdk-17-jdk unzip zip
+
+sudo install -d -m 0755 /etc/apt/keyrings
+curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+  | sudo tee /etc/apt/keyrings/githubcli-archive-keyring.gpg >/dev/null
+sudo chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+  | sudo tee /etc/apt/sources.list.d/github-cli.list >/dev/null
+sudo apt update
+sudo apt install -y gh
+```
+
+确认系统选择的是 JDK 17。若 `java -version` 仍显示 Java 8，可切换 alternatives：
+
+```bash
+sudo update-alternatives --config java
+sudo update-alternatives --config javac
+java -version
+javac -version
+```
+
+在两个选择菜单中都选路径包含 `java-17-openjdk` 的项目。
+
+安装 Android 命令行工具，并配置项目要求的 SDK Platform 35 与 Build Tools 35.0.0。下面固定使用 Google 当前提供的命令行工具包版本；需要更新时，可从 [Android 命令行工具页面](https://developer.android.com/studio#command-line-tools-only) 获取最新 Linux 下载链接。SDK 组件安装使用官方 [`sdkmanager`](https://developer.android.com/tools/sdkmanager) 工具。
+
+```bash
+export ANDROID_HOME="$HOME/Android/Sdk"
+mkdir -p "$ANDROID_HOME/cmdline-tools"
+tools_tmp="$(mktemp -d)"
+curl -fL https://dl.google.com/android/repository/commandlinetools-linux-15859902_latest.zip \
+  -o "$tools_tmp/commandlinetools.zip"
+unzip -q "$tools_tmp/commandlinetools.zip" -d "$tools_tmp"
+mv "$tools_tmp/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest"
+rm -rf "$tools_tmp"
+
+if [ -n "${ZSH_VERSION:-}" ]; then
+  shell_rc="$HOME/.zshrc"
+else
+  shell_rc="$HOME/.bashrc"
+fi
+cat >> "$shell_rc" <<'EOF'
+export ANDROID_HOME="$HOME/Android/Sdk"
+export ANDROID_SDK_ROOT="$ANDROID_HOME"
+export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH"
+EOF
+source "$shell_rc"
+
+JAVA17_BIN="$(find /usr/lib/jvm -path '*/java-17-*/bin/java' -print -quit)"
+if [ -z "$JAVA17_BIN" ]; then echo "找不到 JDK 17，请安装 openjdk-17-jdk" >&2; exit 1; fi
+JAVA17_HOME="${JAVA17_BIN%/bin/java}"
+printf 'export JAVA_HOME="%s"\nexport PATH="$JAVA_HOME/bin:$PATH"\n' "$JAVA17_HOME" >> "$shell_rc"
+source "$shell_rc"
+
+sdkmanager --licenses
+sdkmanager --install "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+java -version
+gh --version
+sdkmanager --list_installed
+```
+
+`sdkmanager --licenses` 会逐项显示 Android SDK 许可；阅读并接受后再继续安装组件。
+
+#### 登录并准备项目
+
+使用有 `ryvengray/pixel-app` 写入权限的 GitHub 账号登录。终端会显示一次性验证码，按提示在浏览器完成授权：
+
+```bash
+gh auth login --hostname github.com --git-protocol https --web
+gh auth setup-git
+gh auth status
+gh repo clone ryvengray/pixel-app
+cd pixel-app
+```
+
+将旧电脑备份的**同一份** `.signing/` 目录复制到项目根目录；不要重新运行 `New-ReleaseKey.sh`，否则会生成无法更新现有正式版的新密钥。`app/google-services.json` 也需要从旧电脑安全复制，或从 Firebase Console 下载到 `app/`，供这台电脑本地构建 `prodRelease` 使用。两个文件都被 Git 忽略，不要提交。
+
+```bash
+chmod 700 .signing
+chmod 600 .signing/*
+```
+
+GitHub Actions 的仓库 Secrets 已经存在时，无需再次运行 `Setup-GitHubSigningSecrets.sh`。仅当仓库 Secrets 尚未配置或签名密钥确实更换时，才需要重新配置；更换密钥会导致已安装正式版无法通过普通更新安装。
+
+#### 发布
 ```
 
 发布时不传版本号，脚本会显示当前版本，并提供“主版本升级”“功能更新”“修复更新”三项选择；也可直接传入确定的版本号以跳过菜单。随后脚本自动递增 `VERSION_CODE`、构建及校验已签名 APK、提交版本修改、推送分支和 `v*` 标签：
