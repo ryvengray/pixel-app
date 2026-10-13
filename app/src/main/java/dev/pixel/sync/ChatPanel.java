@@ -177,7 +177,7 @@ public final class ChatPanel extends FrameLayout {
         if(composerSurface!=null)composerSurface.setBackground(rounded(cardColor==0?Color.WHITE:cardColor,23,focused?accent:borderColor,focused?2:1));
     }
 
-    private View assistantMark(int size){
+    private FrameLayout assistantMark(int size){
         FrameLayout mark=new FrameLayout(getContext());mark.setBackground(rounded(Color.parseColor(dark?"#3B6148":"#DCEBDD"),size/2,0,0));
         TextView glyph=text("✦",17);glyph.setTextColor(accent);glyph.setGravity(Gravity.CENTER);mark.addView(glyph,new FrameLayout.LayoutParams(-1,-1));
         View dot=new View(getContext());dot.setBackground(rounded(Color.parseColor("#75B77C"),5,Color.parseColor(dark?"#172B22":"#F8FAF5"),dp(1)));
