@@ -54,36 +54,44 @@ def _printer_uri(host: str, port: int, scheme: str = "ipp") -> str:
 
 async def check_online(host: str, port: int = 631) -> tuple[bool, str]:
     """Returns (online, printer_state_description)."""
-    uri = _printer_uri(host, port)
-    body = _build_request(0x000B, uri)
+    ipp_paths = ["/ipp/print", "/ipp", "/printers/ipp", ""]
+    for path in ipp_paths:
+        uri = f"ipp://{host}:{port}{path}"
+        body = _build_request(0x000B, uri)
+        try:
+            async with httpx.AsyncClient(timeout=3) as client:
+                resp = await client.post(
+                    f"http://{host}:{port}{path}",
+                    content=body,
+                    headers={"Content-Type": "application/ipp"},
+                )
+                if resp.status_code == 200:
+                    raw = resp.content
+                    state = "idle"
+                    idx = 9
+                    while idx < len(raw) - 4:
+                        tag = raw[idx]
+                        if tag == 0x03:
+                            break
+                        if tag in (0x01, 0x02, 0x04, 0x05):
+                            idx += 1
+                            continue
+                        name_len = struct.unpack(">H", raw[idx + 1: idx + 3])[0]
+                        name = raw[idx + 3: idx + 3 + name_len].decode("utf-8", errors="replace")
+                        val_len = struct.unpack(">H", raw[idx + 3 + name_len: idx + 5 + name_len])[0]
+                        val_start = idx + 5 + name_len
+                        if name == "printer-state" and val_len == 4:
+                            state_num = struct.unpack(">i", raw[val_start: val_start + 4])[0]
+                            state = {3: "idle", 4: "processing", 5: "stopped"}.get(state_num, "unknown")
+                        idx = val_start + val_len
+                    return True, state
+        except Exception:
+            continue
     try:
-        async with httpx.AsyncClient(timeout=5) as client:
-            resp = await client.post(
-                uri.replace("ipp://", "http://").replace("ipps://", "https://"),
-                content=body,
-                headers={"Content-Type": "application/ipp"},
-            )
-            if resp.status_code == 200:
-                # Parse printer-state from IPP response (skip 8-byte header + attribute groups)
-                raw = resp.content
-                state = "idle"
-                idx = 9  # after version(2) + status(2) + request-id(4) + group-tag(1)
-                while idx < len(raw) - 4:
-                    tag = raw[idx]
-                    if tag == 0x03:
-                        break
-                    if tag in (0x01, 0x02, 0x04, 0x05):
-                        idx += 1
-                        continue
-                    name_len = struct.unpack(">H", raw[idx + 1: idx + 3])[0]
-                    name = raw[idx + 3: idx + 3 + name_len].decode("utf-8", errors="replace")
-                    val_len = struct.unpack(">H", raw[idx + 3 + name_len: idx + 5 + name_len])[0]
-                    val_start = idx + 5 + name_len
-                    if name == "printer-state" and val_len == 4:
-                        state_num = struct.unpack(">i", raw[val_start: val_start + 4])[0]
-                        state = {3: "idle", 4: "processing", 5: "stopped"}.get(state_num, "unknown")
-                    idx = val_start + val_len
-                return True, state
+        reader, writer = await asyncio.wait_for(asyncio.open_connection(host, port), timeout=2)
+        writer.close()
+        await writer.wait_closed()
+        return True, "idle"
     except Exception:
         pass
     return False, "offline"

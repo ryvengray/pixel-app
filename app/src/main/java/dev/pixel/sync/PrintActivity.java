@@ -33,13 +33,14 @@ public class PrintActivity extends Activity {
     private LinearLayout contentContainer;
     private TextView fileLabel, textInput, copiesLabel;
     private View fileArea, textArea;
-    private Button printBtn, discoverBtn;
+    private Button printBtn;
     private String selectedPrinterId;
     private Uri selectedFileUri;
     private String selectedFileName;
     private int copies = 1;
     private boolean fileMode = true;
     private boolean printing;
+    private List<PrinterApi.Printer> cachedPrinters = new java.util.ArrayList<>();
 
     private int dp(float n) { return Math.round(n * getResources().getDisplayMetrics().density); }
 
@@ -150,6 +151,17 @@ public class PrintActivity extends Activity {
         tp.leftMargin = dp(12);
         header.addView(title, tp);
 
+        Button refresh = new Button(this);
+        refresh.setText("⟳");
+        refresh.setTextSize(22);
+        refresh.setTextColor(foreground);
+        refresh.setAllCaps(false);
+        refresh.setMinWidth(dp(48));
+        refresh.setMinHeight(dp(48));
+        refresh.setBackground(ripple());
+        refresh.setOnClickListener(v -> refreshPrinters());
+        header.addView(refresh);
+
         return header;
     }
 
@@ -187,18 +199,6 @@ public class PrintActivity extends Activity {
         LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(-1, -2);
         cp.topMargin = dp(12);
         section.addView(printerContainer, cp);
-
-        discoverBtn = new Button(this);
-        discoverBtn.setText("🔍  扫描新打印机");
-        discoverBtn.setTextSize(15);
-        discoverBtn.setTextColor(accent);
-        discoverBtn.setAllCaps(false);
-        discoverBtn.setMinHeight(dp(48));
-        discoverBtn.setBackground(ripple());
-        discoverBtn.setOnClickListener(v -> discoverPrinters());
-        LinearLayout.LayoutParams dp2 = new LinearLayout.LayoutParams(-1, dp(48));
-        dp2.topMargin = dp(12);
-        section.addView(discoverBtn, dp2);
 
         return section;
     }
@@ -405,30 +405,23 @@ public class PrintActivity extends Activity {
         });
     }
 
-    private void discoverPrinters() {
-        discoverBtn.setEnabled(false);
-        discoverBtn.setText("扫描中...");
+    private void refreshPrinters() {
         executor.execute(() -> {
             try {
-                List<PrinterApi.Printer> printers = PrinterApi.discover(PrintActivity.this);
+                PrinterApi.discover(PrintActivity.this);
+                List<PrinterApi.Printer> printers = PrinterApi.listPrinters(PrintActivity.this);
                 handler.post(() -> {
-                    discoverBtn.setEnabled(true);
-                    discoverBtn.setText("🔍  扫描新打印机");
                     renderPrinters(printers);
-                    if (printers.isEmpty()) showToast("未发现打印机");
-                    else showToast("发现 " + printers.size() + " 台打印机");
+                    showToast("已刷新打印机列表");
                 });
             } catch (Exception e) {
-                handler.post(() -> {
-                    discoverBtn.setEnabled(true);
-                    discoverBtn.setText("🔍  扫描新打印机");
-                    showToast("扫描失败：" + e.getMessage());
-                });
+                handler.post(() -> showToast("刷新失败：" + e.getMessage()));
             }
         });
     }
 
     private void renderPrinters(List<PrinterApi.Printer> printers) {
+        cachedPrinters = printers;
         printerContainer.removeAllViews();
         if (printers.isEmpty()) {
             TextView empty = new TextView(this);
@@ -454,7 +447,7 @@ public class PrintActivity extends Activity {
         card.setClickable(true);
         card.setOnClickListener(v -> {
             selectedPrinterId = p.id;
-            renderPrinters(getCurrentPrinters());
+            renderPrinters(cachedPrinters);
         });
         LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(-1, -2);
         cp.bottomMargin = dp(8);
@@ -521,11 +514,6 @@ public class PrintActivity extends Activity {
         card.addView(host, hp);
 
         return card;
-    }
-
-    private List<PrinterApi.Printer> getCurrentPrinters() {
-        try { return PrinterApi.listPrinters(this); }
-        catch (Exception e) { return java.util.Collections.emptyList(); }
     }
 
     private void pickFile() {
