@@ -20,6 +20,10 @@ services:
     environment:
       DATABASE_PATH: /data/gray.db
       FIREBASE_SERVICE_ACCOUNT_FILE: /run/secrets/firebase-service-account.json
+      HTTP_PROXY: http://127.0.0.1:7890
+      HTTPS_PROXY: http://127.0.0.1:7890
+      http_proxy: http://127.0.0.1:7890
+      https_proxy: http://127.0.0.1:7890
     command: ["uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8787", "--proxy-headers"]
     volumes:
       - ./server/data:/data
