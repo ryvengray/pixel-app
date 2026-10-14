@@ -2,6 +2,7 @@
 .gradle-user/
 **/build/
 local.properties
+.gray-wireless-device
 .idea/
 *.iml
 .signing/
