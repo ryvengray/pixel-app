@@ -111,28 +111,38 @@ DOC_FORMATS = {
 
 
 async def send_print_job(host: str, port: int, data: bytes, job_name: str, doc_format: str, copies: int = 1, paper_size: str = "a4", color_mode: str = "monochrome") -> dict[str, Any]:
+    import logging
+    logger = logging.getLogger("uvicorn.error")
+
     uri = _printer_uri(host, port)
-    extra = _str_attr(0x42, "job-name", job_name) + _str_attr(0x49, "document-format", doc_format)
-    job_attrs = _int_attr(0x21, "copies", copies) if copies > 1 else b""
+    url = uri.replace("ipp://", "http://").replace("ipps://", "https://")
     media = {"a4": "iso_a4_210x297mm", "a5": "iso_a5_148x210mm", "letter": "na_letter_8.5x11in"}[paper_size]
-    job_attrs += _str_attr(0x44, "media", media)
-    job_attrs += _str_attr(0x44, "print-color-mode", color_mode)
+
+    job_attrs = _str_attr(0x44, "media", media) + _str_attr(0x44, "print-color-mode", "auto")
+    if copies > 1:
+        job_attrs = _int_attr(0x21, "copies", copies) + job_attrs
+
+    extra = _str_attr(0x42, "job-name", job_name) + _str_attr(0x49, "document-format", doc_format)
     body = _build_request(0x0002, uri, extra_ops=extra, job_attrs=job_attrs, data=data)
+    logger.info("Sending print job to %s (%d bytes)", url, len(body))
     try:
-        async with httpx.AsyncClient(timeout=60, trust_env=False) as client:
-            resp = await client.post(
-                uri.replace("ipp://", "http://").replace("ipps://", "https://"),
-                content=body,
-                headers={"Content-Type": "application/ipp"},
-            )
+        timeout = httpx.Timeout(connect=10, read=60, write=300, pool=10)
+        async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
+            resp = await client.post(url, content=body, headers={"Content-Type": "application/ipp"})
             if resp.status_code == 200:
                 status_code = struct.unpack(">H", resp.content[2:4])[0] if len(resp.content) >= 4 else -1
                 if status_code == 0x0000:
                     return {"ok": True}
-                return {"ok": False, "error": f"IPP status {status_code:#06x}"}
-            return {"ok": False, "error": f"HTTP {resp.status_code}"}
+                error = f"IPP status {status_code:#06x}"
+                logger.error("Print job failed: %s", error)
+                return {"ok": False, "error": error}
+            error = f"HTTP {resp.status_code}"
+            logger.error("Print job failed: %s", error)
+            return {"ok": False, "error": error}
     except Exception as exc:
-        return {"ok": False, "error": str(exc)}
+        import traceback
+        logger.error("Print job exception: %s", exc, exc_info=True)
+        return {"ok": False, "error": str(exc) or repr(exc)}
 
 
 # ---------------------------------------------------------------------------
@@ -260,3 +270,100 @@ def delete_printer(printer_id: str) -> bool:
 def touch_printer(printer_id: str) -> None:
     with connect() as db:
         db.execute("UPDATE printer SET last_seen = ? WHERE id = ?", (utc_now(), printer_id))
+
+
+# ---------------------------------------------------------------------------
+# Print job DB helpers + background processing
+# ---------------------------------------------------------------------------
+
+IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png"}
+ALLOWED_SUFFIXES = {".pdf", ".jpg", ".jpeg", ".png", ".docx", ".doc", ".xlsx", ".xls"}
+
+_print_lock = asyncio.Lock()
+
+
+def create_print_job(job_id: str, printer_id: str, file_name: str, file_type: str, copies: int) -> None:
+    with connect() as db:
+        db.execute(
+            "INSERT INTO print_job(id,printer_id,file_name,file_type,copies,status,created_at) VALUES(?,?,?,?,?,?,?)",
+            (job_id, printer_id, file_name, file_type, copies, "pending", utc_now()),
+        )
+
+
+def update_print_job(job_id: str, *, status: str, error: str | None = None, completed: bool = False) -> None:
+    with connect() as db:
+        if completed:
+            db.execute(
+                "UPDATE print_job SET status=?, error=?, completed_at=? WHERE id=?",
+                (status, error, utc_now(), job_id),
+            )
+        else:
+            db.execute("UPDATE print_job SET status=? WHERE id=?", (status, job_id))
+
+
+def get_print_job(job_id: str) -> dict[str, Any] | None:
+    with connect() as db:
+        row = db.execute("SELECT * FROM print_job WHERE id = ?", (job_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def list_print_jobs(limit: int = 20) -> list[dict[str, Any]]:
+    with connect() as db:
+        return [dict(row) for row in db.execute(
+            "SELECT * FROM print_job ORDER BY created_at DESC LIMIT ?", (limit,)
+        ).fetchall()]
+
+
+async def process_print_job(
+    job_id: str,
+    printer: dict[str, Any],
+    *,
+    text: str | None = None,
+    file_bytes: bytes | None = None,
+    suffix: str | None = None,
+    job_name: str,
+    copies: int,
+    paper_size: str,
+    color_mode: str,
+) -> None:
+    import logging
+    logger = logging.getLogger("uvicorn.error")
+
+    update_print_job(job_id, status="printing")
+    try:
+        async with _print_lock:
+            loop = asyncio.get_running_loop()
+            if text is not None:
+                with tempfile.TemporaryDirectory() as tmp:
+                    pdf_path = await loop.run_in_executor(
+                        None, text_to_pdf, text, Path(tmp), f"job_{job_id}"
+                    )
+                    pdf_bytes = pdf_path.read_bytes()
+            elif suffix == ".pdf":
+                pdf_bytes = file_bytes
+            elif suffix in IMAGE_SUFFIXES:
+                with tempfile.TemporaryDirectory() as tmp:
+                    tmp_dir = Path(tmp)
+                    src = tmp_dir / f"upload_{job_id}{suffix}"
+                    src.write_bytes(file_bytes)
+                    pdf_path = await loop.run_in_executor(None, image_to_pdf, src, tmp_dir)
+                    pdf_bytes = pdf_path.read_bytes()
+            else:
+                with tempfile.TemporaryDirectory() as tmp:
+                    tmp_dir = Path(tmp)
+                    src = tmp_dir / f"upload_{job_id}{suffix}"
+                    src.write_bytes(file_bytes)
+                    pdf_path = await loop.run_in_executor(None, convert_to_pdf, src, tmp_dir)
+                    pdf_bytes = pdf_path.read_bytes()
+
+        result = await send_print_job(
+            printer["host"], printer["port"], pdf_bytes,
+            job_name, "application/pdf", copies, paper_size, color_mode,
+        )
+        if result.get("ok"):
+            update_print_job(job_id, status="completed", completed=True)
+        else:
+            update_print_job(job_id, status="failed", error=result.get("error") or "Print job failed", completed=True)
+    except Exception as exc:
+        logger.error("Background print job %s failed: %s", job_id, exc, exc_info=True)
+        update_print_job(job_id, status="failed", error=str(exc) or repr(exc), completed=True)

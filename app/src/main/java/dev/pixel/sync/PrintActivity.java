@@ -36,6 +36,7 @@ public class PrintActivity extends Activity {
 
     private LinearLayout printerContainer;
     private LinearLayout contentContainer;
+    private LinearLayout jobsContainer;
     private TextView fileLabel, textInput, copiesLabel, fileTab, textTab;
     private View fileArea, textArea;
     private Button printBtn;
@@ -48,6 +49,8 @@ public class PrintActivity extends Activity {
     private boolean fileMode = true;
     private boolean printing;
     private List<PrinterApi.Printer> cachedPrinters = new java.util.ArrayList<>();
+    private List<PrinterApi.PrintJob> jobs = new java.util.ArrayList<>();
+    private final Runnable jobPoller = this::pollJobsOnce;
 
     private int dp(float n) { return Math.round(n * getResources().getDisplayMetrics().density); }
 
@@ -85,8 +88,10 @@ public class PrintActivity extends Activity {
         body.addView(buildOptionsSection());
         body.addView(buildCopiesSection());
         body.addView(buildPrintButton());
+        body.addView(buildDivider());
+        body.addView(buildJobsSection());
 
-        scroll.addView(body, new ScrollView.LayoutParams(-1, -1));
+        scroll.addView(body, new ScrollView.LayoutParams(-1, -2));
         root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
 
         root.setOnApplyWindowInsetsListener((v, insets) -> {
@@ -99,6 +104,7 @@ public class PrintActivity extends Activity {
         setContentView(root);
         loadIncomingFile(getIntent());
         loadPrinters();
+        loadJobs();
     }
 
     private void loadIncomingFile(Intent intent) {
@@ -590,6 +596,156 @@ public class PrintActivity extends Activity {
         return "文件";
     }
 
+    private View buildJobsSection() {
+        LinearLayout section = new LinearLayout(this);
+        section.setOrientation(LinearLayout.VERTICAL);
+
+        TextView label = new TextView(this);
+        label.setText("打印任务");
+        label.setTextSize(16);
+        label.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        label.setTextColor(secondary);
+        section.addView(label);
+
+        jobsContainer = new LinearLayout(this);
+        jobsContainer.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(-1, -2);
+        cp.topMargin = dp(12);
+        section.addView(jobsContainer, cp);
+
+        return section;
+    }
+
+    private void loadJobs() {
+        pollJobsOnce();
+    }
+
+    private void pollJobsOnce() {
+        executor.execute(() -> {
+            try {
+                List<PrinterApi.PrintJob> fresh = PrinterApi.listPrintJobs(PrintActivity.this);
+                handler.post(() -> onJobsUpdated(fresh));
+            } catch (Exception e) {
+                handler.post(this::schedulePollIfActive);
+            }
+        });
+    }
+
+    private void onJobsUpdated(List<PrinterApi.PrintJob> fresh) {
+        for (PrinterApi.PrintJob n : fresh) {
+            for (PrinterApi.PrintJob o : jobs) {
+                if (o.id.equals(n.id) && o.isActive() && !n.isActive()) {
+                    if ("completed".equals(n.status)) {
+                        showToast("「" + n.fileName + "」打印完成");
+                    } else if ("failed".equals(n.status)) {
+                        showToast("「" + n.fileName + "」打印失败：" + (n.error.isEmpty() ? "未知错误" : n.error));
+                    }
+                }
+            }
+        }
+        jobs = fresh;
+        renderJobs();
+        schedulePollIfActive();
+    }
+
+    private void schedulePollIfActive() {
+        handler.removeCallbacks(jobPoller);
+        boolean any = false;
+        for (PrinterApi.PrintJob j : jobs) { if (j.isActive()) { any = true; break; } }
+        if (any) handler.postDelayed(jobPoller, 3000);
+    }
+
+    private void renderJobs() {
+        jobsContainer.removeAllViews();
+        if (jobs.isEmpty()) {
+            TextView empty = new TextView(this);
+            empty.setText("暂无打印任务");
+            empty.setTextSize(14);
+            empty.setTextColor(secondary);
+            empty.setGravity(Gravity.CENTER);
+            empty.setPadding(dp(16), dp(16), dp(16), dp(16));
+            jobsContainer.addView(empty);
+            return;
+        }
+        for (PrinterApi.PrintJob job : jobs) {
+            jobsContainer.addView(buildJobCard(job));
+        }
+    }
+
+    private View buildJobCard(PrinterApi.PrintJob job) {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setPadding(dp(16), dp(12), dp(16), dp(12));
+        card.setBackground(cardBg());
+        card.setElevation(dp(2));
+        LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(-1, -2);
+        cp.bottomMargin = dp(8);
+        card.setLayoutParams(cp);
+
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+
+        TextView name = new TextView(this);
+        name.setText(job.fileName);
+        name.setTextSize(15);
+        name.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        name.setTextColor(foreground);
+        name.setSingleLine(true);
+        LinearLayout.LayoutParams np = new LinearLayout.LayoutParams(0, -2, 1);
+        row.addView(name, np);
+
+        int statusColor;
+        String statusText;
+        switch (job.status) {
+            case "pending":
+                statusColor = Color.parseColor("#9CA3AF"); statusText = "排队中"; break;
+            case "printing":
+                statusColor = accent; statusText = "打印中..."; break;
+            case "completed":
+                statusColor = Color.parseColor("#4ADE80"); statusText = "已完成"; break;
+            case "failed":
+                statusColor = Color.parseColor("#EF4444"); statusText = "失败"; break;
+            default:
+                statusColor = secondary; statusText = job.status; break;
+        }
+
+        GradientDrawable badge = new GradientDrawable();
+        badge.setCornerRadius(dp(8));
+        badge.setColor(Color.parseColor(dark ? "#284235" : "#E4EEE0"));
+        TextView badgeView = new TextView(this);
+        badgeView.setText(statusText);
+        badgeView.setTextSize(12);
+        badgeView.setTextColor(statusColor);
+        badgeView.setPadding(dp(8), dp(2), dp(8), dp(2));
+        badgeView.setBackground(badge);
+        row.addView(badgeView);
+
+        card.addView(row);
+
+        if ("failed".equals(job.status) && !job.error.isEmpty()) {
+            TextView errView = new TextView(this);
+            errView.setText(job.error);
+            errView.setTextSize(12);
+            errView.setTextColor(Color.parseColor("#EF4444"));
+            LinearLayout.LayoutParams ep = new LinearLayout.LayoutParams(-1, -2);
+            ep.topMargin = dp(4);
+            card.addView(errView, ep);
+        }
+
+        if (job.copies > 1) {
+            TextView copiesView = new TextView(this);
+            copiesView.setText("×" + job.copies);
+            copiesView.setTextSize(12);
+            copiesView.setTextColor(secondary);
+            LinearLayout.LayoutParams copP = new LinearLayout.LayoutParams(-1, -2);
+            copP.topMargin = dp(2);
+            card.addView(copiesView, copP);
+        }
+
+        return card;
+    }
+
     private void doPrint() {
         if (printing) return;
         if (selectedPrinterId == null) { showToast("请先选择打印机"); return; }
@@ -601,7 +757,7 @@ public class PrintActivity extends Activity {
         }
         printing = true;
         printBtn.setEnabled(false);
-        printBtn.setText("打印中...");
+        printBtn.setText("提交中...");
         final String pid = selectedPrinterId;
         final int c = copies;
         final boolean fileJob=fileMode;final Uri fileUri=selectedFileUri;final String jobText=fileJob?null:((EditText)textInput).getText().toString().trim();final String paper=paperSize, color=colorMode;
@@ -616,7 +772,7 @@ public class PrintActivity extends Activity {
                     printing = false;
                     printBtn.setEnabled(true);
                     printBtn.setText("🖨  开始打印");
-                    showToast("打印任务已发送");
+                    showToast("打印任务已提交");
                     if (fileJob) {
                         selectedFileUri = null;
                         selectedFileName = null;
@@ -625,6 +781,7 @@ public class PrintActivity extends Activity {
                     } else {
                         ((EditText) textInput).setText("");
                     }
+                    loadJobs();
                 });
             } catch (Exception e) {
                 handler.post(() -> {
@@ -645,11 +802,19 @@ public class PrintActivity extends Activity {
     protected void onResume() {
         super.onResume();
         applyColors();
+        loadJobs();
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        handler.removeCallbacks(jobPoller);
     }
 
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        handler.removeCallbacksAndMessages(null);
         executor.shutdownNow();
     }
 }

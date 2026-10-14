@@ -26,6 +26,20 @@ public final class PrinterApi {
         }
     }
 
+    public static final class PrintJob {
+        public final String id, printerId, fileName, fileType, status, error, createdAt, completedAt;
+        public final int copies;
+        PrintJob(JSONObject o) throws Exception {
+            id = o.getString("id"); printerId = o.optString("printer_id", "");
+            fileName = o.optString("file_name", ""); fileType = o.optString("file_type", "");
+            copies = o.optInt("copies", 1); status = o.optString("status", "pending");
+            error = o.isNull("error") ? "" : o.optString("error", "");
+            createdAt = o.optString("created_at", "");
+            completedAt = o.isNull("completed_at") ? "" : o.optString("completed_at", "");
+        }
+        public boolean isActive() { return "pending".equals(status) || "printing".equals(status); }
+    }
+
     private static String read(InputStream s) throws IOException {
         ByteArrayOutputStream out = new ByteArrayOutputStream(); byte[] b = new byte[4096]; int n;
         while ((n = s.read(b)) != -1) out.write(b, 0, n);
@@ -95,12 +109,28 @@ public final class PrinterApi {
         if (code >= 300) throw new IOException("删除失败（" + code + "）");
     }
 
+    public static PrintJob getPrintJob(Context ctx, String jobId) throws Exception {
+        JSONObject obj = get(ctx, "/v1/print-jobs/" + jobId);
+        return new PrintJob(obj);
+    }
+
+    public static List<PrintJob> listPrintJobs(Context ctx) throws Exception {
+        HttpURLConnection c = open(ctx, "/v1/print-jobs", "GET");
+        int code = c.getResponseCode();
+        String body = read(code < 300 ? c.getInputStream() : c.getErrorStream());
+        if (code >= 300) throw new IOException("请求失败（" + code + "）：" + body);
+        JSONArray arr = new JSONArray(body);
+        List<PrintJob> result = new ArrayList<>();
+        for (int i = 0; i < arr.length(); i++) result.add(new PrintJob(arr.getJSONObject(i)));
+        return result;
+    }
+
     public static String printText(Context ctx, String printerId, String text, int copies, String paperSize, String colorMode) throws Exception {
         String boundary = "----GrayPrint" + System.currentTimeMillis();
         HttpURLConnection c = open(ctx, "/v1/printers/" + printerId + "/print", "POST");
         c.setRequestProperty("Content-Type", "multipart/form-data; boundary=" + boundary);
         c.setDoOutput(true);
-        c.setReadTimeout(120000);
+        c.setReadTimeout(30000);
         OutputStream out = c.getOutputStream();
         writeField(out, boundary, "copies", String.valueOf(copies));
         writeField(out, boundary, "paper_size", paperSize);
@@ -121,7 +151,7 @@ public final class PrinterApi {
         HttpURLConnection c = open(ctx, "/v1/printers/" + printerId + "/print", "POST");
         c.setRequestProperty("Content-Type", "multipart/form-data; boundary=" + boundary);
         c.setDoOutput(true);
-        c.setReadTimeout(120000);
+        c.setReadTimeout(30000);
         OutputStream out = c.getOutputStream();
         writeField(out, boundary, "copies", String.valueOf(copies));
         writeField(out, boundary, "paper_size", paperSize);

@@ -6,14 +6,13 @@ import json
 import os
 import secrets
 import sqlite3
-import tempfile
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal
 
 import httpx
-from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
 
@@ -307,6 +306,11 @@ async def reminder_loop() -> None:
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     setup_db()
+    with connect() as db:
+        db.execute(
+            "UPDATE print_job SET status='failed', error='server restarted', completed_at=? WHERE status IN ('pending','printing')",
+            (utc_now(),),
+        )
     task = asyncio.create_task(reminder_loop())
     yield
     task.cancel()
@@ -409,14 +413,11 @@ async def remove_printer(printer_id: str) -> dict[str, bool]:
     return {"ok": True}
 
 
-ALLOWED_SUFFIXES = {".pdf", ".jpg", ".jpeg", ".png", ".docx", ".doc", ".xlsx", ".xls"}
-IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png"}
-OFFICE_SUFFIXES = {".docx", ".doc", ".xlsx", ".xls"}
-
 
 @app.post("/v1/printers/{printer_id}/print", dependencies=[Depends(require_device)])
 async def print_document(
     printer_id: str,
+    background_tasks: BackgroundTasks,
     file: UploadFile | None = File(None),
     text: str | None = Form(None),
     copies: int = Form(1),
@@ -430,66 +431,44 @@ async def print_document(
         raise HTTPException(400, "Provide a file or text")
     copies = max(1, min(copies, 99))
 
+    job_id = secrets.token_urlsafe(12)
+    job_name = "text"
+    file_type = "text"
+    file_bytes: bytes | None = None
+    suffix: str | None = None
+
+    if text:
+        job_name = f"文字打印_{job_id[:6]}"
+    else:
+        raw_name = file.filename or "document"
+        suffix = Path(raw_name).suffix.lower()
+        if suffix not in _printer.ALLOWED_SUFFIXES:
+            raise HTTPException(400, f"Unsupported file type: {suffix}")
+        job_name = Path(raw_name).stem
+        file_type = suffix.lstrip(".")
+        file_bytes = await file.read()
+
     online, _ = await _printer.check_online(p["host"], p["port"])
     if not online:
         raise HTTPException(503, "Printer is offline")
 
-    job_id = secrets.token_urlsafe(12)
-    job_name = "text"
-    file_type = "text"
+    _printer.create_print_job(job_id, printer_id, job_name, file_type, copies)
+    background_tasks.add_task(
+        _printer.process_print_job, job_id, p,
+        text=text, file_bytes=file_bytes, suffix=suffix,
+        job_name=job_name, copies=copies, paper_size=paper_size, color_mode=color_mode,
+    )
+    return {"ok": True, "job_id": job_id, "status": "pending"}
 
-    with tempfile.TemporaryDirectory() as tmp:
-        tmp_dir = Path(tmp)
-        try:
-            if text:
-                pdf_path = await asyncio.get_event_loop().run_in_executor(
-                    None, _printer.text_to_pdf, text, tmp_dir, f"job_{job_id}"
-                )
-                job_name = f"文字打印_{job_id[:6]}"
-            else:
-                raw_name = file.filename or "document"
-                suffix = Path(raw_name).suffix.lower()
-                if suffix not in ALLOWED_SUFFIXES:
-                    raise HTTPException(400, f"Unsupported file type: {suffix}")
-                job_name = Path(raw_name).stem
-                file_type = suffix.lstrip(".")
-                src = tmp_dir / f"upload_{job_id}{suffix}"
-                src.write_bytes(await file.read())
 
-                if suffix == ".pdf":
-                    pdf_path = src
-                elif suffix in IMAGE_SUFFIXES:
-                    pdf_path = await asyncio.get_event_loop().run_in_executor(
-                        None, _printer.image_to_pdf, src, tmp_dir
-                    )
-                else:
-                    pdf_path = await asyncio.get_event_loop().run_in_executor(
-                        None, _printer.convert_to_pdf, src, tmp_dir
-                    )
+@app.get("/v1/print-jobs", dependencies=[Depends(require_device)])
+async def list_jobs() -> list[dict[str, Any]]:
+    return _printer.list_print_jobs()
 
-            pdf_bytes = pdf_path.read_bytes()
-            with connect() as db:
-                db.execute(
-                    "INSERT INTO print_job(id,printer_id,file_name,file_type,copies,status,created_at) VALUES(?,?,?,?,?,?,?)",
-                    (job_id, printer_id, job_name, file_type, copies, "printing", utc_now()),
-                )
-            result = await _printer.send_print_job(p["host"], p["port"], pdf_bytes, job_name, "application/pdf", copies, paper_size, color_mode)
-            status = "completed" if result.get("ok") else "failed"
-            error = result.get("error")
-            with connect() as db:
-                db.execute(
-                    "UPDATE print_job SET status=?, error=?, completed_at=? WHERE id=?",
-                    (status, error, utc_now(), job_id),
-                )
-            if not result.get("ok"):
-                raise HTTPException(502, error or "Print job failed")
-            return {"ok": True, "job_id": job_id}
-        except HTTPException:
-            raise
-        except Exception as exc:
-            with connect() as db:
-                db.execute(
-                    "UPDATE print_job SET status='failed', error=?, completed_at=? WHERE id=?",
-                    (str(exc), utc_now(), job_id),
-                )
-            raise HTTPException(500, str(exc)) from exc
+
+@app.get("/v1/print-jobs/{job_id}", dependencies=[Depends(require_device)])
+async def get_job(job_id: str) -> dict[str, Any]:
+    job = _printer.get_print_job(job_id)
+    if not job:
+        raise HTTPException(404, "Print job not found")
+    return job
