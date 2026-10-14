@@ -71,6 +71,16 @@ git branch -vv
 
 修改应用后再次点击 **Run**，Android Studio 只会更新开发版，不会覆盖已安装的正式版。卸载开发版也不会删除正式版的应用数据。
 
+### 在 Ubuntu 终端无线安装开发版
+
+手机和电脑连接同一网络，在手机的“开发者选项 → 无线调试”中查看 IP 和端口，然后运行：
+
+```bash
+bash scripts/install-debug-wireless-ubuntu.sh
+```
+
+脚本会引导首次无线配对，随后构建、覆盖安装并启动 `devDebug`。手机弹窗中的配对端口和无线调试主页中的连接端口是两个不同的端口。已经配对过时选择不再配对即可。
+
 ### 构建正式版
 
 需要在 Android Studio 调试正式配置时选择 `prodDebug`。要构建可发布的正式 APK，请先按下方“正式打包与 Obtainium 更新”配置固定签名密钥，再在 Build Variants 选择 `prodRelease`，然后选择 **Build > Generate App Bundles or APKs > Build APKs**。正式版包名保持 `dev.pixel.sync`，可作为独立安装包更新已安装的正式版。

@@ -25,6 +25,7 @@ public class MainActivity extends Activity {
  private Dialog menu;
  private int foreground,secondary;
  private int petL,petT,petW,petH;
+ private static final int CORNER_TOP_DP=86;
  private int dp(float n){return Math.round(n*getResources().getDisplayMetrics().density);}
  private boolean systemDark(){return (getResources().getConfiguration().uiMode&Configuration.UI_MODE_NIGHT_MASK)==Configuration.UI_MODE_NIGHT_YES;}
  @Override public void onCreate(Bundle state){
@@ -76,8 +77,9 @@ public class MainActivity extends Activity {
    petL=petTouch.getLeft();petT=petTouch.getTop();petW=petTouch.getWidth();petH=petTouch.getHeight();
    petTouch.setClickable(false);animatePetToCorner();
   }else{
-   FrameLayout.LayoutParams p=new FrameLayout.LayoutParams(dp(80),dp(88),Gravity.TOP|Gravity.RIGHT);p.topMargin=dp(72);p.rightMargin=dp(16);
-   scene.setLayoutParams(p);petTouch.setLayoutParams(p);
+   FrameLayout.LayoutParams touch=new FrameLayout.LayoutParams(dp(80),dp(88),Gravity.TOP|Gravity.RIGHT);touch.topMargin=dp(CORNER_TOP_DP);touch.rightMargin=dp(16);
+   petTouch.setLayoutParams(touch);scene.setLayoutParams(sceneCornerParams());
+   root.post(()->{if(chatOpen&&scene.getLayoutParams().width==dp(80))scene.setLayoutParams(sceneCornerParams());});
   }
   applyColors();chat.open();
  }
@@ -92,14 +94,18 @@ public class MainActivity extends Activity {
   }
   applyColors();
  }
+ private FrameLayout.LayoutParams sceneCornerParams(){
+  FrameLayout.LayoutParams p=new FrameLayout.LayoutParams(dp(80),dp(88),Gravity.TOP|Gravity.RIGHT);
+  p.topMargin=overlay.getPaddingTop()+dp(CORNER_TOP_DP);p.rightMargin=overlay.getPaddingRight()+dp(16);
+  return p;
+ }
  private void animatePetToCorner(){
-  int size=dp(80),height=dp(88),top=dp(72),right=dp(16);
-  scene.setPivotX(0);scene.setPivotY(0);
-  scene.animate().scaleX((float)size/scene.getWidth()).scaleY((float)height/scene.getHeight()).translationX(scene.getWidth()-right-size).translationY(top).setDuration(380).setInterpolator(new DecelerateInterpolator(1.5f)).withEndAction(()->{
-   FrameLayout.LayoutParams p=new FrameLayout.LayoutParams(size,height,Gravity.TOP|Gravity.RIGHT);p.topMargin=top;p.rightMargin=right;
-   scene.setLayoutParams(p);scene.setScaleX(1);scene.setScaleY(1);scene.setTranslationX(0);scene.setTranslationY(0);
-  }).start();
+  int size=dp(80),height=dp(88),top=dp(CORNER_TOP_DP),right=dp(16);
   int targetLeft=overlay.getWidth()-overlay.getPaddingRight()-right-size,targetTop=overlay.getPaddingTop()+top;
+  scene.setPivotX(0);scene.setPivotY(0);
+  scene.animate().scaleX((float)size/scene.getWidth()).scaleY((float)height/scene.getHeight()).translationX(targetLeft-scene.getLeft()).translationY(targetTop-scene.getTop()).setDuration(380).setInterpolator(new DecelerateInterpolator(1.5f)).withEndAction(()->{
+   scene.setLayoutParams(sceneCornerParams());scene.setScaleX(1);scene.setScaleY(1);scene.setTranslationX(0);scene.setTranslationY(0);
+  }).start();
   petTouch.setPivotX(0);petTouch.setPivotY(0);
   petTouch.animate().scaleX((float)size/petW).scaleY((float)height/petH).translationX(targetLeft-petL).translationY(targetTop-petT).setDuration(380).setInterpolator(new DecelerateInterpolator(1.5f)).withEndAction(()->{
    FrameLayout.LayoutParams p=new FrameLayout.LayoutParams(size,height,Gravity.TOP|Gravity.RIGHT);p.topMargin=top;p.rightMargin=right;

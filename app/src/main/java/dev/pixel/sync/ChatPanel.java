@@ -144,15 +144,15 @@ public final class ChatPanel extends FrameLayout {
 
     private void addMessageRow(String role,String content){
         boolean assistant="assistant".equals(role);
-        LinearLayout row=new LinearLayout(getContext());row.setOrientation(LinearLayout.HORIZONTAL);row.setGravity(assistant?Gravity.TOP:Gravity.TOP|Gravity.RIGHT);
+        LinearLayout row=new LinearLayout(getContext());row.setOrientation(LinearLayout.HORIZONTAL);row.setGravity(Gravity.TOP);
         if(assistant){View mark=assistantMark(26);LinearLayout.LayoutParams a=new LinearLayout.LayoutParams(dp(26),dp(26));a.rightMargin=dp(8);a.topMargin=dp(2);row.addView(mark,a);}
-        else {FrameLayout mark=userMark(28);LinearLayout.LayoutParams a=new LinearLayout.LayoutParams(dp(28),dp(28));a.rightMargin=dp(8);a.topMargin=dp(2);row.addView(mark,a);}
+        else {View spacer=new View(getContext());row.addView(spacer,new LinearLayout.LayoutParams(0,dp(1),1));}
         TextView bubble=text(content,15);bubble.setTextColor(assistant?foreground:Color.WHITE);bubble.setLineSpacing(dp(2),1f);
         bubble.setPadding(dp(14),dp(11),dp(14),dp(11));bubble.setBackground(rounded(assistant?cardColor:accent,18,assistant?borderColor:accent,assistant?1:0));
         bubble.setMaxWidth((int)(getResources().getDisplayMetrics().widthPixels*.70f));
         LinearLayout.LayoutParams bp=new LinearLayout.LayoutParams(-2,-2);bp.weight=0;bp.bottomMargin=dp(4);
         row.addView(bubble,bp);
-        if(!assistant){View spacer=new View(getContext());row.addView(spacer,0,new LinearLayout.LayoutParams(0,1,1));}
+        if(!assistant){FrameLayout mark=userMark(28);LinearLayout.LayoutParams a=new LinearLayout.LayoutParams(dp(28),dp(28));a.leftMargin=dp(8);a.topMargin=dp(2);row.addView(mark,a);}
         LinearLayout.LayoutParams rp=new LinearLayout.LayoutParams(-1,-2);rp.bottomMargin=dp(8);timeline.addView(row,rp);
     }
 
