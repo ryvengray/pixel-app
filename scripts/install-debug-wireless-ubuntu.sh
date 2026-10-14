@@ -9,13 +9,26 @@ project_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$project_root"
 
 sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+adb_bin=""
+adb_candidates=()
+[[ -n "$sdk_root" ]] && adb_candidates+=("$sdk_root/platform-tools/adb")
+[[ -n "${ANDROID_SDK_ROOT:-}" ]] && adb_candidates+=("$ANDROID_SDK_ROOT/platform-tools/adb")
+[[ -n "${ANDROID_HOME:-}" ]] && adb_candidates+=("$ANDROID_HOME/platform-tools/adb")
+adb_candidates+=(
+  "$HOME/Android/Sdk/platform-tools/adb"
+  "$HOME/Android/sdk/platform-tools/adb"
+  "/opt/android-sdk/platform-tools/adb"
+)
 if command -v adb >/dev/null 2>&1; then
-  adb_bin="$(command -v adb)"
-elif [[ -n "$sdk_root" && -x "$sdk_root/platform-tools/adb" ]]; then
-  adb_bin="$sdk_root/platform-tools/adb"
-else
-  die "找不到 adb。请安装 Android SDK Platform Tools，并把 adb 加入 PATH。"
+  adb_candidates+=("$(command -v adb)")
 fi
+for candidate in "${adb_candidates[@]}"; do
+  if [[ -x "$candidate" ]]; then
+    adb_bin="$candidate"
+    break
+  fi
+done
+[[ -n "$adb_bin" ]] || die "找不到 adb。请安装 Android SDK Platform Tools。"
 
 if ! command -v java >/dev/null 2>&1; then
   die "找不到 Java。请安装 JDK 17，例如：sudo apt install openjdk-17-jdk"
@@ -33,6 +46,9 @@ fi
 
 printf '\nGray Dev 无线安装（Ubuntu）\n'
 printf '请先让电脑和手机连接同一个网络，并在手机上开启「开发者选项 → 无线调试」。\n\n'
+printf '使用 adb：%s\n' "$adb_bin"
+"$adb_bin" version | sed -n '1,2p'
+printf '\n'
 
 default_ip="${1:-}"
 default_connect_port="${2:-}"
@@ -53,7 +69,22 @@ if [[ "$need_pair" =~ ^[Yy]$ ]]; then
   [[ "$pair_code" =~ ^[0-9]{6}$ ]] || die "配对码应为六位数字。"
 
   printf '\n正在配对 %s:%s…\n' "$phone_ip" "$pair_port"
-  "$adb_bin" pair "$phone_ip:$pair_port" "$pair_code"
+  # Avoid talking to a daemon left behind by another adb installation, which
+  # can produce "protocol fault" even though the phone and pairing code are OK.
+  "$adb_bin" kill-server >/dev/null 2>&1 || true
+  if ! pair_output="$("$adb_bin" pair "$phone_ip:$pair_port" "$pair_code" 2>&1)"; then
+    printf '%s\n' "$pair_output" >&2
+    if [[ "$pair_output" == *"protocol fault"* ]]; then
+      printf '检测到 adb 协议异常，正在重启 Android SDK 的 adb 后重试…\n'
+      "$adb_bin" kill-server >/dev/null 2>&1 || true
+      sleep 1
+      "$adb_bin" pair "$phone_ip:$pair_port" "$pair_code"
+    else
+      exit 1
+    fi
+  else
+    printf '%s\n' "$pair_output"
+  fi
 fi
 
 read -r -p "无线调试连接端口（无线调试主页显示的端口）${default_connect_port:+ [$default_connect_port]}：" connect_port
