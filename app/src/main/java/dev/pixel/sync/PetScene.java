@@ -4,6 +4,7 @@ import android.opengl.GLES20;
 import android.opengl.GLSurfaceView;
 import android.os.SystemClock;
 import android.util.Log;
+import android.animation.ValueAnimator;
 import java.nio.*;
 import java.nio.charset.StandardCharsets;
 import javax.microedition.khronos.egl.EGLConfig;
@@ -13,10 +14,13 @@ import javax.microedition.khronos.opengles.GL10;
 public final class PetScene extends GLSurfaceView implements GLSurfaceView.Renderer {
  private final String fragment;
  private final FloatBuffer vertices=ByteBuffer.allocateDirect(32).order(ByteOrder.nativeOrder()).asFloatBuffer();
- private int program,position,resolution,timeUniform,darkUniform,reactionUniform,motionUniform,width,height;
+ private int program,position,resolution,timeUniform,darkUniform,reactionUniform,motionUniform,compactUniform,compactCenterUniform,width,height;
  private final long start=SystemClock.uptimeMillis();
  private volatile long tapped=-10000;
  private volatile boolean dark,moving=true;
+ private volatile float compact;
+ private volatile float compactCenterX=.90f,compactCenterY=.08f;
+ private ValueAnimator compactAnimator;
  private boolean active;
  private final Runnable frame=new Runnable(){public void run(){if(!active)return;requestRender();if(moving)postDelayed(this,33);}};
  public PetScene(Context context){
@@ -33,6 +37,15 @@ public final class PetScene extends GLSurfaceView implements GLSurfaceView.Rende
  public void setMoving(boolean value){moving=value;if(active){removeCallbacks(frame);post(frame);}}
  public boolean isMoving(){return moving;}
  public void react(){tapped=SystemClock.uptimeMillis();requestRender();}
+ public void setCompactTarget(float xFraction,float yFraction){compactCenterX=xFraction;compactCenterY=yFraction;requestRender();}
+ public void setCompact(boolean value,boolean animate){
+  float target=value?1f:0f;
+  if(compactAnimator!=null)compactAnimator.cancel();
+  if(!animate){compact=target;requestRender();return;}
+  compactAnimator=ValueAnimator.ofFloat(compact,target);compactAnimator.setDuration(380);
+  compactAnimator.setInterpolator(new android.view.animation.DecelerateInterpolator(1.5f));
+  compactAnimator.addUpdateListener(a->{compact=(float)a.getAnimatedValue();requestRender();});compactAnimator.start();
+ }
  public void resumeScene(){onResume();active=true;removeCallbacks(frame);post(frame);}
  public void pauseScene(){active=false;removeCallbacks(frame);onPause();}
  @Override protected void onSizeChanged(int w,int h,int oldW,int oldH){
@@ -55,6 +68,7 @@ public final class PetScene extends GLSurfaceView implements GLSurfaceView.Rende
   position=GLES20.glGetAttribLocation(program,"position");resolution=GLES20.glGetUniformLocation(program,"resolution");
   timeUniform=GLES20.glGetUniformLocation(program,"time");darkUniform=GLES20.glGetUniformLocation(program,"dark");
   reactionUniform=GLES20.glGetUniformLocation(program,"reaction");motionUniform=GLES20.glGetUniformLocation(program,"motion");
+  compactUniform=GLES20.glGetUniformLocation(program,"compact");compactCenterUniform=GLES20.glGetUniformLocation(program,"compactCenter");
  }
  public void onSurfaceChanged(GL10 gl,int w,int h){width=w;height=h;GLES20.glViewport(0,0,w,h);}
  public void onDrawFrame(GL10 gl){
@@ -63,6 +77,7 @@ public final class PetScene extends GLSurfaceView implements GLSurfaceView.Rende
   float bounce=elapsed<1.8f&&moving?(float)(Math.pow(Math.sin(elapsed*Math.PI/.6),2)*Math.exp(-elapsed*2)):0;
   GLES20.glUseProgram(program);GLES20.glUniform2f(resolution,width,height);GLES20.glUniform1f(timeUniform,(now-start)/1000f);
   GLES20.glUniform1f(darkUniform,dark?1:0);GLES20.glUniform1f(reactionUniform,bounce);GLES20.glUniform1f(motionUniform,moving?1:0);
+  GLES20.glUniform1f(compactUniform,compact);GLES20.glUniform2f(compactCenterUniform,compactCenterX,compactCenterY);
   vertices.position(0);GLES20.glVertexAttribPointer(position,2,GLES20.GL_FLOAT,false,0,vertices);
   GLES20.glEnableVertexAttribArray(position);GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP,0,4);
  }

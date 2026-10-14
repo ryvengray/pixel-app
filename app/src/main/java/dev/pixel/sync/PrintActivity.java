@@ -132,40 +132,39 @@ public class PrintActivity extends Activity {
         LinearLayout header = new LinearLayout(this);
         header.setOrientation(LinearLayout.HORIZONTAL);
         header.setGravity(Gravity.CENTER_VERTICAL);
-        header.setPadding(dp(16), dp(12), dp(24), dp(12));
+        header.setPadding(dp(20), dp(12), dp(20), dp(12));
 
-        Button back = new Button(this);
-        back.setText("←");
-        back.setTextSize(22);
-        back.setTextColor(foreground);
-        back.setAllCaps(false);
-        back.setMinWidth(dp(48));
-        back.setMinHeight(dp(48));
-        back.setBackground(ripple());
+        TextView back = toolbarAction("‹", true);
+        back.setTextSize(32);
+        back.setContentDescription("返回");
         back.setOnClickListener(v -> finish());
-        header.addView(back);
+        header.addView(back, new LinearLayout.LayoutParams(dp(44), dp(44)));
 
-        TextView title = new TextView(this);
-        title.setText("打印");
-        title.setTextSize(22);
-        title.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-        title.setTextColor(foreground);
+        LinearLayout identity = new LinearLayout(this);
+        identity.setOrientation(LinearLayout.VERTICAL);
+        TextView title = new TextView(this);title.setText("打印");title.setTextSize(22);title.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));title.setTextColor(foreground);
+        TextView subtitle = new TextView(this);subtitle.setText("选择内容并发送到打印机");subtitle.setTextSize(12);subtitle.setTextColor(secondary);subtitle.setPadding(0,dp(2),0,0);
+        identity.addView(title);identity.addView(subtitle);
         LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(0, -2, 1);
-        tp.leftMargin = dp(12);
-        header.addView(title, tp);
+        tp.leftMargin = dp(14);
+        header.addView(identity, tp);
 
-        Button refresh = new Button(this);
-        refresh.setText("⟳");
-        refresh.setTextSize(22);
-        refresh.setTextColor(foreground);
-        refresh.setAllCaps(false);
-        refresh.setMinWidth(dp(48));
-        refresh.setMinHeight(dp(48));
-        refresh.setBackground(ripple());
+        TextView refresh = toolbarAction("↻  刷新", false);
+        refresh.setContentDescription("刷新打印机列表");
         refresh.setOnClickListener(v -> refreshPrinters());
-        header.addView(refresh);
+        header.addView(refresh, new LinearLayout.LayoutParams(dp(78), dp(42)));
 
         return header;
+    }
+
+    private TextView toolbarAction(String text, boolean round) {
+        TextView action = new TextView(this);
+        action.setText(text);action.setTextSize(14);action.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));
+        action.setTextColor(foreground);action.setGravity(Gravity.CENTER);action.setClickable(true);action.setFocusable(true);
+        int pressed=Color.parseColor(dark?"#416452":"#C9DDC8");
+        GradientDrawable base=new GradientDrawable();base.setColor(dark?Color.parseColor("#284235"):Color.parseColor("#E4EEE0"));base.setCornerRadius(dp(round?22:15));
+        action.setBackground(new RippleDrawable(ColorStateList.valueOf(pressed),base,null));
+        return action;
     }
 
     private RippleDrawable ripple() {

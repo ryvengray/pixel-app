@@ -1,6 +1,7 @@
 precision highp float;
 uniform vec2 resolution;
-uniform float time, dark, reaction, motion;
+uniform float time, dark, reaction, motion, compact;
+uniform vec2 compactCenter;
 mat2 rot(float a){float c=cos(a),s=sin(a);return mat2(c,-s,s,c);}
 float triangle(vec2 p){
  float r=.64,k=1.7320508;
@@ -30,7 +31,13 @@ void main(){
  vec2 g=uv-vec2(.45*sin(t*.11),.5*cos(t*.09));
  col+=mix(vec3(-.04,.018,-.03),vec3(.035,.07,.045),dark)*exp(-1.4*dot(g,g));
  col+=mix(vec3(.014,.012,.006),vec3(.009,.014,.01),dark)*(.5+.5*sin(uv.x*2.+uv.y*1.4+t*.13));
- vec3 ro=vec3(uv*1.75,4.);ro.y-=.32;vec3 rd=vec3(0.,0.,-1.);
+ // Keep the background full-screen and transform only the pet. This avoids a
+ // differently coloured SurfaceView rectangle when the pet moves to the menu.
+ vec2 baseCenter=vec2(0.,.32/1.75);
+ vec2 targetCenter=vec2(2.*compactCenter.x-1.,(1.-2.*compactCenter.y)*resolution.y/resolution.x);
+ float petScale=mix(1.,.18,compact);
+ vec2 petUv=(uv-mix(baseCenter,targetCenter,compact))/petScale+baseCenter;
+ vec3 ro=vec3(petUv*1.75,4.);ro.y-=.32;vec3 rd=vec3(0.,0.,-1.);
  float shadow=exp(-pow(ro.x/.78,2.)-pow((ro.y+.93)/.14,2.));
  col*=1.-shadow*mix(.15,.28,dark)*(1.-reaction*.35);
  if(abs(ro.x)<1.3&&ro.y>-1.2&&ro.y<1.65){

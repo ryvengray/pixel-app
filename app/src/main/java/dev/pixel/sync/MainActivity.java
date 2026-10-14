@@ -25,7 +25,7 @@ public class MainActivity extends Activity {
  private Dialog menu;
  private int foreground,secondary;
  private int petL,petT,petW,petH;
- private static final int CORNER_TOP_DP=86;
+ private static final int MENU_WIDTH_DP=52,MENU_HEIGHT_DP=48,MENU_TOP_DP=18,MENU_RIGHT_DP=20;
  private int dp(float n){return Math.round(n*getResources().getDisplayMetrics().density);}
  private boolean systemDark(){return (getResources().getConfiguration().uiMode&Configuration.UI_MODE_NIGHT_MASK)==Configuration.UI_MODE_NIGHT_YES;}
  @Override public void onCreate(Bundle state){
@@ -39,7 +39,7 @@ public class MainActivity extends Activity {
   title=text("Gray",23);title.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));
   FrameLayout.LayoutParams header=new FrameLayout.LayoutParams(-2,-2,Gravity.TOP|Gravity.LEFT);header.leftMargin=dp(28);header.topMargin=dp(26);overlay.addView(title,header);
   menuButton=text("•••",22);menuButton.setGravity(Gravity.CENTER);menuButton.setElevation(dp(16));menuButton.setContentDescription("打开功能和外观菜单");menuButton.setOnClickListener(v->showMenu());
-  FrameLayout.LayoutParams button=new FrameLayout.LayoutParams(dp(52),dp(48),Gravity.TOP|Gravity.RIGHT);button.topMargin=dp(18);button.rightMargin=dp(20);overlay.addView(menuButton,button);
+  FrameLayout.LayoutParams button=new FrameLayout.LayoutParams(dp(MENU_WIDTH_DP),dp(MENU_HEIGHT_DP),Gravity.TOP|Gravity.RIGHT);button.topMargin=dp(MENU_TOP_DP);button.rightMargin=dp(MENU_RIGHT_DP);overlay.addView(menuButton,button);
   greeting=new LinearLayout(this);greeting.setOrientation(LinearLayout.VERTICAL);greeting.setGravity(Gravity.CENTER);
   caption=text("在这里，陪着你",19);caption.setGravity(Gravity.CENTER);greeting.addView(caption);
   hint=text("轻触我，打个招呼",12);hint.setGravity(Gravity.CENTER);hint.setPadding(0,dp(12),0,0);greeting.addView(hint);
@@ -51,7 +51,7 @@ public class MainActivity extends Activity {
   FrameLayout.LayoutParams pp=new FrameLayout.LayoutParams(dp(290),dp(300),Gravity.CENTER);pp.bottomMargin=dp(30);overlay.addView(petTouch,pp);
   chat=new ChatPanel(this,()->scene.react(),()->closeChat(true));
   FrameLayout.LayoutParams cp=new FrameLayout.LayoutParams(-1,-1,Gravity.BOTTOM);overlay.addView(chat,cp);chat.setVisibility(View.GONE);
-  root.setOnApplyWindowInsetsListener((v,insets)->{android.graphics.Insets safe=insets.getInsets(WindowInsets.Type.systemBars()|WindowInsets.Type.displayCutout());android.graphics.Insets ime=insets.getInsets(WindowInsets.Type.ime());overlay.setPadding(safe.left,safe.top,safe.right,Math.max(safe.bottom,ime.bottom));return insets;});
+  root.setOnApplyWindowInsetsListener((v,insets)->{android.graphics.Insets safe=insets.getInsets(WindowInsets.Type.systemBars()|WindowInsets.Type.displayCutout());android.graphics.Insets ime=insets.getInsets(WindowInsets.Type.ime());overlay.setPadding(safe.left,safe.top,safe.right,Math.max(safe.bottom,ime.bottom));if(chatOpen)overlay.post(()->positionCompactPet(false));return insets;});
   setContentView(root);applyColors();
   if(state!=null&&state.getBoolean("chatOpen",false))openChat(false);
  }
@@ -71,59 +71,53 @@ public class MainActivity extends Activity {
  }
  private void openChat(boolean animate){
   if(chatOpen)return;chatOpen=true;
-  greeting.setVisibility(View.GONE);chat.animate().cancel();chat.setAlpha(animate?0f:1f);chat.setTranslationY(0);chat.setVisibility(View.VISIBLE);chat.bringToFront();petTouch.bringToFront();menuButton.bringToFront();
+  petTouch.setContentDescription("右上角的小宠物，点击放大，长按打开功能菜单");
+  greeting.setVisibility(View.GONE);menuButton.setVisibility(View.INVISIBLE);chat.animate().cancel();chat.setAlpha(animate?0f:1f);chat.setTranslationY(0);chat.setVisibility(View.VISIBLE);chat.bringToFront();petTouch.bringToFront();
   if(animate)chat.animate().alpha(1f).setDuration(220).start();
   if(animate){
    petL=petTouch.getLeft();petT=petTouch.getTop();petW=petTouch.getWidth();petH=petTouch.getHeight();
    petTouch.setClickable(false);animatePetToCorner();
   }else{
-   FrameLayout.LayoutParams touch=new FrameLayout.LayoutParams(dp(80),dp(88),Gravity.TOP|Gravity.RIGHT);touch.topMargin=dp(CORNER_TOP_DP);touch.rightMargin=dp(16);
-   petTouch.setLayoutParams(touch);scene.setLayoutParams(sceneCornerParams());
-   root.post(()->{if(chatOpen&&scene.getLayoutParams().width==dp(80))scene.setLayoutParams(sceneCornerParams());});
+   petTouch.setLayoutParams(compactTouchParams());overlay.post(()->{if(chatOpen)positionCompactPet(false);});
   }
   applyColors();chat.open();
  }
  private void closeChat(boolean animate){
   if(!chatOpen)return;chatOpen=false;
+  petTouch.setContentDescription("玉绿色宠物，点击和它聊天，长按打开功能菜单");
   chat.close();chat.animate().alpha(0f).setDuration(180).withEndAction(()->{if(!chatOpen){chat.setVisibility(View.GONE);chat.setAlpha(1f);}}).start();greeting.setVisibility(View.VISIBLE);
   if(animate){petTouch.setClickable(false);animatePetBack();}
   else{
-   scene.setLayoutParams(new FrameLayout.LayoutParams(-1,-1));
+   scene.setCompact(false,false);menuButton.setVisibility(View.VISIBLE);
    FrameLayout.LayoutParams p=new FrameLayout.LayoutParams(dp(290),dp(300),Gravity.CENTER);p.bottomMargin=dp(30);
    petTouch.setLayoutParams(p);
   }
   applyColors();
  }
- private FrameLayout.LayoutParams sceneCornerParams(){
-  FrameLayout.LayoutParams p=new FrameLayout.LayoutParams(dp(80),dp(88),Gravity.TOP|Gravity.RIGHT);
-  p.topMargin=overlay.getPaddingTop()+dp(CORNER_TOP_DP);p.rightMargin=overlay.getPaddingRight()+dp(16);
-  return p;
+ private FrameLayout.LayoutParams compactTouchParams(){
+  FrameLayout.LayoutParams p=new FrameLayout.LayoutParams(dp(MENU_WIDTH_DP),dp(MENU_HEIGHT_DP),Gravity.TOP|Gravity.RIGHT);
+  p.topMargin=dp(MENU_TOP_DP);p.rightMargin=dp(MENU_RIGHT_DP);return p;
+ }
+ private void positionCompactPet(boolean animate){
+  float x=(menuButton.getLeft()+menuButton.getWidth()/2f)/Math.max(1f,overlay.getWidth());
+  float y=(menuButton.getTop()+menuButton.getHeight()/2f)/Math.max(1f,overlay.getHeight());
+  scene.setCompactTarget(x,y);scene.setCompact(true,animate);
  }
  private void animatePetToCorner(){
-  int size=dp(80),height=dp(88),top=dp(CORNER_TOP_DP),right=dp(16);
-  int targetLeft=overlay.getWidth()-overlay.getPaddingRight()-right-size,targetTop=overlay.getPaddingTop()+top;
-  scene.setPivotX(0);scene.setPivotY(0);
-  scene.animate().scaleX((float)size/scene.getWidth()).scaleY((float)height/scene.getHeight()).translationX(targetLeft-scene.getLeft()).translationY(targetTop-scene.getTop()).setDuration(380).setInterpolator(new DecelerateInterpolator(1.5f)).withEndAction(()->{
-   scene.setLayoutParams(sceneCornerParams());scene.setScaleX(1);scene.setScaleY(1);scene.setTranslationX(0);scene.setTranslationY(0);
-  }).start();
+  int size=dp(MENU_WIDTH_DP),height=dp(MENU_HEIGHT_DP),targetLeft=menuButton.getLeft(),targetTop=menuButton.getTop();
+  positionCompactPet(true);
   petTouch.setPivotX(0);petTouch.setPivotY(0);
   petTouch.animate().scaleX((float)size/petW).scaleY((float)height/petH).translationX(targetLeft-petL).translationY(targetTop-petT).setDuration(380).setInterpolator(new DecelerateInterpolator(1.5f)).withEndAction(()->{
-   FrameLayout.LayoutParams p=new FrameLayout.LayoutParams(size,height,Gravity.TOP|Gravity.RIGHT);p.topMargin=top;p.rightMargin=right;
-   petTouch.setLayoutParams(p);petTouch.setScaleX(1);petTouch.setScaleY(1);petTouch.setTranslationX(0);petTouch.setTranslationY(0);petTouch.setClickable(true);
+   petTouch.setLayoutParams(compactTouchParams());petTouch.setScaleX(1);petTouch.setScaleY(1);petTouch.setTranslationX(0);petTouch.setTranslationY(0);petTouch.setClickable(true);
   }).start();
  }
  private void animatePetBack(){
-  int width=getResources().getDisplayMetrics().widthPixels,height=getResources().getDisplayMetrics().heightPixels;
-  int cl=scene.getLeft(),ct=scene.getTop();
-  scene.setPivotX(0);scene.setPivotY(0);
-  scene.animate().scaleX((float)width/scene.getWidth()).scaleY((float)height/scene.getHeight()).translationX(-cl).translationY(-ct).setDuration(380).setInterpolator(new DecelerateInterpolator(1.5f)).withEndAction(()->{
-   scene.setLayoutParams(new FrameLayout.LayoutParams(-1,-1));scene.setScaleX(1);scene.setScaleY(1);scene.setTranslationX(0);scene.setTranslationY(0);
-  }).start();
+  scene.setCompact(false,true);
   int cw=petTouch.getWidth(),ch=petTouch.getHeight(),cll=petTouch.getLeft(),ctt=petTouch.getTop();
   petTouch.setPivotX(0);petTouch.setPivotY(0);
   petTouch.animate().scaleX((float)petW/cw).scaleY((float)petH/ch).translationX(petL-cll).translationY(petT-ctt).setDuration(380).setInterpolator(new DecelerateInterpolator(1.5f)).withEndAction(()->{
    FrameLayout.LayoutParams p=new FrameLayout.LayoutParams(petW,petH,Gravity.CENTER);p.bottomMargin=dp(30);
-   petTouch.setLayoutParams(p);petTouch.setScaleX(1);petTouch.setScaleY(1);petTouch.setTranslationX(0);petTouch.setTranslationY(0);petTouch.setClickable(true);
+   petTouch.setLayoutParams(p);petTouch.setScaleX(1);petTouch.setScaleY(1);petTouch.setTranslationX(0);petTouch.setTranslationY(0);petTouch.setClickable(true);menuButton.setVisibility(View.VISIBLE);
   }).start();
  }
  private void showMenu(){
