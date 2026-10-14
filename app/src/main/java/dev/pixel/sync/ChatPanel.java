@@ -40,7 +40,7 @@ public final class ChatPanel extends FrameLayout {
         setClipToPadding(false);
         LinearLayout column=new LinearLayout(context);
         column.setOrientation(LinearLayout.VERTICAL);
-        column.setPadding(dp(20),dp(10),dp(20),dp(12));
+        column.setPadding(dp(20),dp(72),dp(20),dp(12));
         addView(column,new FrameLayout.LayoutParams(-1,-1));
 
         LinearLayout header=new LinearLayout(context);
@@ -57,12 +57,13 @@ public final class ChatPanel extends FrameLayout {
         close=text("×",27);close.setGravity(Gravity.CENTER);close.setContentDescription("关闭聊天");
         close.setOnClickListener(v->{if(onClose!=null)onClose.run();});
         header.addView(close,new LinearLayout.LayoutParams(dp(42),dp(42)));
+        close.setVisibility(View.GONE);
         column.addView(header);
 
         divider=new View(context);divider.setBackgroundColor(borderColor);
         LinearLayout.LayoutParams dpv=new LinearLayout.LayoutParams(-1,dp(1));dpv.bottomMargin=dp(7);column.addView(divider,dpv);
 
-        scroll=new ScrollView(context);scroll.setFillViewport(true);scroll.setClipToPadding(false);
+        scroll=new ScrollView(context);scroll.setFillViewport(true);scroll.setClipToPadding(false);scroll.setVerticalScrollBarEnabled(false);
         timeline=new LinearLayout(context);timeline.setOrientation(LinearLayout.VERTICAL);timeline.setPadding(0,dp(10),0,dp(16));
         scroll.addView(timeline,new ScrollView.LayoutParams(-1,-2));
         column.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
@@ -91,7 +92,7 @@ public final class ChatPanel extends FrameLayout {
             public void afterTextChanged(Editable e){}
         });
         setSending(false);
-        setElevation(dp(8));
+        setElevation(0);
     }
 
     public void setTheme(boolean value){
@@ -102,7 +103,7 @@ public final class ChatPanel extends FrameLayout {
         cardColor=Color.parseColor(dark?"#24392E":"#FFFFFF");
         borderColor=Color.parseColor(dark?"#354B3E":"#E1E9DF");
         accent=Color.parseColor(dark?"#83B88F":"#39644D");
-        setBackground(surface(surfaceColor,28,28,0,0));
+        setBackgroundColor(Color.TRANSPARENT);
         status.setTextColor(secondary);close.setTextColor(secondary);name.setTextColor(foreground);
         divider.setBackgroundColor(borderColor);updateComposerSurface(input.hasFocus());
         badge.setBackground(rounded(Color.parseColor(dark?"#3B6148":"#DCEBDD"),19,0,0));
@@ -112,7 +113,7 @@ public final class ChatPanel extends FrameLayout {
         render();
     }
 
-    public void open(){render();input.postDelayed(()->{input.requestFocus();((InputMethodManager)getContext().getSystemService(Context.INPUT_METHOD_SERVICE)).showSoftInput(input,0);},180);}
+    public void open(){render();}
     public void close(){((InputMethodManager)getContext().getSystemService(Context.INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(input.getWindowToken(),0);}
     public void shutdown(){network.shutdownNow();}
 
@@ -143,17 +144,15 @@ public final class ChatPanel extends FrameLayout {
 
     private void addMessageRow(String role,String content){
         boolean assistant="assistant".equals(role);
-        LinearLayout row=new LinearLayout(getContext());row.setOrientation(LinearLayout.HORIZONTAL);row.setGravity(Gravity.TOP);
+        LinearLayout row=new LinearLayout(getContext());row.setOrientation(LinearLayout.HORIZONTAL);row.setGravity(assistant?Gravity.TOP:Gravity.TOP|Gravity.RIGHT);
         if(assistant){View mark=assistantMark(26);LinearLayout.LayoutParams a=new LinearLayout.LayoutParams(dp(26),dp(26));a.rightMargin=dp(8);a.topMargin=dp(2);row.addView(mark,a);}
+        else {FrameLayout mark=userMark(28);LinearLayout.LayoutParams a=new LinearLayout.LayoutParams(dp(28),dp(28));a.rightMargin=dp(8);a.topMargin=dp(2);row.addView(mark,a);}
         TextView bubble=text(content,15);bubble.setTextColor(assistant?foreground:Color.WHITE);bubble.setLineSpacing(dp(2),1f);
         bubble.setPadding(dp(14),dp(11),dp(14),dp(11));bubble.setBackground(rounded(assistant?cardColor:accent,18,assistant?borderColor:accent,assistant?1:0));
         bubble.setMaxWidth((int)(getResources().getDisplayMetrics().widthPixels*.70f));
         LinearLayout.LayoutParams bp=new LinearLayout.LayoutParams(-2,-2);bp.weight=0;bp.bottomMargin=dp(4);
         row.addView(bubble,bp);
-        if(!assistant){
-            View spacer=new View(getContext());row.addView(spacer,new LinearLayout.LayoutParams(0,1,1));
-            FrameLayout userMark=userMark(28);LinearLayout.LayoutParams a=new LinearLayout.LayoutParams(dp(28),dp(28));a.leftMargin=dp(8);a.topMargin=dp(2);row.addView(userMark,a);
-        }
+        if(!assistant){View spacer=new View(getContext());row.addView(spacer,0,new LinearLayout.LayoutParams(0,1,1));}
         LinearLayout.LayoutParams rp=new LinearLayout.LayoutParams(-1,-2);rp.bottomMargin=dp(8);timeline.addView(row,rp);
     }
 
@@ -205,10 +204,14 @@ public final class ChatPanel extends FrameLayout {
     }
     private void scrollToLatest(boolean smooth){
         if(scroll==null)return;
-        scroll.post(()->{
-            int bottom=Math.max(0,timeline.getHeight()-scroll.getHeight());
-            if(smooth)scroll.smoothScrollTo(0,bottom);else scroll.scrollTo(0,bottom);
+        timeline.getViewTreeObserver().addOnGlobalLayoutListener(new android.view.ViewTreeObserver.OnGlobalLayoutListener(){
+            @Override public void onGlobalLayout(){
+                timeline.getViewTreeObserver().removeOnGlobalLayoutListener(this);
+                int bottom=Math.max(0,timeline.getMeasuredHeight()-scroll.getHeight()+scroll.getPaddingBottom());
+                if(smooth)scroll.smoothScrollTo(0,bottom);else scroll.scrollTo(0,bottom);
+            }
         });
+        timeline.requestLayout();
     }
     private TextView text(String value,int size){TextView v=new TextView(getContext());v.setText(value);v.setTextSize(size);return v;}
     private GradientDrawable rounded(int color,int radius,int strokeColor,int stroke){GradientDrawable d=new GradientDrawable();d.setColor(color);d.setCornerRadius(dp(radius));if(stroke>0)d.setStroke(dp(stroke),strokeColor);return d;}

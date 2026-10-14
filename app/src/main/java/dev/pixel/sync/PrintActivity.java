@@ -31,13 +31,15 @@ public class PrintActivity extends Activity {
 
     private LinearLayout printerContainer;
     private LinearLayout contentContainer;
-    private TextView fileLabel, textInput, copiesLabel;
+    private TextView fileLabel, textInput, copiesLabel, fileTab, textTab;
     private View fileArea, textArea;
     private Button printBtn;
     private String selectedPrinterId;
     private Uri selectedFileUri;
     private String selectedFileName;
     private int copies = 1;
+    private String paperSize = "a4", colorMode = "monochrome";
+    private TextView[] paperChoices, colorChoices;
     private boolean fileMode = true;
     private boolean printing;
     private List<PrinterApi.Printer> cachedPrinters = new java.util.ArrayList<>();
@@ -75,6 +77,7 @@ public class PrintActivity extends Activity {
         body.addView(buildPrinterSection());
         body.addView(buildDivider());
         body.addView(buildContentSection());
+        body.addView(buildOptionsSection());
         body.addView(buildCopiesSection());
         body.addView(buildPrintButton());
 
@@ -214,7 +217,7 @@ public class PrintActivity extends Activity {
         label.setTextColor(secondary);
         section.addView(label);
 
-        section.addView(buildTabSwitcher());
+        LinearLayout.LayoutParams tabsParams=new LinearLayout.LayoutParams(-1,-2);tabsParams.topMargin=dp(14);section.addView(buildTabSwitcher(),tabsParams);
 
         fileArea = buildFileArea();
         textArea = buildTextArea();
@@ -230,38 +233,26 @@ public class PrintActivity extends Activity {
     private View buildTabSwitcher() {
         LinearLayout tabs = new LinearLayout(this);
         tabs.setOrientation(LinearLayout.HORIZONTAL);
-        LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(-1, -2);
-        tp.topMargin = dp(16);
-        tabs.addView(buildTab("文件", true, v -> switchTab(true)));
-        tabs.addView(buildTab("文字", false, v -> switchTab(false)));
+        tabs.setPadding(dp(4),dp(4),dp(4),dp(4));tabs.setBackground(cardBg());
+        fileTab=buildTab("文件",true,v->switchTab(true));textTab=buildTab("文字",false,v->switchTab(false));
+        tabs.addView(fileTab,new LinearLayout.LayoutParams(0,dp(42),1));tabs.addView(textTab,new LinearLayout.LayoutParams(0,dp(42),1));
         return tabs;
     }
 
-    private View buildTab(String text, boolean selected, View.OnClickListener listener) {
-        Button btn = new Button(this);
+    private TextView buildTab(String text, boolean selected, View.OnClickListener listener) {
+        TextView btn = new TextView(this);
         btn.setText(text);
         btn.setTextSize(14);
-        btn.setAllCaps(false);
-        btn.setMinHeight(dp(40));
-        btn.setPadding(dp(24), 0, dp(24), 0);
-        if (selected) {
-            btn.setTextColor(accentText);
-            GradientDrawable d = new GradientDrawable();
-            d.setColor(accent);
-            d.setCornerRadius(dp(20));
-            btn.setBackground(d);
-        } else {
-            btn.setTextColor(secondary);
-            btn.setBackground(null);
-        }
+        btn.setGravity(Gravity.CENTER);styleChoice(btn,selected);
         btn.setOnClickListener(listener);
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(40), 1);
-        lp.setMargins(dp(4), 0, dp(4), 0);
         return btn;
     }
 
+    private void styleChoice(TextView view,boolean selected){view.setTextColor(selected?accentText:foreground);GradientDrawable bg=new GradientDrawable();bg.setColor(selected?accent:cardBg);bg.setCornerRadius(dp(13));view.setBackground(bg);}
+
     private void switchTab(boolean isFile) {
         fileMode = isFile;
+        styleChoice(fileTab,isFile);styleChoice(textTab,!isFile);
         fileArea.setVisibility(isFile ? View.VISIBLE : View.GONE);
         textArea.setVisibility(isFile ? View.GONE : View.VISIBLE);
     }
@@ -270,7 +261,7 @@ public class PrintActivity extends Activity {
         LinearLayout area = new LinearLayout(this);
         area.setOrientation(LinearLayout.VERTICAL);
         area.setGravity(Gravity.CENTER);
-        area.setPadding(dp(24), dp(32), dp(24), dp(32));
+        area.setPadding(dp(20), dp(22), dp(20), dp(22));
         GradientDrawable d = new GradientDrawable();
         d.setColor(Color.TRANSPARENT);
         d.setCornerRadius(dp(16));
@@ -279,13 +270,13 @@ public class PrintActivity extends Activity {
         area.setOnClickListener(v -> pickFile());
 
         TextView icon = new TextView(this);
-        icon.setText("📄");
-        icon.setTextSize(32);
+        icon.setText("▤");
+        icon.setTextColor(accent);icon.setTextSize(30);
         icon.setGravity(Gravity.CENTER);
         area.addView(icon);
 
         fileLabel = new TextView(this);
-        fileLabel.setText("点击选择文件");
+        fileLabel.setText("还没有选择文件");
         fileLabel.setTextSize(15);
         fileLabel.setTextColor(secondary);
         fileLabel.setGravity(Gravity.CENTER);
@@ -294,13 +285,15 @@ public class PrintActivity extends Activity {
         area.addView(fileLabel, lp);
 
         TextView hint = new TextView(this);
-        hint.setText("PDF · 图片 · Word · Excel");
+        hint.setText("支持 PDF、图片、Word 和 Excel");
         hint.setTextSize(12);
         hint.setTextColor(dark ? Color.parseColor("#5A7A6A") : Color.parseColor("#9AB0A0"));
         hint.setGravity(Gravity.CENTER);
         LinearLayout.LayoutParams hp = new LinearLayout.LayoutParams(-1, -2);
         hp.topMargin = dp(4);
         area.addView(hint, hp);
+
+        TextView choose=new TextView(this);choose.setText("选择文件");choose.setTextSize(14);choose.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));choose.setTextColor(accentText);choose.setGravity(Gravity.CENTER);GradientDrawable button=new GradientDrawable();button.setColor(accent);button.setCornerRadius(dp(14));choose.setBackground(button);LinearLayout.LayoutParams chooseParams=new LinearLayout.LayoutParams(dp(132),dp(42));chooseParams.topMargin=dp(16);area.addView(choose,chooseParams);
 
         return area;
     }
@@ -322,6 +315,18 @@ public class PrintActivity extends Activity {
         textInput = et;
         return et;
     }
+
+    private View buildOptionsSection(){
+        LinearLayout section=new LinearLayout(this);section.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout.LayoutParams outer=new LinearLayout.LayoutParams(-1,-2);outer.topMargin=dp(22);section.setLayoutParams(outer);
+        TextView title=new TextView(this);title.setText("打印设置");title.setTextSize(16);title.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));title.setTextColor(foreground);section.addView(title);
+        TextView paperLabel=new TextView(this);paperLabel.setText("纸张大小");paperLabel.setTextSize(13);paperLabel.setTextColor(secondary);paperLabel.setPadding(0,dp(14),0,dp(8));section.addView(paperLabel);
+        LinearLayout paperRow=new LinearLayout(this);paperChoices=new TextView[3];String[] names={"A4","A5","Letter"};String[] values={"a4","a5","letter"};for(int i=0;i<3;i++){final String value=values[i];TextView choice=buildTab(names[i],i==0,v->{paperSize=value;refreshChoices();});LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(0,dp(42),1);p.rightMargin=i<2?dp(8):0;paperRow.addView(choice,p);paperChoices[i]=choice;}section.addView(paperRow);
+        TextView colorLabel=new TextView(this);colorLabel.setText("颜色");colorLabel.setTextSize(13);colorLabel.setTextColor(secondary);colorLabel.setPadding(0,dp(16),0,dp(8));section.addView(colorLabel);
+        LinearLayout colorRow=new LinearLayout(this);colorChoices=new TextView[2];String[] colors={"黑白","彩色"};String[] colorValues={"monochrome","color"};for(int i=0;i<2;i++){final String value=colorValues[i];TextView choice=buildTab(colors[i],i==0,v->{colorMode=value;refreshChoices();});LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(0,dp(42),1);p.rightMargin=i==0?dp(8):0;colorRow.addView(choice,p);colorChoices[i]=choice;}section.addView(colorRow);return section;
+    }
+
+    private void refreshChoices(){String[] papers={"a4","a5","letter"};for(int i=0;i<paperChoices.length;i++)styleChoice(paperChoices[i],paperSize.equals(papers[i]));String[] colors={"monochrome","color"};for(int i=0;i<colorChoices.length;i++)styleChoice(colorChoices[i],colorMode.equals(colors[i]));}
 
     private View buildCopiesSection() {
         LinearLayout section = new LinearLayout(this);
@@ -564,23 +569,23 @@ public class PrintActivity extends Activity {
         printBtn.setText("打印中...");
         final String pid = selectedPrinterId;
         final int c = copies;
+        final boolean fileJob=fileMode;final Uri fileUri=selectedFileUri;final String jobText=fileJob?null:((EditText)textInput).getText().toString().trim();final String paper=paperSize, color=colorMode;
         executor.execute(() -> {
             try {
-                if (fileMode) {
-                    PrinterApi.printFile(PrintActivity.this, pid, selectedFileUri, c);
+                if (fileJob) {
+                    PrinterApi.printFile(PrintActivity.this, pid, fileUri, c, paper, color);
                 } else {
-                    String text = ((EditText) textInput).getText().toString().trim();
-                    PrinterApi.printText(PrintActivity.this, pid, text, c);
+                    PrinterApi.printText(PrintActivity.this, pid, jobText, c, paper, color);
                 }
                 handler.post(() -> {
                     printing = false;
                     printBtn.setEnabled(true);
                     printBtn.setText("🖨  开始打印");
                     showToast("打印任务已发送");
-                    if (fileMode) {
+                    if (fileJob) {
                         selectedFileUri = null;
                         selectedFileName = null;
-                        fileLabel.setText("点击选择文件");
+                        fileLabel.setText("还没有选择文件");
                         fileLabel.setTextColor(secondary);
                     } else {
                         ((EditText) textInput).setText("");

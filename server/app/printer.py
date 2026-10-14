@@ -59,7 +59,7 @@ async def check_online(host: str, port: int = 631) -> tuple[bool, str]:
         uri = f"ipp://{host}:{port}{path}"
         body = _build_request(0x000B, uri)
         try:
-            async with httpx.AsyncClient(timeout=3) as client:
+            async with httpx.AsyncClient(timeout=3, trust_env=False) as client:
                 resp = await client.post(
                     f"http://{host}:{port}{path}",
                     content=body,
@@ -110,13 +110,16 @@ DOC_FORMATS = {
 }
 
 
-async def send_print_job(host: str, port: int, data: bytes, job_name: str, doc_format: str, copies: int = 1) -> dict[str, Any]:
+async def send_print_job(host: str, port: int, data: bytes, job_name: str, doc_format: str, copies: int = 1, paper_size: str = "a4", color_mode: str = "monochrome") -> dict[str, Any]:
     uri = _printer_uri(host, port)
     extra = _str_attr(0x42, "job-name", job_name) + _str_attr(0x49, "document-format", doc_format)
     job_attrs = _int_attr(0x21, "copies", copies) if copies > 1 else b""
+    media = {"a4": "iso_a4_210x297mm", "a5": "iso_a5_148x210mm", "letter": "na_letter_8.5x11in"}[paper_size]
+    job_attrs += _str_attr(0x44, "media", media)
+    job_attrs += _str_attr(0x44, "print-color-mode", color_mode)
     body = _build_request(0x0002, uri, extra_ops=extra, job_attrs=job_attrs, data=data)
     try:
-        async with httpx.AsyncClient(timeout=60) as client:
+        async with httpx.AsyncClient(timeout=60, trust_env=False) as client:
             resp = await client.post(
                 uri.replace("ipp://", "http://").replace("ipps://", "https://"),
                 content=body,

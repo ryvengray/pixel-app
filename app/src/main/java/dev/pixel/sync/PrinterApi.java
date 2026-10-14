@@ -95,7 +95,7 @@ public final class PrinterApi {
         if (code >= 300) throw new IOException("删除失败（" + code + "）");
     }
 
-    public static String printText(Context ctx, String printerId, String text, int copies) throws Exception {
+    public static String printText(Context ctx, String printerId, String text, int copies, String paperSize, String colorMode) throws Exception {
         String boundary = "----GrayPrint" + System.currentTimeMillis();
         HttpURLConnection c = open(ctx, "/v1/printers/" + printerId + "/print", "POST");
         c.setRequestProperty("Content-Type", "multipart/form-data; boundary=" + boundary);
@@ -103,6 +103,8 @@ public final class PrinterApi {
         c.setReadTimeout(120000);
         OutputStream out = c.getOutputStream();
         writeField(out, boundary, "copies", String.valueOf(copies));
+        writeField(out, boundary, "paper_size", paperSize);
+        writeField(out, boundary, "color_mode", colorMode);
         writeField(out, boundary, "text", text);
         out.write(("--" + boundary + "--\r\n").getBytes(StandardCharsets.UTF_8));
         out.flush(); out.close();
@@ -112,7 +114,7 @@ public final class PrinterApi {
         return new JSONObject(body).optString("job_id", "");
     }
 
-    public static String printFile(Context ctx, String printerId, Uri fileUri, int copies) throws Exception {
+    public static String printFile(Context ctx, String printerId, Uri fileUri, int copies, String paperSize, String colorMode) throws Exception {
         String fileName = queryFileName(ctx, fileUri);
         byte[] fileBytes = readUri(ctx, fileUri);
         String boundary = "----GrayPrint" + System.currentTimeMillis();
@@ -120,9 +122,10 @@ public final class PrinterApi {
         c.setRequestProperty("Content-Type", "multipart/form-data; boundary=" + boundary);
         c.setDoOutput(true);
         c.setReadTimeout(120000);
-        c.setFixedLengthStreamingMode(estimateMultipartLength(boundary, fileName, fileBytes, copies));
         OutputStream out = c.getOutputStream();
         writeField(out, boundary, "copies", String.valueOf(copies));
+        writeField(out, boundary, "paper_size", paperSize);
+        writeField(out, boundary, "color_mode", colorMode);
         writeFilePart(out, boundary, "file", fileName, fileBytes);
         out.write(("--" + boundary + "--\r\n").getBytes(StandardCharsets.UTF_8));
         out.flush(); out.close();
@@ -150,15 +153,6 @@ public final class PrinterApi {
         out.write("Content-Type: application/octet-stream\r\n\r\n".getBytes(StandardCharsets.UTF_8));
         out.write(data);
         out.write("\r\n".getBytes(StandardCharsets.UTF_8));
-    }
-
-    private static int estimateMultipartLength(String boundary, String fileName, byte[] fileBytes, int copies) {
-        String copiesVal = String.valueOf(copies);
-        int part1 = ("--" + boundary + "\r\nContent-Disposition: form-data; name=\"copies\"\r\n\r\n" + copiesVal + "\r\n").length();
-        int part2 = ("--" + boundary + "\r\nContent-Disposition: form-data; name=\"file\"; filename=\"" + fileName + "\"\r\nContent-Type: application/octet-stream\r\n\r\n").length()
-                + fileBytes.length + "\r\n".length();
-        int end = ("--" + boundary + "--\r\n").length();
-        return part1 + part2 + end;
     }
 
     private static byte[] readUri(Context ctx, Uri uri) throws IOException {

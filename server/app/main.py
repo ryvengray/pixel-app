@@ -420,6 +420,8 @@ async def print_document(
     file: UploadFile | None = File(None),
     text: str | None = Form(None),
     copies: int = Form(1),
+    paper_size: Literal["a4", "a5", "letter"] = Form("a4"),
+    color_mode: Literal["monochrome", "color"] = Form("monochrome"),
 ) -> dict[str, Any]:
     p = _printer.get_printer(printer_id)
     if not p:
@@ -471,7 +473,7 @@ async def print_document(
                     "INSERT INTO print_job(id,printer_id,file_name,file_type,copies,status,created_at) VALUES(?,?,?,?,?,?,?)",
                     (job_id, printer_id, job_name, file_type, copies, "printing", utc_now()),
                 )
-            result = await _printer.send_print_job(p["host"], p["port"], pdf_bytes, job_name, "application/pdf", copies)
+            result = await _printer.send_print_job(p["host"], p["port"], pdf_bytes, job_name, "application/pdf", copies, paper_size, color_mode)
             status = "completed" if result.get("ok") else "failed"
             error = result.get("error")
             with connect() as db:

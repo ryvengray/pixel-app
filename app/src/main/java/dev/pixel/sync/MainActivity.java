@@ -19,6 +19,7 @@ public class MainActivity extends Activity {
  private SharedPreferences preferences;
  private boolean dark;
  private FrameLayout overlay;
+ private FrameLayout root;
  private TextView title,caption,hint,menuButton,petTouch;
  private LinearLayout greeting;
  private Dialog menu;
@@ -30,7 +31,8 @@ public class MainActivity extends Activity {
   super.onCreate(state);preferences=getSharedPreferences("home",0);
   int choice=preferences.getInt("theme",0);dark=choice==0?systemDark():choice==2;
   getWindow().setDecorFitsSystemWindows(false);getWindow().setStatusBarColor(Color.TRANSPARENT);getWindow().setNavigationBarColor(Color.TRANSPARENT);
-  FrameLayout root=new FrameLayout(this);
+  root=new FrameLayout(this);
+  root.setBackgroundColor(Color.parseColor(dark?"#102019":"#F0F5E9"));
   scene=new PetScene(this);scene.setTheme(dark);scene.setMoving(!preferences.getBoolean("reduceMotion",false));
   root.addView(scene,new FrameLayout.LayoutParams(-1,-1));overlay=new FrameLayout(this);root.addView(overlay,new FrameLayout.LayoutParams(-1,-1));
   title=text("Gray",23);title.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));
@@ -56,6 +58,7 @@ public class MainActivity extends Activity {
  private GradientDrawable surface(int color,int radius){GradientDrawable d=new GradientDrawable();d.setColor(color);d.setCornerRadius(dp(radius));return d;}
  private void applyColors(){
   foreground=Color.parseColor(dark?"#E5EDE3":"#263C31");secondary=Color.parseColor(dark?"#92A99A":"#708675");
+  root.setBackgroundColor(Color.parseColor(dark?"#102019":"#F0F5E9"));
   title.setTextColor(foreground);caption.setTextColor(foreground);hint.setTextColor(secondary);menuButton.setTextColor(foreground);
   menuButton.setBackground(surface(Color.parseColor(dark?"#263D33":"#DDE8DC"),24));scene.setTheme(dark);chat.setTheme(dark);
   WindowInsetsController controller=getWindow().getInsetsController();if(controller!=null){
@@ -67,8 +70,8 @@ public class MainActivity extends Activity {
  }
  private void openChat(boolean animate){
   if(chatOpen)return;chatOpen=true;
-  greeting.setVisibility(View.GONE);chat.animate().cancel();chat.setAlpha(0f);chat.setTranslationY(dp(18));chat.setVisibility(View.VISIBLE);chat.bringToFront();petTouch.bringToFront();menuButton.bringToFront();
-  chat.animate().alpha(1f).translationY(0).setDuration(260).setInterpolator(new DecelerateInterpolator(1.5f)).start();
+  greeting.setVisibility(View.GONE);chat.animate().cancel();chat.setAlpha(animate?0f:1f);chat.setTranslationY(0);chat.setVisibility(View.VISIBLE);chat.bringToFront();petTouch.bringToFront();menuButton.bringToFront();
+  if(animate)chat.animate().alpha(1f).setDuration(220).start();
   if(animate){
    petL=petTouch.getLeft();petT=petTouch.getTop();petW=petTouch.getWidth();petH=petTouch.getHeight();
    petTouch.setClickable(false);animatePetToCorner();
@@ -80,7 +83,7 @@ public class MainActivity extends Activity {
  }
  private void closeChat(boolean animate){
   if(!chatOpen)return;chatOpen=false;
-  chat.close();chat.animate().alpha(0f).translationY(dp(18)).setDuration(220).setInterpolator(new DecelerateInterpolator(1.5f)).withEndAction(()->{if(!chatOpen){chat.setVisibility(View.GONE);chat.setAlpha(1f);chat.setTranslationY(0);}}).start();greeting.setVisibility(View.VISIBLE);
+  chat.close();chat.animate().alpha(0f).setDuration(180).withEndAction(()->{if(!chatOpen){chat.setVisibility(View.GONE);chat.setAlpha(1f);}}).start();greeting.setVisibility(View.VISIBLE);
   if(animate){petTouch.setClickable(false);animatePetBack();}
   else{
    scene.setLayoutParams(new FrameLayout.LayoutParams(-1,-1));
@@ -119,25 +122,29 @@ public class MainActivity extends Activity {
  }
  private void showMenu(){
   if(menu!=null&&menu.isShowing())return;menu=new Dialog(this);
-  LinearLayout sheet=new LinearLayout(this);sheet.setOrientation(LinearLayout.VERTICAL);sheet.setPadding(dp(24),dp(18),dp(24),dp(24));sheet.setBackground(surface(Color.parseColor(dark?"#172B22":"#F5F7F0"),28));
-  TextView heading=text("你的 Gray",22);heading.setTextColor(foreground);heading.setPadding(0,0,0,dp(16));sheet.addView(heading);
-  sheet.addView(menuAction("和 Gray 聊聊",()->{menu.dismiss();openChat(true);}));
-  sheet.addView(menuAction("我的长期记忆",()->{menu.dismiss();startActivity(new Intent(this,MemoryActivity.class));}));
-  sheet.addView(menuAction("助理设置",()->{menu.dismiss();startActivity(new Intent(this,AssistantSettingsActivity.class));}));
-  sheet.addView(menuAction("Obsidian 同步",()->{menu.dismiss();startActivity(new Intent(this,SyncActivity.class));}));
-  sheet.addView(menuAction("打印文件",()->{menu.dismiss();startActivity(new Intent(this,PrintActivity.class));}));
-  TextView label=text("外观",13);label.setTextColor(secondary);label.setPadding(0,dp(20),0,dp(8));sheet.addView(label);
-  LinearLayout themes=new LinearLayout(this);String[] labels={"跟随系统","浅色","深色"};
-  for(int i=0;i<labels.length;i++){final int choice=i;Button theme=menuAction(labels[i],()->{
-   preferences.edit().putInt("theme",choice).apply();dark=choice==0?systemDark():choice==2;menu.dismiss();applyColors();showMenu();
-  });if(preferences.getInt("theme",0)==i)theme.setText("✓ "+labels[i]);themes.addView(theme,new LinearLayout.LayoutParams(0,dp(52),1));}sheet.addView(themes);
-  Switch reduce=new Switch(this);reduce.setText("减少动态效果");reduce.setTextColor(foreground);reduce.setPadding(0,dp(18),0,dp(18));reduce.setChecked(!scene.isMoving());
+  int panel=Color.parseColor(dark?"#172B22":"#F5F7F0");
+  LinearLayout sheet=new LinearLayout(this);sheet.setOrientation(LinearLayout.VERTICAL);sheet.setPadding(dp(22),dp(20),dp(22),dp(28));sheet.setBackground(surface(panel,28));
+  TextView heading=text("功能与设置",23);heading.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));heading.setTextColor(foreground);sheet.addView(heading);
+  TextView subtitle=text("选择你想做的事",13);subtitle.setTextColor(secondary);subtitle.setPadding(0,dp(3),0,dp(17));sheet.addView(subtitle);
+  menuSection(sheet,"GRAY");
+  sheet.addView(menuAction("✦   和 Gray 聊聊","继续这段对话",()->{menu.dismiss();openChat(true);}));
+  sheet.addView(menuAction("▤   长期记忆","查看和修正 Gray 记住的事",()->{menu.dismiss();startActivity(new Intent(this,MemoryActivity.class));}));
+  sheet.addView(menuAction("⚙   助理设置","配对设备与服务地址",()->{menu.dismiss();startActivity(new Intent(this,AssistantSettingsActivity.class));}));
+  menuSection(sheet,"工具");
+  sheet.addView(menuAction("↻   Obsidian 同步","同步你的笔记库",()->{menu.dismiss();startActivity(new Intent(this,SyncActivity.class));}));
+  sheet.addView(menuAction("▣   打印文件","选择文件或文字并设置打印",()->{menu.dismiss();startActivity(new Intent(this,PrintActivity.class));}));
+  menuSection(sheet,"外观");
+  LinearLayout themes=new LinearLayout(this);themes.setPadding(0,0,0,dp(8));String[] labels={"跟随系统","浅色","深色"};
+  for(int i=0;i<labels.length;i++){final int choice=i;TextView theme=text((preferences.getInt("theme",0)==i?"✓  ":"")+labels[i],13);theme.setGravity(Gravity.CENTER);theme.setTextColor(foreground);theme.setBackground(surface(Color.parseColor(preferences.getInt("theme",0)==i?(dark?"#375B44":"#D3E8D2"):(dark?"#294536":"#E3ECDC")),13));
+   theme.setOnClickListener(v->{preferences.edit().putInt("theme",choice).apply();dark=choice==0?systemDark():choice==2;menu.dismiss();applyColors();showMenu();});LinearLayout.LayoutParams tp=new LinearLayout.LayoutParams(0,dp(44),1);tp.rightMargin=i<2?dp(7):0;themes.addView(theme,tp);}sheet.addView(themes);
+  Switch reduce=new Switch(this);reduce.setText("减少动态效果");reduce.setTextSize(14);reduce.setTextColor(foreground);reduce.setPadding(dp(8),dp(9),dp(8),dp(9));reduce.setChecked(!scene.isMoving());
   reduce.setOnCheckedChangeListener((v,checked)->{preferences.edit().putBoolean("reduceMotion",checked).apply();scene.setMoving(!checked);});sheet.addView(reduce);
-  TextView about=text("聊天和记忆由你的私有服务与本地副本共同管理",12);about.setTextColor(secondary);sheet.addView(about);sheet.addView(menuAction("回到宠物",()->{menu.dismiss();if(chatOpen)closeChat(true);}));
-  menu.setContentView(sheet);Window window=menu.getWindow();if(window!=null){window.setBackgroundDrawableResource(android.R.color.transparent);window.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);window.setDimAmount(.25f);window.setGravity(Gravity.BOTTOM);}
-  menu.setOnDismissListener(d->applyColors());menu.show();if(window!=null)window.setLayout(-1,-2);
+  if(chatOpen){TextView back=text("回到宠物",14);back.setTextColor(secondary);back.setGravity(Gravity.CENTER);back.setPadding(0,dp(16),0,0);back.setOnClickListener(v->{menu.dismiss();closeChat(true);});sheet.addView(back);}
+  ScrollView scroll=new ScrollView(this);scroll.setFillViewport(false);scroll.setVerticalScrollBarEnabled(false);scroll.addView(sheet);menu.setContentView(scroll);Window window=menu.getWindow();if(window!=null){window.setBackgroundDrawableResource(android.R.color.transparent);window.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);window.setDimAmount(.25f);window.setGravity(Gravity.BOTTOM);}
+  menu.setOnDismissListener(d->applyColors());menu.show();if(window!=null){window.setLayout(-1,-2);sheet.post(()->{int max=(int)(getResources().getDisplayMetrics().heightPixels*.84f);if(sheet.getHeight()>max)window.setLayout(-1,max);});}
  }
- private Button menuAction(String label,Runnable action){Button b=new Button(this);b.setText(label);b.setAllCaps(false);b.setTextColor(foreground);b.setBackground(new android.graphics.drawable.RippleDrawable(android.content.res.ColorStateList.valueOf(Color.parseColor(dark?"#406651":"#CADBC7")),surface(Color.parseColor(dark?"#294536":"#E3ECDC"),16),null));b.setElevation(0);b.setMinHeight(dp(48));b.setOnClickListener(v->action.run());return b;}
+ private void menuSection(LinearLayout sheet,String title){TextView label=text(title,11);label.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));label.setTextColor(secondary);label.setPadding(dp(4),dp(13),0,dp(8));sheet.addView(label);}
+ private View menuAction(String label,String detail,Runnable action){LinearLayout card=new LinearLayout(this);card.setOrientation(LinearLayout.VERTICAL);card.setPadding(dp(15),dp(10),dp(15),dp(10));card.setBackground(new android.graphics.drawable.RippleDrawable(android.content.res.ColorStateList.valueOf(Color.parseColor(dark?"#406651":"#CADBC7")),surface(Color.parseColor(dark?"#294536":"#E3ECDC"),15),null));TextView name=text(label,15);name.setTextColor(foreground);name.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));card.addView(name);TextView sub=text(detail,12);sub.setTextColor(secondary);sub.setPadding(dp(27),dp(2),0,0);card.addView(sub);LinearLayout.LayoutParams cp=new LinearLayout.LayoutParams(-1,-2);cp.bottomMargin=dp(6);card.setLayoutParams(cp);card.setOnClickListener(v->action.run());return card;}
  @Override protected void onSaveInstanceState(Bundle out){super.onSaveInstanceState(out);out.putBoolean("chatOpen",chatOpen);}
  @Override public void onResume(){super.onResume();if(preferences.getInt("theme",0)==0)dark=systemDark();scene.resumeScene();applyColors();}
  @Override public void onPause(){scene.pauseScene();super.onPause();}
