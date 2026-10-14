@@ -4,7 +4,11 @@ import android.app.Activity;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.res.Configuration;
+import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.Paint;
+import android.graphics.Path;
+import android.graphics.RectF;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.RippleDrawable;
@@ -23,6 +27,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public class PrintActivity extends Activity {
+    public static final String EXTRA_FILE_NAME = "dev.pixel.sync.extra.FILE_NAME";
     private boolean dark;
     private int foreground, secondary, bg, cardBg, accent, accentText;
     private SharedPreferences prefs;
@@ -92,7 +97,19 @@ public class PrintActivity extends Activity {
         });
 
         setContentView(root);
+        loadIncomingFile(getIntent());
         loadPrinters();
+    }
+
+    private void loadIncomingFile(Intent intent) {
+        if (intent == null || intent.getData() == null) return;
+        selectedFileUri = intent.getData();
+        selectedFileName = intent.getStringExtra(EXTRA_FILE_NAME);
+        if (selectedFileName == null || selectedFileName.isEmpty()) selectedFileName = getFileName(selectedFileUri);
+        switchTab(true);
+        fileLabel.setText(selectedFileName);
+        fileLabel.setTextColor(accent);
+        fileArea.setContentDescription("已选择文件：" + selectedFileName);
     }
 
     private void applyColors() {
@@ -134,11 +151,12 @@ public class PrintActivity extends Activity {
         header.setGravity(Gravity.CENTER_VERTICAL);
         header.setPadding(dp(20), dp(12), dp(20), dp(12));
 
-        TextView back = toolbarAction("‹", true);
-        back.setTextSize(32);
+        FrameLayout back = new FrameLayout(this);
+        back.setBackground(toolbarSurface(true));back.setClickable(true);back.setFocusable(true);
         back.setContentDescription("返回");
         back.setOnClickListener(v -> finish());
-        header.addView(back, new LinearLayout.LayoutParams(dp(44), dp(44)));
+        ToolbarGlyph backGlyph=new ToolbarGlyph(false);back.addView(backGlyph,new FrameLayout.LayoutParams(dp(26),dp(26),Gravity.CENTER));
+        header.addView(back, new LinearLayout.LayoutParams(dp(48), dp(48)));
 
         LinearLayout identity = new LinearLayout(this);
         identity.setOrientation(LinearLayout.VERTICAL);
@@ -149,22 +167,40 @@ public class PrintActivity extends Activity {
         tp.leftMargin = dp(14);
         header.addView(identity, tp);
 
-        TextView refresh = toolbarAction("↻  刷新", false);
+        LinearLayout refresh = new LinearLayout(this);refresh.setGravity(Gravity.CENTER);refresh.setOrientation(LinearLayout.HORIZONTAL);
+        refresh.setBackground(toolbarSurface(false));refresh.setClickable(true);refresh.setFocusable(true);
         refresh.setContentDescription("刷新打印机列表");
         refresh.setOnClickListener(v -> refreshPrinters());
-        header.addView(refresh, new LinearLayout.LayoutParams(dp(78), dp(42)));
+        ToolbarGlyph refreshGlyph=new ToolbarGlyph(true);refresh.addView(refreshGlyph,new LinearLayout.LayoutParams(dp(23),dp(23)));
+        TextView refreshText=new TextView(this);refreshText.setText("刷新");refreshText.setTextSize(14);refreshText.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));refreshText.setTextColor(foreground);refreshText.setIncludeFontPadding(false);
+        LinearLayout.LayoutParams rtp=new LinearLayout.LayoutParams(-2,-2);rtp.leftMargin=dp(7);refresh.addView(refreshText,rtp);
+        header.addView(refresh, new LinearLayout.LayoutParams(dp(92), dp(48)));
 
         return header;
     }
 
-    private TextView toolbarAction(String text, boolean round) {
-        TextView action = new TextView(this);
-        action.setText(text);action.setTextSize(14);action.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));
-        action.setTextColor(foreground);action.setGravity(Gravity.CENTER);action.setClickable(true);action.setFocusable(true);
+    private RippleDrawable toolbarSurface(boolean round) {
         int pressed=Color.parseColor(dark?"#416452":"#C9DDC8");
-        GradientDrawable base=new GradientDrawable();base.setColor(dark?Color.parseColor("#284235"):Color.parseColor("#E4EEE0"));base.setCornerRadius(dp(round?22:15));
-        action.setBackground(new RippleDrawable(ColorStateList.valueOf(pressed),base,null));
-        return action;
+        GradientDrawable base=new GradientDrawable();base.setColor(dark?Color.parseColor("#284235"):Color.parseColor("#E4EEE0"));base.setCornerRadius(dp(round?24:16));
+        return new RippleDrawable(ColorStateList.valueOf(pressed),base,null);
+    }
+
+    private final class ToolbarGlyph extends View {
+        private final boolean refresh;
+        private final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);
+        ToolbarGlyph(boolean refresh){super(PrintActivity.this);this.refresh=refresh;paint.setColor(foreground);paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(dp(2.4f));paint.setStrokeCap(Paint.Cap.ROUND);paint.setStrokeJoin(Paint.Join.ROUND);}
+        @Override protected void onDraw(Canvas canvas){
+            super.onDraw(canvas);float cx=getWidth()/2f,cy=getHeight()/2f;
+            if(!refresh){
+                canvas.drawLine(cx+dp(6),cy-dp(7),cx-dp(2),cy,paint);
+                canvas.drawLine(cx-dp(2),cy,cx+dp(6),cy+dp(7),paint);
+                canvas.drawLine(cx-dp(1),cy,cx+dp(9),cy,paint);
+            }else{
+                float radius=dp(7);RectF oval=new RectF(cx-radius,cy-radius,cx+radius,cy+radius);
+                canvas.drawArc(oval,-55,285,false,paint);
+                Path arrow=new Path();arrow.moveTo(cx+dp(3),cy-dp(8));arrow.lineTo(cx+dp(8),cy-dp(8));arrow.lineTo(cx+dp(8),cy-dp(3));canvas.drawPath(arrow,paint);
+            }
+        }
     }
 
     private RippleDrawable ripple() {

@@ -1,13 +1,18 @@
 package dev.pixel.sync;
 import android.app.Activity;
 import android.app.Dialog;
+import android.content.ClipData;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.res.Configuration;
+import android.database.Cursor;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
+import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
+import android.provider.OpenableColumns;
 import android.view.*;
 import android.view.animation.DecelerateInterpolator;
 import android.widget.*;
@@ -23,6 +28,7 @@ public class MainActivity extends Activity {
  private TextView title,caption,hint,menuButton,petTouch;
  private LinearLayout greeting;
  private Dialog menu;
+ private Dialog fileActionDialog;
  private int foreground,secondary;
  private int petL,petT,petW,petH;
  private static final int MENU_WIDTH_DP=52,MENU_HEIGHT_DP=48,MENU_TOP_DP=18,MENU_RIGHT_DP=20;
@@ -54,6 +60,7 @@ public class MainActivity extends Activity {
   root.setOnApplyWindowInsetsListener((v,insets)->{android.graphics.Insets safe=insets.getInsets(WindowInsets.Type.systemBars()|WindowInsets.Type.displayCutout());android.graphics.Insets ime=insets.getInsets(WindowInsets.Type.ime());overlay.setPadding(safe.left,safe.top,safe.right,Math.max(safe.bottom,ime.bottom));if(chatOpen)overlay.post(()->positionCompactPet(false));return insets;});
   setContentView(root);applyColors();
   if(state!=null&&state.getBoolean("chatOpen",false))openChat(false);
+  if(state==null)root.post(()->handleIncomingFile(getIntent()));
  }
  private TextView text(String value,int size){TextView v=new TextView(this);v.setText(value);v.setTextSize(size);return v;}
  private GradientDrawable surface(int color,int radius){GradientDrawable d=new GradientDrawable();d.setColor(color);d.setCornerRadius(dp(radius));return d;}
@@ -143,10 +150,38 @@ public class MainActivity extends Activity {
   ScrollView scroll=new ScrollView(this);scroll.setFillViewport(false);scroll.setVerticalScrollBarEnabled(false);scroll.addView(sheet);menu.setContentView(scroll);Window window=menu.getWindow();if(window!=null){window.setBackgroundDrawableResource(android.R.color.transparent);window.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);window.setDimAmount(.25f);window.setGravity(Gravity.BOTTOM);}
   menu.setOnDismissListener(d->applyColors());menu.show();if(window!=null){window.setLayout(-1,-2);sheet.post(()->{int max=(int)(getResources().getDisplayMetrics().heightPixels*.84f);if(sheet.getHeight()>max)window.setLayout(-1,max);});}
  }
+ private void handleIncomingFile(Intent intent){
+  if(intent==null)return;String action=intent.getAction();Uri uri=null;
+  if(Intent.ACTION_VIEW.equals(action))uri=intent.getData();
+  else if(Intent.ACTION_SEND.equals(action)){
+   if(Build.VERSION.SDK_INT>=33)uri=intent.getParcelableExtra(Intent.EXTRA_STREAM,Uri.class);else uri=intent.getParcelableExtra(Intent.EXTRA_STREAM);
+   if(uri==null&&intent.getClipData()!=null&&intent.getClipData().getItemCount()>0)uri=intent.getClipData().getItemAt(0).getUri();
+  }
+  if(uri==null)return;
+  int grantFlags=intent.getFlags()&(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+  if((intent.getFlags()&Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)!=0){try{getContentResolver().takePersistableUriPermission(uri,Intent.FLAG_GRANT_READ_URI_PERMISSION);}catch(Exception ignored){}}
+  showFileAction(uri,fileName(uri),grantFlags);
+ }
+ private String fileName(Uri uri){
+  try(Cursor cursor=getContentResolver().query(uri,null,null,null,null)){if(cursor!=null&&cursor.moveToFirst()){int index=cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME);if(index>=0){String name=cursor.getString(index);if(name!=null&&!name.isEmpty())return name;}}}catch(Exception ignored){}
+  String tail=uri.getLastPathSegment();return tail==null||tail.isEmpty()?"PDF 文件":tail;
+ }
+ private void showFileAction(Uri uri,String fileName,int grantFlags){
+  if(fileActionDialog!=null&&fileActionDialog.isShowing())fileActionDialog.dismiss();fileActionDialog=new Dialog(this);
+  int panel=Color.parseColor(dark?"#172B22":"#F7F9F3");LinearLayout card=new LinearLayout(this);card.setOrientation(LinearLayout.VERTICAL);card.setPadding(dp(24),dp(22),dp(24),dp(18));card.setBackground(surface(panel,24));
+  TextView heading=text("使用这个文件做什么？",21);heading.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));heading.setTextColor(foreground);card.addView(heading);
+  TextView file=text(fileName,13);file.setTextColor(secondary);file.setMaxLines(2);file.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE);file.setPadding(0,dp(7),0,dp(18));card.addView(file);
+  LinearLayout printAction=new LinearLayout(this);printAction.setOrientation(LinearLayout.VERTICAL);printAction.setPadding(dp(17),dp(14),dp(17),dp(14));printAction.setBackground(new android.graphics.drawable.RippleDrawable(android.content.res.ColorStateList.valueOf(Color.parseColor(dark?"#406651":"#CADBC7")),surface(Color.parseColor(dark?"#294536":"#E3ECDC"),16),null));
+  TextView printTitle=text("▣   打印",16);printTitle.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));printTitle.setTextColor(foreground);printAction.addView(printTitle);TextView printHelp=text("选择打印机、纸张和颜色",12);printHelp.setTextColor(secondary);printHelp.setPadding(dp(26),dp(3),0,0);printAction.addView(printHelp);
+  printAction.setOnClickListener(v->{Intent next=new Intent(this,PrintActivity.class).setData(uri).putExtra(PrintActivity.EXTRA_FILE_NAME,fileName).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION|grantFlags);next.setClipData(ClipData.newRawUri("PDF",uri));fileActionDialog.dismiss();startActivity(next);});card.addView(printAction,new LinearLayout.LayoutParams(-1,-2));
+  TextView cancel=text("取消",14);cancel.setTextColor(secondary);cancel.setGravity(Gravity.CENTER);cancel.setPadding(0,dp(18),0,dp(3));cancel.setOnClickListener(v->fileActionDialog.dismiss());card.addView(cancel,new LinearLayout.LayoutParams(-1,-2));
+  fileActionDialog.setContentView(card);Window window=fileActionDialog.getWindow();if(window!=null){window.setBackgroundDrawableResource(android.R.color.transparent);window.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);window.setDimAmount(.3f);window.setGravity(Gravity.CENTER);}fileActionDialog.show();if(window!=null)window.setLayout(getResources().getDisplayMetrics().widthPixels-dp(40),-2);
+ }
  private void menuSection(LinearLayout sheet,String title){TextView label=text(title,11);label.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));label.setTextColor(secondary);label.setPadding(dp(4),dp(13),0,dp(8));sheet.addView(label);}
  private View menuAction(String label,String detail,Runnable action){LinearLayout card=new LinearLayout(this);card.setOrientation(LinearLayout.VERTICAL);card.setPadding(dp(15),dp(10),dp(15),dp(10));card.setBackground(new android.graphics.drawable.RippleDrawable(android.content.res.ColorStateList.valueOf(Color.parseColor(dark?"#406651":"#CADBC7")),surface(Color.parseColor(dark?"#294536":"#E3ECDC"),15),null));TextView name=text(label,15);name.setTextColor(foreground);name.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));card.addView(name);TextView sub=text(detail,12);sub.setTextColor(secondary);sub.setPadding(dp(27),dp(2),0,0);card.addView(sub);LinearLayout.LayoutParams cp=new LinearLayout.LayoutParams(-1,-2);cp.bottomMargin=dp(6);card.setLayoutParams(cp);card.setOnClickListener(v->action.run());return card;}
  @Override protected void onSaveInstanceState(Bundle out){super.onSaveInstanceState(out);out.putBoolean("chatOpen",chatOpen);}
+ @Override protected void onNewIntent(Intent intent){super.onNewIntent(intent);setIntent(intent);handleIncomingFile(intent);}
  @Override public void onResume(){super.onResume();if(preferences.getInt("theme",0)==0)dark=systemDark();scene.resumeScene();applyColors();}
  @Override public void onPause(){scene.pauseScene();super.onPause();}
- @Override public void onDestroy(){if(menu!=null)menu.dismiss();chat.shutdown();super.onDestroy();}
+ @Override public void onDestroy(){if(menu!=null)menu.dismiss();if(fileActionDialog!=null)fileActionDialog.dismiss();chat.shutdown();super.onDestroy();}
 }
