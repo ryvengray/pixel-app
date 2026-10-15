@@ -107,7 +107,6 @@ public final class ChatPanel extends FrameLayout {
         status.setTextColor(secondary);close.setTextColor(secondary);name.setTextColor(foreground);
         divider.setBackgroundColor(borderColor);updateComposerSurface(input.hasFocus());
         badge.setBackground(rounded(Color.parseColor(dark?"#3B6148":"#DCEBDD"),19,0,0));
-        TextView glyph=(TextView)badge.getChildAt(0);glyph.setTextColor(accent);
         input.setTextColor(foreground);input.setHintTextColor(secondary);
         setSending(input.length()>0&&!busy);
         render();
@@ -190,7 +189,8 @@ public final class ChatPanel extends FrameLayout {
 
     private FrameLayout assistantMark(int size){
         FrameLayout mark=new FrameLayout(getContext());mark.setBackground(rounded(Color.parseColor(dark?"#3B6148":"#DCEBDD"),size/2,0,0));
-        TextView glyph=text("✦",17);glyph.setTextColor(accent);glyph.setGravity(Gravity.CENTER);mark.addView(glyph,new FrameLayout.LayoutParams(-1,-1));
+        ImageView portrait=new ImageView(getContext());portrait.setImageResource(R.drawable.gray_character);portrait.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        mark.addView(portrait,new FrameLayout.LayoutParams(-1,-1));
         View dot=new View(getContext());dot.setBackground(rounded(Color.parseColor("#75B77C"),5,Color.parseColor(dark?"#172B22":"#F8FAF5"),dp(1)));
         FrameLayout.LayoutParams p=new FrameLayout.LayoutParams(dp(9),dp(9),Gravity.BOTTOM|Gravity.RIGHT);mark.addView(dot,p);return mark;
     }
