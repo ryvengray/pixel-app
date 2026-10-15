@@ -37,10 +37,11 @@ public final class PrinterApi {
             fileType = o.optString("file_type", "");
             copies = o.optInt("copies", 1);
             status = o.optString("status", "unknown");
-            error = o.optString("error", "");
+            error = o.isNull("error") ? "" : o.optString("error", "");
             createdAt = o.optString("created_at", "");
-            completedAt = o.optString("completed_at", "");
+            completedAt = o.isNull("completed_at") ? "" : o.optString("completed_at", "");
         }
+        public boolean isActive() { return "pending".equals(status) || "printing".equals(status); }
     }
 
     private static String read(InputStream s) throws IOException {
@@ -107,6 +108,10 @@ public final class PrinterApi {
         List<PrintJob> result = new ArrayList<>();
         for (int i = 0; i < arr.length(); i++) result.add(new PrintJob(arr.getJSONObject(i)));
         return result;
+    }
+
+    public static PrintJob getPrintJob(Context ctx, String jobId) throws Exception {
+        return new PrintJob(get(ctx, "/v1/print-jobs/" + jobId));
     }
 
     public static List<Printer> discover(Context ctx) throws Exception {

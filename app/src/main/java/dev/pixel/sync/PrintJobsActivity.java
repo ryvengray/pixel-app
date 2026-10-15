@@ -35,6 +35,8 @@ public final class PrintJobsActivity extends Activity {
     private LinearLayout jobsContainer;
     private FrameLayout loadingOverlay;
     private PetScene loadingPet;
+    private List<PrinterApi.PrintJob> jobs = new java.util.ArrayList<>();
+    private final Runnable jobPoller = () -> fetchJobs(false);
 
     private int dp(float value) { return Math.round(value * getResources().getDisplayMetrics().density); }
 
@@ -133,17 +135,40 @@ public final class PrintJobsActivity extends Activity {
 
     private void loadJobs() {
         loadingPet.resumeScene();
+        fetchJobs(true);
+    }
+
+    private void fetchJobs(boolean firstLoad) {
         executor.execute(() -> {
             try {
-                List<PrinterApi.PrintJob> jobs = PrinterApi.listPrintJobs(PrintJobsActivity.this);
-                handler.post(() -> { renderJobs(jobs); hideLoading(); });
+                List<PrinterApi.PrintJob> fresh = PrinterApi.listPrintJobs(PrintJobsActivity.this);
+                handler.post(() -> {
+                    jobs = fresh;
+                    renderJobs(jobs);
+                    if (firstLoad) hideLoading();
+                    scheduleRefresh();
+                });
             } catch (Exception error) {
                 handler.post(() -> {
-                    renderError(); hideLoading();
-                    Toast.makeText(this, "读取失败：" + error.getMessage(), Toast.LENGTH_SHORT).show();
+                    if (firstLoad) {
+                        renderError(); hideLoading();
+                        Toast.makeText(this, "读取失败：" + error.getMessage(), Toast.LENGTH_SHORT).show();
+                    } else {
+                        scheduleRefresh();
+                    }
                 });
             }
         });
+    }
+
+    private void scheduleRefresh() {
+        handler.removeCallbacks(jobPoller);
+        for (PrinterApi.PrintJob job : jobs) {
+            if (job.isActive()) {
+                handler.postDelayed(jobPoller, 3000);
+                return;
+            }
+        }
     }
 
     private void hideLoading() {
@@ -258,7 +283,11 @@ public final class PrintJobsActivity extends Activity {
         }
     }
 
-    @Override protected void onResume() { super.onResume(); if (loadingOverlay != null && loadingOverlay.getVisibility() == View.VISIBLE) loadingPet.resumeScene(); }
-    @Override protected void onPause() { if (loadingPet != null) loadingPet.pauseScene(); super.onPause(); }
-    @Override protected void onDestroy() { executor.shutdownNow(); super.onDestroy(); }
+    @Override protected void onResume() {
+        super.onResume();
+        if (loadingOverlay != null && loadingOverlay.getVisibility() == View.VISIBLE) loadingPet.resumeScene();
+        else if (jobsContainer != null) fetchJobs(false);
+    }
+    @Override protected void onPause() { handler.removeCallbacks(jobPoller); if (loadingPet != null) loadingPet.pauseScene(); super.onPause(); }
+    @Override protected void onDestroy() { handler.removeCallbacksAndMessages(null); executor.shutdownNow(); super.onDestroy(); }
 }

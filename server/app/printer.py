@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import secrets
 import socket
 import struct
@@ -13,6 +14,8 @@ import httpx
 from zeroconf import ServiceBrowser, ServiceStateChange, Zeroconf
 
 from .main import connect, utc_now
+
+LOGGER = logging.getLogger("uvicorn.error")
 
 # ---------------------------------------------------------------------------
 # IPP protocol helpers
@@ -205,6 +208,7 @@ async def send_print_job(host: str, port: int, data: bytes, job_name: str, doc_f
     job_attrs += _str_attr(0x44, "media", media)
     job_attrs += _str_attr(0x44, "print-color-mode", color_mode)
     body = _build_request(0x0002, uri, extra_ops=extra, job_attrs=job_attrs, data=data)
+    LOGGER.info("Sending print job to %s (%d bytes, %s)", _http_url(uri), len(body), doc_format)
     try:
         # Consumer printers often pause while spooling or processing a PDF and
         # may stop reading briefly. Keep connect failures fast, but allow the
@@ -220,16 +224,24 @@ async def send_print_job(host: str, port: int, data: bytes, job_name: str, doc_f
                 status_code = struct.unpack(">H", resp.content[2:4])[0] if len(resp.content) >= 4 else -1
                 if status_code == 0x0000:
                     return {"ok": True}
-                return {"ok": False, "error": f"IPP status {status_code:#06x}"}
-            return {"ok": False, "error": f"HTTP {resp.status_code}"}
+                error = f"IPP status {status_code:#06x}"
+                LOGGER.error("Print job failed: %s", error)
+                return {"ok": False, "error": error}
+            error = f"HTTP {resp.status_code}"
+            LOGGER.error("Print job failed: %s", error)
+            return {"ok": False, "error": error}
     except httpx.WriteTimeout:
+        LOGGER.error("Print job upload timed out")
         return {"ok": False, "error": "向打印机传输文件超时"}
     except httpx.ReadTimeout:
+        LOGGER.error("Print job confirmation timed out")
         return {"ok": False, "error": "打印机接收文件后没有及时确认"}
     except httpx.ConnectError:
+        LOGGER.error("Could not connect to printer")
         return {"ok": False, "error": "无法连接打印机"}
     except Exception as exc:
         message = str(exc).strip() or type(exc).__name__
+        LOGGER.error("Print job exception: %s", message, exc_info=True)
         return {"ok": False, "error": message}
 
 
@@ -382,3 +394,125 @@ def delete_printer(printer_id: str) -> bool:
 def touch_printer(printer_id: str) -> None:
     with connect() as db:
         db.execute("UPDATE printer SET last_seen = ? WHERE id = ?", (utc_now(), printer_id))
+
+
+# ---------------------------------------------------------------------------
+# Print job persistence and background processing
+# ---------------------------------------------------------------------------
+
+IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png"}
+ALLOWED_SUFFIXES = {".pdf", ".jpg", ".jpeg", ".png", ".docx", ".doc", ".xlsx", ".xls"}
+_print_lock = asyncio.Lock()
+
+
+def create_print_job(job_id: str, printer_id: str, file_name: str, file_type: str, copies: int) -> None:
+    with connect() as db:
+        db.execute(
+            "INSERT INTO print_job(id,printer_id,file_name,file_type,copies,status,created_at) VALUES(?,?,?,?,?,?,?)",
+            (job_id, printer_id, file_name, file_type, copies, "pending", utc_now()),
+        )
+
+
+def update_print_job(job_id: str, *, status: str, error: str | None = None, completed: bool = False) -> None:
+    with connect() as db:
+        if completed:
+            db.execute(
+                "UPDATE print_job SET status=?, error=?, completed_at=? WHERE id=?",
+                (status, error, utc_now(), job_id),
+            )
+        else:
+            db.execute("UPDATE print_job SET status=?, error=NULL WHERE id=?", (status, job_id))
+
+
+def get_print_job(job_id: str) -> dict[str, Any] | None:
+    with connect() as db:
+        row = db.execute(
+            """
+            SELECT j.*, COALESCE(p.name, '未知打印机') AS printer_name
+            FROM print_job AS j LEFT JOIN printer AS p ON p.id = j.printer_id
+            WHERE j.id = ?
+            """,
+            (job_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def list_print_jobs(limit: int = 50) -> list[dict[str, Any]]:
+    with connect() as db:
+        rows = db.execute(
+            """
+            SELECT j.*, COALESCE(p.name, '未知打印机') AS printer_name
+            FROM print_job AS j LEFT JOIN printer AS p ON p.id = j.printer_id
+            ORDER BY j.created_at DESC LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+async def process_print_job(
+    job_id: str,
+    printer: dict[str, Any],
+    *,
+    text: str | None,
+    file_bytes: bytes | None,
+    suffix: str | None,
+    job_name: str,
+    copies: int,
+    paper_size: str,
+    color_mode: str,
+) -> None:
+    """Convert and submit one job, serialising work for printers with a single queue."""
+    update_print_job(job_id, status="printing")
+    try:
+        async with _print_lock:
+            loop = asyncio.get_running_loop()
+            with tempfile.TemporaryDirectory() as tmp:
+                tmp_dir = Path(tmp)
+                if text is not None:
+                    pdf_path = await loop.run_in_executor(None, text_to_pdf, text, tmp_dir, f"job_{job_id}")
+                elif suffix == ".pdf" and file_bytes is not None:
+                    pdf_path = tmp_dir / "document.pdf"
+                    pdf_path.write_bytes(file_bytes)
+                elif suffix in IMAGE_SUFFIXES and file_bytes is not None:
+                    source = tmp_dir / f"upload_{job_id}{suffix}"
+                    source.write_bytes(file_bytes)
+                    pdf_path = await loop.run_in_executor(None, image_to_pdf, source, tmp_dir)
+                elif suffix in ALLOWED_SUFFIXES and file_bytes is not None:
+                    source = tmp_dir / f"upload_{job_id}{suffix}"
+                    source.write_bytes(file_bytes)
+                    pdf_path = await loop.run_in_executor(None, convert_to_pdf, source, tmp_dir)
+                else:
+                    raise RuntimeError("打印文件无效")
+
+                document = pdf_path.read_bytes()
+                document_format = "application/pdf"
+                formats = await get_document_formats(
+                    printer["host"], printer["port"], printer.get("protocol", "ipp")
+                )
+                if document_format not in formats:
+                    if "image/pwg-raster" not in formats:
+                        advertised = ", ".join(sorted(formats)) or "未返回支持格式"
+                        raise RuntimeError(f"打印机不支持 PDF 或 PWG Raster（{advertised}）")
+                    raster_path = await loop.run_in_executor(
+                        None, pdf_to_pwg_raster, pdf_path, tmp_dir, paper_size, color_mode
+                    )
+                    document = raster_path.read_bytes()
+                    document_format = "image/pwg-raster"
+
+                result = await send_print_job(
+                    printer["host"], printer["port"], document, job_name,
+                    document_format, copies, paper_size, color_mode,
+                    printer.get("protocol", "ipp"),
+                )
+
+        if result.get("ok"):
+            update_print_job(job_id, status="completed", completed=True)
+        else:
+            update_print_job(
+                job_id, status="failed", error=result.get("error") or "打印任务失败", completed=True
+            )
+    except Exception as exc:
+        message = str(exc).strip() or type(exc).__name__
+        LOGGER.error("Background print job %s failed: %s", job_id, message, exc_info=True)
+        update_print_job(job_id, status="failed", error=message, completed=True)

@@ -307,6 +307,12 @@ async def reminder_loop() -> None:
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     setup_db()
+    with connect() as db:
+        db.execute(
+            "UPDATE print_job SET status='failed', error='服务重启，任务未完成', completed_at=? "
+            "WHERE status IN ('pending', 'printing')",
+            (utc_now(),),
+        )
     task = asyncio.create_task(reminder_loop())
     yield
     task.cancel()
@@ -383,17 +389,15 @@ async def get_printers() -> list[dict[str, Any]]:
 
 @app.get("/v1/print-jobs", dependencies=[Depends(require_device)])
 async def get_print_jobs() -> list[dict[str, Any]]:
-    with connect() as db:
-        rows = db.execute(
-            """
-            SELECT j.*, COALESCE(p.name, '未知打印机') AS printer_name
-            FROM print_job AS j
-            LEFT JOIN printer AS p ON p.id = j.printer_id
-            ORDER BY j.created_at DESC
-            LIMIT 50
-            """
-        ).fetchall()
-    return [dict(row) for row in rows]
+    return _printer.list_print_jobs(limit=50)
+
+
+@app.get("/v1/print-jobs/{job_id}", dependencies=[Depends(require_device)])
+async def get_print_job(job_id: str) -> dict[str, Any]:
+    job = _printer.get_print_job(job_id)
+    if not job:
+        raise HTTPException(404, "Print job not found")
+    return job
 
 
 @app.post("/v1/printers/discover", dependencies=[Depends(require_device)])
@@ -424,59 +428,10 @@ async def remove_printer(printer_id: str) -> dict[str, bool]:
     return {"ok": True}
 
 
-ALLOWED_SUFFIXES = {".pdf", ".jpg", ".jpeg", ".png", ".docx", ".doc", ".xlsx", ".xls"}
-IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png"}
-OFFICE_SUFFIXES = {".docx", ".doc", ".xlsx", ".xls"}
-
-
-async def deliver_print_job(
-    job_id: str,
-    printer: dict[str, Any],
-    pdf_bytes: bytes,
-    job_name: str,
-    copies: int,
-    paper_size: str,
-    color_mode: str,
-) -> None:
-    try:
-        formats = await _printer.get_document_formats(
-            printer["host"], printer["port"], printer.get("protocol", "ipp")
-        )
-        document_bytes = pdf_bytes
-        document_format = "application/pdf"
-        if document_format not in formats:
-            if "image/pwg-raster" not in formats:
-                advertised = ", ".join(sorted(formats)) or "未返回支持格式"
-                raise RuntimeError(f"打印机不支持 PDF 或 PWG Raster（{advertised}）")
-            with tempfile.TemporaryDirectory() as tmp:
-                source = Path(tmp) / "document.pdf"
-                source.write_bytes(pdf_bytes)
-                pwg_path = await asyncio.get_event_loop().run_in_executor(
-                    None, _printer.pdf_to_pwg_raster, source, Path(tmp), paper_size, color_mode
-                )
-                document_bytes = pwg_path.read_bytes()
-                document_format = "image/pwg-raster"
-        result = await _printer.send_print_job(
-            printer["host"], printer["port"], document_bytes, job_name,
-            document_format, copies, paper_size, color_mode,
-            printer.get("protocol", "ipp"),
-        )
-        status = "completed" if result.get("ok") else "failed"
-        error = result.get("error")
-    except Exception as exc:
-        status = "failed"
-        error = str(exc).strip() or type(exc).__name__
-    with connect() as db:
-        db.execute(
-            "UPDATE print_job SET status=?, error=?, completed_at=? WHERE id=?",
-            (status, error, utc_now(), job_id),
-        )
-
-
 @app.post("/v1/printers/{printer_id}/print", dependencies=[Depends(require_device)])
 async def print_document(
-    background_tasks: BackgroundTasks,
     printer_id: str,
+    background_tasks: BackgroundTasks,
     file: UploadFile | None = File(None),
     text: str | None = Form(None),
     copies: int = Form(1),
@@ -495,55 +450,23 @@ async def print_document(
         raise HTTPException(503, "Printer is offline")
 
     job_id = secrets.token_urlsafe(12)
-    job_name = "text"
+    job_name = f"文字打印_{job_id[:6]}" if text else "document"
     file_type = "text"
+    file_bytes: bytes | None = None
+    suffix: str | None = None
+    if file:
+        raw_name = file.filename or "document"
+        suffix = Path(raw_name).suffix.lower()
+        if suffix not in _printer.ALLOWED_SUFFIXES:
+            raise HTTPException(400, f"Unsupported file type: {suffix}")
+        job_name = Path(raw_name).stem
+        file_type = suffix.lstrip(".")
+        file_bytes = await file.read()
 
-    with tempfile.TemporaryDirectory() as tmp:
-        tmp_dir = Path(tmp)
-        try:
-            if text:
-                pdf_path = await asyncio.get_event_loop().run_in_executor(
-                    None, _printer.text_to_pdf, text, tmp_dir, f"job_{job_id}"
-                )
-                job_name = f"文字打印_{job_id[:6]}"
-            else:
-                raw_name = file.filename or "document"
-                suffix = Path(raw_name).suffix.lower()
-                if suffix not in ALLOWED_SUFFIXES:
-                    raise HTTPException(400, f"Unsupported file type: {suffix}")
-                job_name = Path(raw_name).stem
-                file_type = suffix.lstrip(".")
-                src = tmp_dir / f"upload_{job_id}{suffix}"
-                src.write_bytes(await file.read())
-
-                if suffix == ".pdf":
-                    pdf_path = src
-                elif suffix in IMAGE_SUFFIXES:
-                    pdf_path = await asyncio.get_event_loop().run_in_executor(
-                        None, _printer.image_to_pdf, src, tmp_dir
-                    )
-                else:
-                    pdf_path = await asyncio.get_event_loop().run_in_executor(
-                        None, _printer.convert_to_pdf, src, tmp_dir
-                    )
-
-            pdf_bytes = pdf_path.read_bytes()
-            with connect() as db:
-                db.execute(
-                    "INSERT INTO print_job(id,printer_id,file_name,file_type,copies,status,created_at) VALUES(?,?,?,?,?,?,?)",
-                    (job_id, printer_id, job_name, file_type, copies, "printing", utc_now()),
-                )
-            background_tasks.add_task(
-                deliver_print_job, job_id, p, pdf_bytes, job_name,
-                copies, paper_size, color_mode,
-            )
-            return {"ok": True, "job_id": job_id, "status": "printing"}
-        except HTTPException:
-            raise
-        except Exception as exc:
-            with connect() as db:
-                db.execute(
-                    "UPDATE print_job SET status='failed', error=?, completed_at=? WHERE id=?",
-                    (str(exc), utc_now(), job_id),
-                )
-            raise HTTPException(500, str(exc)) from exc
+    _printer.create_print_job(job_id, printer_id, job_name, file_type, copies)
+    background_tasks.add_task(
+        _printer.process_print_job, job_id, p,
+        text=text, file_bytes=file_bytes, suffix=suffix, job_name=job_name,
+        copies=copies, paper_size=paper_size, color_mode=color_mode,
+    )
+    return {"ok": True, "job_id": job_id, "status": "pending"}
