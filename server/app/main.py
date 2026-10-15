@@ -95,6 +95,9 @@ def setup_db() -> None:
             db.execute("ALTER TABLE device ADD COLUMN name TEXT")
         if "token_hash" not in columns:
             db.execute("ALTER TABLE device ADD COLUMN token_hash TEXT")
+        printer_columns = {row[1] for row in db.execute("PRAGMA table_info(printer)").fetchall()}
+        if "formats" not in printer_columns:
+            db.execute("ALTER TABLE printer ADD COLUMN formats TEXT")
 
 
 async def require_device(authorization: str | None = Header(default=None)) -> dict[str, Any]:

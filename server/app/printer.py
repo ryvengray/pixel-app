@@ -130,8 +130,12 @@ async def get_document_formats(host: str, port: int, scheme: str = "ipp") -> set
                 headers={"Content-Type": "application/ipp"},
             )
         if response.status_code != 200:
+            LOGGER.warning("IPP format query for %s returned HTTP %s", uri, response.status_code)
             return set()
-        return _ipp_text_values(response.content, "document-format-supported")
+        formats = _ipp_text_values(response.content, "document-format-supported")
+        if not formats:
+            LOGGER.warning("IPP format query for %s returned no document formats", uri)
+        return formats
     except httpx.HTTPError:
         return set()
 
@@ -271,6 +275,7 @@ def discover_printers_sync(timeout: float = 4.0) -> list[dict[str, Any]]:
                 "protocol": scheme,
                 "model": props.get("ty", ""),
                 "location": props.get("note", ""),
+                "formats": props.get("pdl", ""),
             }
 
         def remove_service(self, zc: Zeroconf, type_: str, name: str) -> None:
@@ -362,15 +367,15 @@ def save_printer(printer: dict[str, Any]) -> str:
         existing = db.execute("SELECT id FROM printer WHERE host = ?", (printer["host"],)).fetchone()
         if existing:
             db.execute(
-                "UPDATE printer SET name=?, port=?, protocol=?, model=?, location=?, last_seen=? WHERE id=?",
+                "UPDATE printer SET name=?, port=?, protocol=?, model=?, location=?, formats=?, last_seen=? WHERE id=?",
                 (printer["name"], printer["port"], printer["protocol"], printer.get("model", ""),
-                 printer.get("location", ""), now, existing["id"]),
+                 printer.get("location", ""), printer.get("formats", ""), now, existing["id"]),
             )
             return existing["id"]
         db.execute(
-            "INSERT INTO printer(id,name,host,port,protocol,model,location,last_seen,added_at) VALUES(?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO printer(id,name,host,port,protocol,model,location,formats,last_seen,added_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
             (printer_id, printer["name"], printer["host"], printer["port"], printer["protocol"],
-             printer.get("model", ""), printer.get("location", ""), now, now),
+             printer.get("model", ""), printer.get("location", ""), printer.get("formats", ""), now, now),
         )
     return printer_id
 
@@ -490,6 +495,16 @@ async def process_print_job(
                 formats = await get_document_formats(
                     printer["host"], printer["port"], printer.get("protocol", "ipp")
                 )
+                if not formats:
+                    discovered = await discover_printers()
+                    for candidate in discovered:
+                        if candidate["host"] == printer["host"] and candidate["port"] == printer["port"]:
+                            formats = {value.strip() for value in candidate.get("formats", "").split(",") if value.strip()}
+                            if formats:
+                                LOGGER.info("Using mDNS document formats for %s: %s", printer["host"], ", ".join(sorted(formats)))
+                            break
+                if not formats:
+                    formats = {value.strip() for value in (printer.get("formats") or "").split(",") if value.strip()}
                 if document_format not in formats:
                     if "image/pwg-raster" not in formats:
                         advertised = ", ".join(sorted(formats)) or "未返回支持格式"
