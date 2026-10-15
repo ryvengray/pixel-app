@@ -78,6 +78,7 @@ public class MainActivity extends Activity {
  }
  private void openChat(boolean animate){
   if(chatOpen)return;chatOpen=true;
+  title.setVisibility(View.GONE);
   petTouch.setContentDescription("右上角的小宠物，点击放大，长按打开功能菜单");
   greeting.setVisibility(View.GONE);menuButton.setVisibility(View.INVISIBLE);chat.animate().cancel();chat.setAlpha(animate?0f:1f);chat.setTranslationY(0);chat.setVisibility(View.VISIBLE);chat.bringToFront();petTouch.bringToFront();
   if(animate)chat.animate().alpha(1f).setDuration(220).start();
@@ -91,6 +92,7 @@ public class MainActivity extends Activity {
  }
  private void closeChat(boolean animate){
   if(!chatOpen)return;chatOpen=false;
+  title.setVisibility(View.VISIBLE);
   petTouch.setContentDescription("玉绿色宠物，点击和它聊天，长按打开功能菜单");
   chat.close();chat.animate().alpha(0f).setDuration(180).withEndAction(()->{if(!chatOpen){chat.setVisibility(View.GONE);chat.setAlpha(1f);}}).start();greeting.setVisibility(View.VISIBLE);
   if(animate){petTouch.setClickable(false);animatePetBack();}

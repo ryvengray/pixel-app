@@ -40,7 +40,7 @@ public final class ChatPanel extends FrameLayout {
         setClipToPadding(false);
         LinearLayout column=new LinearLayout(context);
         column.setOrientation(LinearLayout.VERTICAL);
-        column.setPadding(dp(20),dp(72),dp(20),dp(12));
+        column.setPadding(dp(20),dp(18),dp(20),dp(12));
         addView(column,new FrameLayout.LayoutParams(-1,-1));
 
         LinearLayout header=new LinearLayout(context);
@@ -54,6 +54,7 @@ public final class ChatPanel extends FrameLayout {
         status=text("你的随身小助手",12);status.setTextColor(secondary);
         identity.addView(name);identity.addView(status);
         header.addView(identity,new LinearLayout.LayoutParams(0,-2,1));
+        header.addView(new View(context),new LinearLayout.LayoutParams(dp(52),dp(1)));
         close=text("×",27);close.setGravity(Gravity.CENTER);close.setContentDescription("关闭聊天");
         close.setOnClickListener(v->{if(onClose!=null)onClose.run();});
         header.addView(close,new LinearLayout.LayoutParams(dp(42),dp(42)));
@@ -71,7 +72,7 @@ public final class ChatPanel extends FrameLayout {
         LinearLayout composerWrap=new LinearLayout(context);composerWrap.setOrientation(LinearLayout.VERTICAL);
         composerWrap.setPadding(dp(5),dp(4),dp(5),dp(4));
         composerWrap.setBackground(rounded(Color.WHITE,24,Color.LTGRAY,1));
-        LinearLayout composer=new LinearLayout(context);composer.setGravity(Gravity.BOTTOM|Gravity.CENTER_VERTICAL);
+        LinearLayout composer=new LinearLayout(context);composer.setGravity(Gravity.CENTER_VERTICAL);
         input=new EditText(context);input.setHint("跟 Gray 说说你的想法…");input.setTextSize(15);
         input.setPadding(dp(10),dp(5),dp(8),dp(5));input.setMinHeight(dp(36));input.setMaxLines(4);
         input.setBackgroundColor(Color.TRANSPARENT);
