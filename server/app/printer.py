@@ -1,17 +1,22 @@
 from __future__ import annotations
 
 import asyncio
+import getpass
 import logging
 import os
+import re
 import secrets
 import socket
 import struct
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 import httpx
+from pypdf import PdfReader, PdfWriter
 from zeroconf import ServiceBrowser, ServiceStateChange, Zeroconf
 
 from .main import connect, utc_now
@@ -63,23 +68,26 @@ async def check_cups_printer() -> tuple[bool, str]:
     return await asyncio.get_running_loop().run_in_executor(None, check_cups_printer_sync)
 
 
+# The HP DeskJet 2700 stalls on any print-color-mode other than the queue
+# default, and its hpcups PPD uses vendor PageSize keywords (its "Letter" is
+# 8x10; US Letter 8.5x11 is "USLETTER").
+CUPS_MEDIA = {
+    "a4": "A4",
+    "a5": "A5",
+    "letter": "USLETTER",
+}
+
+
 def submit_to_cups(
     pdf_path: Path,
     queue: str,
     copies: int,
     paper_size: str,
-    color_mode: str,
 ) -> dict[str, Any]:
     """Submit a PDF to the host CUPS queue and return its CUPS job reference."""
-    media = {
-        "a4": "iso_a4_210x297mm",
-        "a5": "iso_a5_148x210mm",
-        "letter": "na_letter_8.5x11in",
-    }[paper_size]
     command = [
         "lp", "-d", queue, "-n", str(copies),
-        "-o", f"media={media}",
-        "-o", f"print-color-mode={color_mode}",
+        "-o", f"media={CUPS_MEDIA[paper_size]}",
         str(pdf_path),
     ]
     try:
@@ -94,7 +102,111 @@ def submit_to_cups(
         return {"ok": False, "error": f"CUPS 队列拒绝任务：{detail}"}
     reference = result.stdout.strip()
     LOGGER.info("CUPS accepted print job for %s: %s", queue, reference)
-    return {"ok": True, "reference": reference}
+    job_id: int | None = None
+    match = re.search(r"request id is (\S+)-(\d+)\b", reference)
+    if match:
+        job_id = int(match.group(2))
+    else:
+        LOGGER.warning("Could not parse CUPS job id from: %s", reference)
+    return {"ok": True, "reference": reference, "cups_job_id": job_id}
+
+
+def _ipp_int_values(payload: bytes, attribute_name: str) -> set[int]:
+    """Extract repeated integer values for one attribute from a binary IPP response."""
+    values: set[int] = set()
+    index = 8
+    current_name = ""
+    while index < len(payload):
+        tag = payload[index]
+        index += 1
+        if tag == 0x03:
+            break
+        if tag <= 0x0F:
+            current_name = ""
+            continue
+        if index + 4 > len(payload):
+            break
+        name_length = struct.unpack(">H", payload[index:index + 2])[0]
+        index += 2
+        if index + name_length + 2 > len(payload):
+            break
+        if name_length:
+            current_name = payload[index:index + name_length].decode("utf-8", errors="replace")
+        index += name_length
+        value_length = struct.unpack(">H", payload[index:index + 2])[0]
+        index += 2
+        if index + value_length > len(payload):
+            break
+        value = payload[index:index + value_length]
+        index += value_length
+        if current_name == attribute_name and value_length == 4:
+            values.add(struct.unpack(">i", value)[0])
+    return values
+
+
+async def _query_cups_job(host: str, port: int, queue: str, job_id: int, user: str) -> tuple[int | None, str]:
+    """Ask the CUPS server for one job's state. Returns (job-state, message suffix)."""
+    uri = f"ipp://{host}:{port}/printers/{quote(queue)}"
+    extra = _int_attr(0x21, "job-id", job_id) + _str_attr(0x42, "requesting-user-name", user)
+    body = _build_request(0x0009, uri, extra_ops=extra)
+    timeout = httpx.Timeout(connect=5, read=10, write=10, pool=10)
+    async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
+        resp = await client.post(
+            f"http://{host}:{port}/printers/{quote(queue)}",
+            content=body,
+            headers={"Content-Type": "application/ipp"},
+        )
+    if resp.status_code != 200 or len(resp.content) < 4:
+        return None, ""
+    if struct.unpack(">H", resp.content[2:4])[0] != 0x0000:
+        return None, ""
+    state = next(iter(_ipp_int_values(resp.content, "job-state")), None)
+    messages = _ipp_text_values(resp.content, "job-state-message")
+    return state, f"：{'; '.join(sorted(messages))}" if messages else ""
+
+
+# job-state 6/7/8 are terminal failures (stopped/canceled/aborted)
+CUPS_JOB_FAILURE_STATES = {
+    6: "打印机已停止该任务",
+    7: "打印任务被取消（打印机无响应）",
+    8: "打印任务已中止",
+}
+
+
+async def wait_for_cups_job(queue: str, job_id: int, timeout: float = 4 * 3600, interval: float = 20) -> dict[str, Any]:
+    """Poll the CUPS queue until the submitted job reaches a terminal state.
+
+    `lp` returning 0 only means cupsd accepted the job; the printer may still
+    fail later (e.g. the DeskJet watchdog kills unresponsive jobs after 3h),
+    so success is only reported once CUPS reports job-state 9 (completed).
+    """
+    server = os.getenv("CUPS_SERVER", "127.0.0.1:631")
+    host, _, port_text = server.partition(":")
+    port = int(port_text or 631)
+    user = getpass.getuser()
+    deadline = time.monotonic() + timeout
+    unknown_since: float | None = None
+    while time.monotonic() < deadline:
+        try:
+            state, message = await _query_cups_job(host, port, queue, job_id, user)
+        except Exception as exc:
+            LOGGER.warning("CUPS job state query failed: %s", exc)
+            state, message = None, ""
+        if state == 9:
+            LOGGER.info("CUPS job %s-%d completed", queue, job_id)
+            return {"ok": True, "reference": f"CUPS job {queue}-{job_id}"}
+        if state in CUPS_JOB_FAILURE_STATES:
+            error = CUPS_JOB_FAILURE_STATES[state] + message
+            LOGGER.error("CUPS job %s-%d failed: %s", queue, job_id, error)
+            return {"ok": False, "error": error}
+        if state is None:
+            unknown_since = unknown_since if unknown_since else time.monotonic()
+            if time.monotonic() - unknown_since > 300:
+                return {"ok": False, "error": "无法从 CUPS 确认打印结果，请检查打印机"}
+        else:
+            unknown_since = None
+        await asyncio.sleep(interval)
+    return {"ok": False, "error": "打印任务长时间未完成，请检查打印机状态"}
 
 # ---------------------------------------------------------------------------
 # IPP protocol helpers
@@ -280,7 +392,7 @@ DOC_FORMATS = {
 }
 
 
-async def send_print_job(host: str, port: int, data: bytes, job_name: str, doc_format: str, copies: int = 1, paper_size: str = "a4", color_mode: str = "monochrome", scheme: str = "ipp") -> dict[str, Any]:
+async def send_print_job(host: str, port: int, data: bytes, job_name: str, doc_format: str, copies: int = 1, paper_size: str = "a4", color_mode: str = "auto", scheme: str = "ipp") -> dict[str, Any]:
     path = await find_ipp_path(host, port, scheme)
     if path is None:
         return {"ok": False, "error": "未找到打印机的 IPP 接收地址"}
@@ -435,6 +547,38 @@ def pdf_to_pwg_raster(source: Path, output_dir: Path, paper_size: str, color_mod
     return target
 
 
+def pdf_to_grayscale(source: Path, output_dir: Path) -> Path:
+    """Convert PDF content to grayscale so the queue can keep its default color mode."""
+    gray_path = output_dir / f"{source.stem}_gray.pdf"
+    result = subprocess.run(
+        [
+            "gs", "-q", "-dSAFER", "-dBATCH", "-dNOPAUSE",
+            "-sDEVICE=pdfwrite", "-sColorConversionStrategy=Gray",
+            "-dProcessColorModel=/DeviceGray",
+            "-o", str(gray_path), str(source),
+        ],
+        capture_output=True, timeout=120,
+    )
+    if result.returncode != 0 or not gray_path.exists() or gray_path.stat().st_size == 0:
+        message = result.stderr.decode(errors="replace").strip()
+        raise RuntimeError(f"PDF 灰度转换失败：{message or result.returncode}")
+    return gray_path
+
+
+def pdf_reverse_pages(source: Path, output_dir: Path) -> Path:
+    """Reverse the page order of a PDF so the last page prints first."""
+    reader = PdfReader(str(source))
+    if len(reader.pages) <= 1:
+        return source
+    reversed_path = output_dir / f"{source.stem}_reversed.pdf"
+    writer = PdfWriter()
+    for page in reversed(reader.pages):
+        writer.add_page(page)
+    with open(reversed_path, "wb") as f:
+        writer.write(f)
+    return reversed_path
+
+
 # ---------------------------------------------------------------------------
 # Database helpers
 # ---------------------------------------------------------------------------
@@ -548,6 +692,7 @@ async def process_print_job(
 ) -> None:
     """Convert and submit one job, serialising work for printers with a single queue."""
     update_print_job(job_id, status="printing")
+    cups_queue = cups_printer_name()
     try:
         async with _print_lock:
             loop = asyncio.get_running_loop()
@@ -569,12 +714,18 @@ async def process_print_job(
                 else:
                     raise RuntimeError("打印文件无效")
 
-                cups_queue = cups_printer_name()
+                if color_mode == "monochrome":
+                    pdf_path = await loop.run_in_executor(None, pdf_to_grayscale, pdf_path, tmp_dir)
+
+                pdf_path = await loop.run_in_executor(None, pdf_reverse_pages, pdf_path, tmp_dir)
+
                 if cups_queue:
                     result = await loop.run_in_executor(
-                        None, submit_to_cups, pdf_path, cups_queue, copies, paper_size, color_mode
+                        None, submit_to_cups, pdf_path, cups_queue, copies, paper_size
                     )
                 else:
+                    # This printer only accepts print-color-mode=auto; grayscale
+                    # is pre-converted into the PDF content instead.
                     document = pdf_path.read_bytes()
                     document_format = "application/pdf"
                     formats = await get_document_formats(
@@ -595,16 +746,19 @@ async def process_print_job(
                             advertised = ", ".join(sorted(formats)) or "未返回支持格式"
                             raise RuntimeError(f"打印机不支持 PDF 或 PWG Raster（{advertised}）")
                         raster_path = await loop.run_in_executor(
-                            None, pdf_to_pwg_raster, pdf_path, tmp_dir, paper_size, color_mode
+                            None, pdf_to_pwg_raster, pdf_path, tmp_dir, paper_size, "auto"
                         )
                         document = raster_path.read_bytes()
                         document_format = "image/pwg-raster"
 
                     result = await send_print_job(
                         printer["host"], printer["port"], document, job_name,
-                        document_format, copies, paper_size, color_mode,
+                        document_format, copies, paper_size, "auto",
                         printer.get("protocol", "ipp"),
                     )
+
+        if result.get("ok") and cups_queue and result.get("cups_job_id") is not None:
+            result = await wait_for_cups_job(cups_queue, result["cups_job_id"])
 
         if result.get("ok"):
             update_print_job(job_id, status="completed", completed=True)

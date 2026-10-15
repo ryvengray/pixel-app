@@ -1,12 +1,12 @@
-# Gray 服务端部署指南
+# Greta 服务端部署指南
 
-Gray 运行在本地电脑的 Docker Compose 中。公网 HTTPS 由阿里云的 Nginx 提供，frp 只负责将 Nginx 的本地上游端口转到本地电脑。对手机公开的所有 Gray 接口都在 `/gray/` context 下。
+Greta 运行在本地电脑的 Docker Compose 中。公网 HTTPS 由阿里云的 Nginx 提供，frp 只负责将 Nginx 的本地上游端口转到本地电脑。对手机公开的所有 Greta 接口都在 `/gray/` context 下。
 
 ```text
 Pixel App
   └─ HTTPS https://assistant.example.com/gray/
        └─ Aliyun Nginx
-            └─ 127.0.0.1:17878（frps 的 Gray 专用端口）
+            └─ 127.0.0.1:17878（frps 的 Greta 专用端口）
                  └─ frpc 隧道
                       └─ 本地电脑 127.0.0.1:8787（Docker Compose）
 ```
@@ -26,7 +26,7 @@ GRAY_PUBLIC_BASE_URL=https://assistant.example.com/gray
 DEEPSEEK_API_KEY=你的DeepSeek密钥
 DEEPSEEK_BASE_URL=https://api.deepseek.com
 DEEPSEEK_MODEL=deepseek-chat
-DATABASE_PATH=./data/gray.db
+DATABASE_PATH=./data/greta.db
 FIREBASE_SERVICE_ACCOUNT_FILE=/run/secrets/firebase-service-account.json
 ```
 
@@ -52,11 +52,11 @@ curl http://127.0.0.1:8787/health
 {"status":"ok"}
 ```
 
-服务仅监听本地电脑的 `127.0.0.1:8787`。数据库位于 `server/data/gray.db`，更新镜像或重启容器不会删除它。
+服务仅监听本地电脑的 `127.0.0.1:8787`。数据库位于 `server/data/greta.db`，更新镜像或重启容器不会删除它。
 
 ## 3. 配置 frpc
 
-在本地电脑的 frpc 配置中创建 Gray 的独立 TCP 代理。以下为示意；字段名称按你的 frp 版本调整：
+在本地电脑的 frpc 配置中创建 Greta 的独立 TCP 代理。以下为示意；字段名称按你的 frp 版本调整：
 
 ```toml
 [[proxies]]
@@ -67,7 +67,7 @@ localPort = 8787
 remotePort = 17878
 ```
 
-重启 frpc 后，阿里云机器上的 `127.0.0.1:17878` 应可访问 Gray。不要在云防火墙或安全组中向公网开放 `17878`；公网入口只保留 Nginx 的 `443`。
+重启 frpc 后，阿里云机器上的 `127.0.0.1:17878` 应可访问 Greta。不要在云防火墙或安全组中向公网开放 `17878`；公网入口只保留 Nginx 的 `443`。
 
 ## 4. 配置阿里云 Nginx
 
@@ -88,17 +88,17 @@ curl https://assistant.example.com/gray/health
 在本地电脑的项目根目录运行：
 
 ```bash
-docker compose exec gray-service python -m app.pairing
+docker compose exec greta-service python -m app.pairing
 ```
 
-终端会显示一个十分钟有效、只能使用一次的二维码。打开 Gray 的“助理设置”，选择“扫码配对这台设备”后扫描。二维码中含有 `https://assistant.example.com/gray/v1/...`，所以 App 自动保存带 `/gray` 的服务地址。
+终端会显示一个十分钟有效、只能使用一次的二维码。打开 Greta 的”助理设置”，选择”扫码配对这台设备”后扫描。二维码中含有 `https://assistant.example.com/gray/v1/...`，所以 App 自动保存带 `/gray` 的服务地址。
 
 ## 日常维护
 
 ```bash
 # 查看服务状态和日志
 docker compose ps
-docker compose logs -f gray-service
+docker compose logs -f greta-service
 
 # 更新代码后的重建与重启
 docker compose up -d --build
@@ -107,4 +107,4 @@ docker compose up -d --build
 docker compose down
 ```
 
-备份时复制 `server/data/gray.db` 到加密且可信的位置。恢复时先停止容器，再还原该文件并启动容器。
+备份时复制 `server/data/greta.db` 到加密且可信的位置。恢复时先停止容器，再还原该文件并启动容器。

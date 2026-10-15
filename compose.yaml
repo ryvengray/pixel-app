@@ -1,24 +1,24 @@
 services:
-  gray-data-permissions:
+  greta-data-permissions:
     build:
       context: ./server
-    container_name: gray-data-permissions
+    container_name: greta-data-permissions
     user: "0:0"
     restart: "no"
     command: ["sh", "-c", "mkdir -p /data && chown -R 10001:10001 /data"]
     volumes:
       - ./server/data:/data
 
-  gray-service:
+  greta-service:
     build:
       context: ./server
-    container_name: gray-service
+    container_name: greta-service
     restart: unless-stopped
     network_mode: host
     env_file:
       - ./server/.env
     environment:
-      DATABASE_PATH: /data/gray.db
+      DATABASE_PATH: /data/greta.db
       FIREBASE_SERVICE_ACCOUNT_FILE: /run/secrets/firebase-service-account.json
       # The service uses the host network, so this reaches Ubuntu's CUPS
       # daemon rather than the printer's unreliable embedded IPP endpoint.
@@ -35,7 +35,7 @@ services:
       - source: firebase_service_account
         target: firebase-service-account.json
     depends_on:
-      gray-data-permissions:
+      greta-data-permissions:
         condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:8787/health', timeout=3)"]

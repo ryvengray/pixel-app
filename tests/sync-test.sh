@@ -27,10 +27,10 @@ echo local >> note.md
 bash "$script" > "$root/local.log" 2>&1
 test -z "$(git status --porcelain)"
 test "$(git rev-parse HEAD)" = "$(git --git-dir="$root/remote.git" rev-parse HEAD)"
-test -f "$HOME/.cache/gray/obsidian-sync.lock"
+test -f "$HOME/.cache/greta/obsidian-sync.lock"
 test ! -e .git/pixel-sync.lock
 if [ "${MOCK_FLOCK:-0}" != 1 ]; then
-    if flock "$HOME/.cache/gray/obsidian-sync.lock" bash "$script" > "$root/lock.log" 2>&1; then
+    if flock "$HOME/.cache/greta/obsidian-sync.lock" bash "$script" > "$root/lock.log" 2>&1; then
         echo 'Expected concurrent sync to be rejected' >&2
         exit 1
     else

@@ -118,7 +118,7 @@ public class PrintActivity extends Activity {
         loadingPet = new PetScene(this);loadingPet.setTheme(dark);loadingPet.setMoving(!prefs.getBoolean("reduceMotion", false));
         overlay.addView(loadingPet, new FrameLayout.LayoutParams(-1, -1));
         LinearLayout message = new LinearLayout(this);message.setOrientation(LinearLayout.VERTICAL);message.setGravity(Gravity.CENTER);
-        TextView title = new TextView(this);title.setText("Gray 正在准备");title.setTextSize(19);title.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));title.setTextColor(foreground);title.setGravity(Gravity.CENTER);message.addView(title);
+        TextView title = new TextView(this);title.setText("Greta 正在准备");title.setTextSize(19);title.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));title.setTextColor(foreground);title.setGravity(Gravity.CENTER);message.addView(title);
         loadingStatus = new TextView(this);loadingStatus.setTextSize(13);loadingStatus.setTextColor(secondary);loadingStatus.setGravity(Gravity.CENTER);loadingStatus.setPadding(0,dp(8),0,0);message.addView(loadingStatus);
         FrameLayout.LayoutParams messageParams = new FrameLayout.LayoutParams(-1,-2,Gravity.BOTTOM);messageParams.leftMargin=dp(24);messageParams.rightMargin=dp(24);messageParams.bottomMargin=dp(82);overlay.addView(message,messageParams);
         overlay.setOnApplyWindowInsetsListener((v,insets)->{android.graphics.Insets bars=insets.getInsets(WindowInsets.Type.systemBars()|WindowInsets.Type.displayCutout());v.setPadding(bars.left,bars.top,bars.right,bars.bottom);return insets;});

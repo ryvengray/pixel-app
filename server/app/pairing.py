@@ -15,7 +15,7 @@ def main() -> None:
     qr = qrcode.QRCode(border=2)
     qr.add_data(payload)
     qr.make(fit=True)
-    print("Open Gray on the Pixel and tap ‘扫码配对’, then scan this one-time code:")
+    print("Open Greta on the Pixel and tap ‘扫码配对’, then scan this one-time code:")
     qr.print_ascii(invert=True)
     print(f"Code expires at {pairing['expires_at']}")
 

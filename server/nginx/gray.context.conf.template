@@ -1,7 +1,7 @@
 # Install this snippet in the HTTPS virtual host that already owns your public
-# domain. Replace FRP_REMOTE_PORT with Gray's dedicated frps TCP port.
+# domain. Replace FRP_REMOTE_PORT with Greta's dedicated frps TCP port.
 #
-# FRP_REMOTE_PORT is the TCP port exposed by frps for this Gray service.
+# FRP_REMOTE_PORT is the TCP port exposed by frps for this Greta service.
 # Keep that port blocked from the public Internet: only Nginx on this host
 # should reach it through 127.0.0.1.
 
@@ -11,7 +11,7 @@ location = /gray {
 }
 
 # This context prefix is intentionally stripped before traffic reaches FastAPI.
-# Gray consequently keeps routes such as /v1/chat rather than /gray/v1/chat.
+# Greta consequently keeps routes such as /v1/chat rather than /gray/v1/chat.
 location /gray/ {
     proxy_pass http://127.0.0.1:FRP_REMOTE_PORT/;
     proxy_http_version 1.1;

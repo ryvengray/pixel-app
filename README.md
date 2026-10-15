@@ -1,10 +1,10 @@
-# Gray
+# Greta
 
 ## 宠物首页
 
 首页是全屏动态背景和实时 3D 玉绿色圆润三角形宠物。宠物会呼吸、漂浮、眨眼、轻微扭动，轻触时弹跳并变换嘴型。右上角小圆钮或长按宠物可展开底部菜单，进入 Obsidian 同步、选择跟随系统/浅色/深色主题、开启减少动态效果。主题偏好会保留，离开首页时暂停渲染。系统栏默认隐藏，从屏幕边缘滑动可临时唤出。
 
-文字聊天已接入私有助理服务：从右上角菜单进入“和 Gray 聊聊”。完整对话和长期记忆以 Pixel 本地数据库为主，服务端仅保留后台任务所需的同步记忆副本。可在“我的长期记忆”中查看、修正、手动添加或删除记忆。
+文字聊天已接入私有助理服务：从右上角菜单进入”和 Greta 聊聊”。完整对话和长期记忆以 Pixel 本地数据库为主，服务端仅保留后台任务所需的同步记忆副本。可在”我的长期记忆”中查看、修正、手动添加或删除记忆。
 
 ## 私人助理服务
 
@@ -54,9 +54,9 @@ git branch -vv
 
 | 变体 | 用途 | 应用名称 | 包名 | 推送 |
 | --- | --- | --- | --- | --- |
-| `devDebug` | 本机开发、调试 | Gray Dev | `dev.pixel.sync.dev` | 关闭 |
-| `prodDebug` | 调试正式配置 | Gray | `dev.pixel.sync` | 使用正式 Firebase 配置 |
-| `prodRelease` | 正式发布 | Gray | `dev.pixel.sync` | 使用正式 Firebase 配置 |
+| `devDebug` | 本机开发、调试 | Greta Dev | `dev.pixel.sync.dev` | 关闭 |
+| `prodDebug` | 调试正式配置 | Greta | `dev.pixel.sync` | 使用正式 Firebase 配置 |
+| `prodRelease` | 正式发布 | Greta | `dev.pixel.sync` | 使用正式 Firebase 配置 |
 
 日常开发请运行 `devDebug`。它和正式版包名不同，可以同时安装；聊天记录、应用设置和加密密钥也分别保存在各自应用空间。开发版没有 Firebase 注册配置，因此不会注册或接收正式推送。
 
@@ -67,7 +67,7 @@ git branch -vv
 3. 打开 **View > Tool Windows > Build Variants**。
 4. 在 `app` 模块的 **Active Build Variant** 下拉框中选择 **`devDebug`**。
 5. 连接 Android 手机并开启 USB 调试，或启动 Android 虚拟设备；在工具栏设备列表中选择目标设备。
-6. 选择运行配置 **app**，点击工具栏的绿色 **Run ▶** 按钮。首次安装显示为 **Gray Dev**。
+6. 选择运行配置 **app**，点击工具栏的绿色 **Run ▶** 按钮。首次安装显示为 **Greta Dev**。
 
 修改应用后再次点击 **Run**，Android Studio 只会更新开发版，不会覆盖已安装的正式版。卸载开发版也不会删除正式版的应用数据。
 
@@ -79,7 +79,7 @@ git branch -vv
 bash scripts/install-debug-wireless-ubuntu.sh
 ```
 
-脚本会引导首次无线配对，随后构建、覆盖安装并启动 `devDebug`。连接成功后会将设备地址和连接端口保存在本机的 `.gray-wireless-device` 中，后续直接运行脚本即可；端口失效时脚本才会重新询问。手机弹窗中的配对端口和无线调试主页中的连接端口是两个不同的端口。配对码与配对端口不会保存。
+脚本会引导首次无线配对，随后构建、覆盖安装并启动 `devDebug`。连接成功后会将设备地址和连接端口保存在本机的 `.greta-wireless-device` 中，后续直接运行脚本即可；端口失效时脚本才会重新询问。手机弹窗中的配对端口和无线调试主页中的连接端口是两个不同的端口。配对码与配对端口不会保存。
 
 ### 构建正式版
 
@@ -234,7 +234,7 @@ Gitee 不运行 GitHub Actions；若只保留 Gitee，可先用本地构建脚�
 
 App 只有收到 Termux 成功退出结果才显示成功；结果通过 PendingIntent 返回并保存在 App 本地，重新打开仍可查看。日志在结束后显示，不是实时输出。超过 10 分钟无回调会显示“结果未知”，这不表示任务已取消；请在 Termux 检查后重试，仓库文件锁防止并发执行。网络 pull/push 各限时 180 秒。Android 强制结束 Termux、网络中断、Git hooks 或凭据助手卡住仍可能导致任务无法完成。
 
-同步锁位于 Termux 私有目录 `~/.cache/gray/obsidian-sync.lock`，避免 Android 共享存储不支持 flock 的问题。
+同步锁位于 Termux 私有目录 `~/.cache/greta/obsidian-sync.lock`，避免 Android 共享存储不支持 flock 的问题。
 
 冲突后在 Termux 运行 `git status`，手动解决冲突并完成合并提交，再点击同步。App 不会自动丢弃笔记或撤销提交。
 

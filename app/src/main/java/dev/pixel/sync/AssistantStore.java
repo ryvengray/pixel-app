@@ -10,7 +10,7 @@ public final class AssistantStore extends SQLiteOpenHelper {
     public static final class Message { public final String role, content; public final long createdAt; Message(String r,String c,long t){role=r;content=c;createdAt=t;} }
     public static final class Memory { public final String id,category,fact,source,updatedAt; public final double confidence; public final int revision; public final boolean deleted;
         Memory(String id,String c,String f,double confidence,String source,int revision,boolean deleted,String updatedAt){this.id=id;category=c;fact=f;this.confidence=confidence;this.source=source;this.revision=revision;this.deleted=deleted;this.updatedAt=updatedAt;} }
-    public AssistantStore(Context context) { super(context, "gray.db", null, 1); }
+    public AssistantStore(Context context) { super(context, "greta.db", null, 1); }
     @Override public void onCreate(SQLiteDatabase db) {
         db.execSQL("CREATE TABLE message(id INTEGER PRIMARY KEY AUTOINCREMENT, role TEXT NOT NULL, content TEXT NOT NULL, created_at INTEGER NOT NULL)");
         db.execSQL("CREATE TABLE memory(id TEXT PRIMARY KEY, category TEXT NOT NULL, fact TEXT NOT NULL, confidence REAL NOT NULL, source TEXT, revision INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL)");

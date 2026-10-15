@@ -42,7 +42,7 @@ public class MainActivity extends Activity {
   root.setBackgroundColor(Color.parseColor(dark?"#102019":"#F0F5E9"));
   scene=new PetScene(this);scene.setTheme(dark);scene.setMoving(!preferences.getBoolean("reduceMotion",false));
   root.addView(scene,new FrameLayout.LayoutParams(-1,-1));overlay=new FrameLayout(this);root.addView(overlay,new FrameLayout.LayoutParams(-1,-1));
-  title=text("Gray",23);title.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));
+  title=text("Greta",23);title.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));
   FrameLayout.LayoutParams header=new FrameLayout.LayoutParams(-2,-2,Gravity.TOP|Gravity.LEFT);header.leftMargin=dp(28);header.topMargin=dp(26);overlay.addView(title,header);
   menuButton=text("•••",22);menuButton.setGravity(Gravity.CENTER);menuButton.setElevation(dp(16));menuButton.setContentDescription("打开功能和外观菜单");menuButton.setOnClickListener(v->showMenu());
   FrameLayout.LayoutParams button=new FrameLayout.LayoutParams(dp(MENU_WIDTH_DP),dp(MENU_HEIGHT_DP),Gravity.TOP|Gravity.RIGHT);button.topMargin=dp(MENU_TOP_DP);button.rightMargin=dp(MENU_RIGHT_DP);overlay.addView(menuButton,button);
@@ -135,9 +135,9 @@ public class MainActivity extends Activity {
   LinearLayout sheet=new LinearLayout(this);sheet.setOrientation(LinearLayout.VERTICAL);sheet.setPadding(dp(22),dp(20),dp(22),dp(28));sheet.setBackground(surface(panel,28));
   TextView heading=text("功能与设置",23);heading.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));heading.setTextColor(foreground);sheet.addView(heading);
   TextView subtitle=text("选择你想做的事",13);subtitle.setTextColor(secondary);subtitle.setPadding(0,dp(3),0,dp(17));sheet.addView(subtitle);
-  menuSection(sheet,"GRAY");
-  sheet.addView(menuAction("✦   和 Gray 聊聊","继续这段对话",()->{menu.dismiss();openChat(true);}));
-  sheet.addView(menuAction("▤   长期记忆","查看和修正 Gray 记住的事",()->{menu.dismiss();startActivity(new Intent(this,MemoryActivity.class));}));
+  menuSection(sheet,"GRETA");
+  sheet.addView(menuAction("✦   和 Greta 聊聊","继续这段对话",()->{menu.dismiss();openChat(true);}));
+  sheet.addView(menuAction("▤   长期记忆","查看和修正 Greta 记住的事",()->{menu.dismiss();startActivity(new Intent(this,MemoryActivity.class));}));
   sheet.addView(menuAction("⚙   助理设置","配对设备与服务地址",()->{menu.dismiss();startActivity(new Intent(this,AssistantSettingsActivity.class));}));
   menuSection(sheet,"工具");
   sheet.addView(menuAction("↻   Obsidian 同步","同步你的笔记库",()->{menu.dismiss();startActivity(new Intent(this,SyncActivity.class));}));

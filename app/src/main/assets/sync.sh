@@ -17,8 +17,8 @@ fi
 gitdir=$(git rev-parse --absolute-git-dir)
 # Android shared storage uses FUSE and may reject flock with ENOSYS.
 # Keep the lock on Termux's private filesystem instead of inside the vault.
-mkdir -p "$HOME/.cache/gray"
-exec 9>"$HOME/.cache/gray/obsidian-sync.lock"
+mkdir -p "$HOME/.cache/greta"
+exec 9>"$HOME/.cache/greta/obsidian-sync.lock"
 flock -n -E 75 9 || {
     rc=$?
     if [ "$rc" -eq 75 ]; then

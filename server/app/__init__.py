@@ -1,1 +1,1 @@
-"""Gray private assistant service."""
+"""Greta private assistant service."""

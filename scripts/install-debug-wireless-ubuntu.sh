@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build, wirelessly install, and launch Gray Dev from Ubuntu.
+# Build, wirelessly install, and launch Greta Dev from Ubuntu.
 set -euo pipefail
 
 die() { printf '错误：%s\n' "$*" >&2; exit 1; }
@@ -54,7 +54,7 @@ printf '\n'
 default_ip="${1:-}"
 default_connect_port="${2:-}"
 default_pair_port="${3:-}"
-device_config="$project_root/.gray-wireless-device"
+device_config="$project_root/.greta-wireless-device"
 saved_ip=""
 saved_connect_port=""
 
@@ -185,7 +185,7 @@ printf '%s\n%s\n' "$phone_ip" "$connect_port" > "$device_config"
 chmod 600 "$device_config"
 printf '已保存设备连接，下次运行无需再次输入。\n'
 
-printf '\n正在构建 Gray Dev…\n'
+printf '\n正在构建 Greta Dev…\n'
 ./gradlew :app:assembleDevDebug
 
 apk_path="app/build/outputs/apk/dev/debug/app-dev-debug.apk"
@@ -194,8 +194,8 @@ apk_path="app/build/outputs/apk/dev/debug/app-dev-debug.apk"
 printf '\n正在安装到 %s…\n' "$selected_device"
 "$adb_bin" -s "$selected_device" install -r -d "$apk_path"
 
-printf '\n正在启动 Gray Dev…\n'
+printf '\n正在启动 Greta Dev…\n'
 "$adb_bin" -s "$selected_device" shell am start -n dev.pixel.sync.dev/dev.pixel.sync.MainActivity >/dev/null
 
-printf '\n完成：Gray Dev 已安装并启动。\n'
+printf '\n完成：Greta Dev 已安装并启动。\n'
 printf '下次直接运行同一脚本即可。\n'

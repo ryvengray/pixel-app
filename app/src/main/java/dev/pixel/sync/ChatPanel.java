@@ -50,7 +50,7 @@ public final class ChatPanel extends FrameLayout {
         LinearLayout.LayoutParams mp=new LinearLayout.LayoutParams(dp(38),dp(38));
         mp.rightMargin=dp(11);header.addView(badge,mp);
         LinearLayout identity=new LinearLayout(context);identity.setOrientation(LinearLayout.VERTICAL);
-        name=text("Gray",17);name.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));name.setTextColor(foreground);
+        name=text("Greta",17);name.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));name.setTextColor(foreground);
         status=text("你的随身小助手",12);status.setTextColor(secondary);
         identity.addView(name);identity.addView(status);
         header.addView(identity,new LinearLayout.LayoutParams(0,-2,1));
@@ -73,7 +73,7 @@ public final class ChatPanel extends FrameLayout {
         composerWrap.setPadding(dp(5),dp(4),dp(5),dp(4));
         composerWrap.setBackground(rounded(Color.WHITE,24,Color.LTGRAY,1));
         LinearLayout composer=new LinearLayout(context);composer.setGravity(Gravity.CENTER_VERTICAL);
-        input=new EditText(context);input.setHint("跟 Gray 说说你的想法…");input.setTextSize(15);
+        input=new EditText(context);input.setHint("跟 Greta 说说你的想法…");input.setTextSize(15);
         input.setPadding(dp(10),dp(5),dp(8),dp(5));input.setMinHeight(dp(36));input.setMaxLines(4);
         input.setBackgroundColor(Color.TRANSPARENT);
         input.setInputType(android.text.InputType.TYPE_CLASS_TEXT|android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE|android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
@@ -127,7 +127,7 @@ public final class ChatPanel extends FrameLayout {
     private void addWelcome(){
         welcome=new LinearLayout(getContext());welcome.setOrientation(LinearLayout.VERTICAL);
         welcome.setPadding(dp(17),dp(16),dp(17),dp(16));welcome.setBackground(rounded(cardColor,20,borderColor,1));
-        TextView hello=text("嗨，我是 Gray",20);hello.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));hello.setTextColor(foreground);
+        TextView hello=text("嗨，我是 Greta",20);hello.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));hello.setTextColor(foreground);
         TextView blurb=text("我在这里陪你整理想法、记住重要的事，也可以一步步帮你完成任务。你想从哪里开始？",14);
         blurb.setTextColor(secondary);blurb.setLineSpacing(dp(3),1f);blurb.setPadding(0,dp(7),0,0);
         welcome.addView(hello);welcome.addView(blurb);

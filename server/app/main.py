@@ -34,7 +34,7 @@ def load_env() -> None:
 
 
 load_env()
-DB_PATH = Path(os.getenv("DATABASE_PATH", str(ROOT / "data" / "gray.db"))).expanduser()
+DB_PATH = Path(os.getenv("DATABASE_PATH", str(ROOT / "data" / "greta.db"))).expanduser()
 PUBLIC_BASE_URL = os.getenv("GRAY_PUBLIC_BASE_URL", "").rstrip("/")
 DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com").rstrip("/")
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
@@ -202,7 +202,7 @@ TOOLS = [
 def system_prompt(user_timezone: str) -> str:
     memories = active_memories()
     memory_text = "\n".join(f"- [{m['category']}] {m['fact']}" for m in memories) or "(none yet)"
-    return f"""You are Gray, a warm concise personal assistant. The user time zone is {user_timezone}.
+    return f"""You are Greta, a warm concise personal assistant. The user time zone is {user_timezone}.
 Use memories only when relevant; they may be outdated and the user's correction wins. Do not mention hidden memory unless useful.
 For a stable, explicit preference or fact, call save_memory. Do not infer personality from one event and do not save sensitive information.
 For a requested reminder with an unambiguous date/time, call create_reminder. If the time is unclear, ask a short follow-up.
@@ -302,8 +302,8 @@ async def reminder_loop() -> None:
                 db.execute("UPDATE reminder SET state='fired', fired_at=? WHERE id=?", (now, row["id"]))
         for reminder in due:
             body = reminder["title"]
-            message_id = put_inbox("Gray 提醒你", body)
-            notify_devices("Gray 提醒你", body, message_id)
+            message_id = put_inbox("Greta 提醒你", body)
+            notify_devices("Greta 提醒你", body, message_id)
         await asyncio.sleep(15)
 
 
@@ -321,7 +321,7 @@ async def lifespan(_: FastAPI):
     task.cancel()
 
 
-app = FastAPI(title="Gray private service", lifespan=lifespan)
+app = FastAPI(title="Greta private service", lifespan=lifespan)
 
 
 @app.get("/health")
