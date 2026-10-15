@@ -69,20 +69,20 @@ public final class ChatPanel extends FrameLayout {
         column.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
 
         LinearLayout composerWrap=new LinearLayout(context);composerWrap.setOrientation(LinearLayout.VERTICAL);
-        composerWrap.setPadding(dp(7),dp(5),dp(6),dp(5));
+        composerWrap.setPadding(dp(5),dp(4),dp(5),dp(4));
         composerWrap.setBackground(rounded(Color.WHITE,24,Color.LTGRAY,1));
         LinearLayout composer=new LinearLayout(context);composer.setGravity(Gravity.BOTTOM|Gravity.CENTER_VERTICAL);
         input=new EditText(context);input.setHint("跟 Gray 说说你的想法…");input.setTextSize(15);
-        input.setPadding(dp(12),dp(10),dp(8),dp(10));input.setMinHeight(dp(46));input.setMaxLines(4);
+        input.setPadding(dp(10),dp(5),dp(8),dp(5));input.setMinHeight(dp(36));input.setMaxLines(4);
         input.setBackgroundColor(Color.TRANSPARENT);
         input.setInputType(android.text.InputType.TYPE_CLASS_TEXT|android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE|android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
         input.setImeOptions(EditorInfo.IME_ACTION_SEND);
         input.setOnEditorActionListener((v,actionId,event)->{if(actionId==EditorInfo.IME_ACTION_SEND){sendMessage();return true;}return false;});
         input.setOnFocusChangeListener((v,focused)->updateComposerSurface(focused));
         composer.addView(input,new LinearLayout.LayoutParams(0,-2,1));
-        send=text("↑",22);send.setGravity(Gravity.CENTER);send.setContentDescription("发送消息");
+        send=text("发送",13);send.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));send.setGravity(Gravity.CENTER);send.setContentDescription("发送消息");
         send.setOnClickListener(v->sendMessage());
-        composer.addView(send,new LinearLayout.LayoutParams(dp(44),dp(44)));
+        composer.addView(send,new LinearLayout.LayoutParams(dp(54),dp(34)));
         composerWrap.addView(composer);
         composerSurface=composerWrap;
         column.addView(composerWrap);
@@ -181,7 +181,7 @@ public final class ChatPanel extends FrameLayout {
 
     private void setSending(boolean enabled){
         send.setEnabled(enabled);send.setAlpha(enabled?1f:.55f);
-        send.setTextColor(Color.WHITE);send.setBackground(rounded(enabled?accent:Color.parseColor(dark?"#506558":"#AAB9AA"),22,0,0));
+        send.setTextColor(Color.WHITE);send.setBackground(rounded(enabled?accent:Color.parseColor(dark?"#506558":"#AAB9AA"),17,0,0));
     }
 
     private void updateComposerSurface(boolean focused){
