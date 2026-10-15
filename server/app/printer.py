@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import secrets
 import socket
 import struct
@@ -16,6 +17,84 @@ from zeroconf import ServiceBrowser, ServiceStateChange, Zeroconf
 from .main import connect, utc_now
 
 LOGGER = logging.getLogger("uvicorn.error")
+
+# When configured, CUPS on the Ubuntu host owns the physical printer
+# connection. This avoids depending on consumer-printer IPP implementations
+# and lets CUPS apply the installed HP driver and queue jobs reliably.
+_CUPS_PRINTER = os.getenv("CUPS_PRINTER", "").strip()
+
+
+def cups_printer_name() -> str | None:
+    return _CUPS_PRINTER or None
+
+
+def _cups_command(args: list[str], timeout: int = 30) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        args,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=False,
+    )
+
+
+def check_cups_printer_sync() -> tuple[bool, str]:
+    """Read the configured host CUPS queue state without contacting the printer directly."""
+    queue = cups_printer_name()
+    if not queue:
+        return False, "offline"
+    try:
+        result = _cups_command(["lpstat", "-p", queue], timeout=10)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        LOGGER.warning("Could not query CUPS queue %s: %s", queue, exc)
+        return False, "offline"
+    if result.returncode != 0:
+        LOGGER.warning("CUPS queue %s is unavailable: %s", queue, result.stderr.strip())
+        return False, "offline"
+    description = result.stdout.lower()
+    if "disabled" in description or "stopped" in description:
+        return False, "stopped"
+    if "processing" in description:
+        return True, "processing"
+    return True, "idle"
+
+
+async def check_cups_printer() -> tuple[bool, str]:
+    return await asyncio.get_running_loop().run_in_executor(None, check_cups_printer_sync)
+
+
+def submit_to_cups(
+    pdf_path: Path,
+    queue: str,
+    copies: int,
+    paper_size: str,
+    color_mode: str,
+) -> dict[str, Any]:
+    """Submit a PDF to the host CUPS queue and return its CUPS job reference."""
+    media = {
+        "a4": "iso_a4_210x297mm",
+        "a5": "iso_a5_148x210mm",
+        "letter": "na_letter_8.5x11in",
+    }[paper_size]
+    command = [
+        "lp", "-d", queue, "-n", str(copies),
+        "-o", f"media={media}",
+        "-o", f"print-color-mode={color_mode}",
+        str(pdf_path),
+    ]
+    try:
+        result = _cups_command(command, timeout=60)
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": "提交到 CUPS 队列超时"}
+    except OSError as exc:
+        return {"ok": False, "error": f"无法调用 CUPS：{exc}"}
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip() or "未知错误"
+        LOGGER.error("CUPS submission to %s failed: %s", queue, detail)
+        return {"ok": False, "error": f"CUPS 队列拒绝任务：{detail}"}
+    reference = result.stdout.strip()
+    LOGGER.info("CUPS accepted print job for %s: %s", queue, reference)
+    return {"ok": True, "reference": reference}
 
 # ---------------------------------------------------------------------------
 # IPP protocol helpers
@@ -490,36 +569,42 @@ async def process_print_job(
                 else:
                     raise RuntimeError("打印文件无效")
 
-                document = pdf_path.read_bytes()
-                document_format = "application/pdf"
-                formats = await get_document_formats(
-                    printer["host"], printer["port"], printer.get("protocol", "ipp")
-                )
-                if not formats:
-                    discovered = await discover_printers()
-                    for candidate in discovered:
-                        if candidate["host"] == printer["host"] and candidate["port"] == printer["port"]:
-                            formats = {value.strip() for value in candidate.get("formats", "").split(",") if value.strip()}
-                            if formats:
-                                LOGGER.info("Using mDNS document formats for %s: %s", printer["host"], ", ".join(sorted(formats)))
-                            break
-                if not formats:
-                    formats = {value.strip() for value in (printer.get("formats") or "").split(",") if value.strip()}
-                if document_format not in formats:
-                    if "image/pwg-raster" not in formats:
-                        advertised = ", ".join(sorted(formats)) or "未返回支持格式"
-                        raise RuntimeError(f"打印机不支持 PDF 或 PWG Raster（{advertised}）")
-                    raster_path = await loop.run_in_executor(
-                        None, pdf_to_pwg_raster, pdf_path, tmp_dir, paper_size, color_mode
+                cups_queue = cups_printer_name()
+                if cups_queue:
+                    result = await loop.run_in_executor(
+                        None, submit_to_cups, pdf_path, cups_queue, copies, paper_size, color_mode
                     )
-                    document = raster_path.read_bytes()
-                    document_format = "image/pwg-raster"
+                else:
+                    document = pdf_path.read_bytes()
+                    document_format = "application/pdf"
+                    formats = await get_document_formats(
+                        printer["host"], printer["port"], printer.get("protocol", "ipp")
+                    )
+                    if not formats:
+                        discovered = await discover_printers()
+                        for candidate in discovered:
+                            if candidate["host"] == printer["host"] and candidate["port"] == printer["port"]:
+                                formats = {value.strip() for value in candidate.get("formats", "").split(",") if value.strip()}
+                                if formats:
+                                    LOGGER.info("Using mDNS document formats for %s: %s", printer["host"], ", ".join(sorted(formats)))
+                                break
+                    if not formats:
+                        formats = {value.strip() for value in (printer.get("formats") or "").split(",") if value.strip()}
+                    if document_format not in formats:
+                        if "image/pwg-raster" not in formats:
+                            advertised = ", ".join(sorted(formats)) or "未返回支持格式"
+                            raise RuntimeError(f"打印机不支持 PDF 或 PWG Raster（{advertised}）")
+                        raster_path = await loop.run_in_executor(
+                            None, pdf_to_pwg_raster, pdf_path, tmp_dir, paper_size, color_mode
+                        )
+                        document = raster_path.read_bytes()
+                        document_format = "image/pwg-raster"
 
-                result = await send_print_job(
-                    printer["host"], printer["port"], document, job_name,
-                    document_format, copies, paper_size, color_mode,
-                    printer.get("protocol", "ipp"),
-                )
+                    result = await send_print_job(
+                        printer["host"], printer["port"], document, job_name,
+                        document_format, copies, paper_size, color_mode,
+                        printer.get("protocol", "ipp"),
+                    )
 
         if result.get("ok"):
             update_print_job(job_id, status="completed", completed=True)

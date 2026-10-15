@@ -20,6 +20,10 @@ services:
     environment:
       DATABASE_PATH: /data/gray.db
       FIREBASE_SERVICE_ACCOUNT_FILE: /run/secrets/firebase-service-account.json
+      # The service uses the host network, so this reaches Ubuntu's CUPS
+      # daemon rather than the printer's unreliable embedded IPP endpoint.
+      CUPS_SERVER: 127.0.0.1:631
+      CUPS_PRINTER: ${CUPS_PRINTER:-HP_DeskJet_2700_series_CB7F78}
       HTTP_PROXY: http://127.0.0.1:7890
       HTTPS_PROXY: http://127.0.0.1:7890
       http_proxy: http://127.0.0.1:7890

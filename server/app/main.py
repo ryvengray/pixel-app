@@ -381,11 +381,17 @@ async def inbox() -> list[dict[str, Any]]:
 from . import printer as _printer  # noqa: E402
 
 
+async def _check_print_route(printer: dict) -> tuple[bool, str]:
+    if _printer.cups_printer_name():
+        return await _printer.check_cups_printer()
+    return await _printer.check_online(printer["host"], printer["port"], printer.get("protocol", "ipp"))
+
+
 @app.get("/v1/printers", dependencies=[Depends(require_device)])
 async def get_printers() -> list[dict[str, Any]]:
     printers = _printer.list_printers()
     async def enrich(p: dict) -> dict:
-        online, state = await _printer.check_online(p["host"], p["port"], p.get("protocol", "ipp"))
+        online, state = await _check_print_route(p)
         return {**p, "online": online, "state": state}
     return list(await asyncio.gather(*(enrich(p) for p in printers)))
 
@@ -418,7 +424,7 @@ async def printer_status(printer_id: str) -> dict[str, Any]:
     p = _printer.get_printer(printer_id)
     if not p:
         raise HTTPException(404, "Printer not found")
-    online, state = await _printer.check_online(p["host"], p["port"], p.get("protocol", "ipp"))
+    online, state = await _check_print_route(p)
     if online:
         _printer.touch_printer(printer_id)
     return {"id": printer_id, "online": online, "state": state}
@@ -448,7 +454,7 @@ async def print_document(
         raise HTTPException(400, "Provide a file or text")
     copies = max(1, min(copies, 99))
 
-    online, _ = await _printer.check_online(p["host"], p["port"], p.get("protocol", "ipp"))
+    online, _ = await _check_print_route(p)
     if not online:
         raise HTTPException(503, "Printer is offline")
 
