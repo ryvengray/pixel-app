@@ -33,6 +33,11 @@ public class PrintActivity extends Activity {
     private SharedPreferences prefs;
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
+    private FrameLayout loadingOverlay;
+    private PetScene loadingPet;
+    private TextView loadingStatus;
+    private long loadingShownAt;
+    private Runnable pendingLoadingHide;
 
     private LinearLayout printerContainer;
     private LinearLayout contentContainer;
@@ -96,9 +101,39 @@ public class PrintActivity extends Activity {
             return insets;
         });
 
-        setContentView(root);
+        FrameLayout screen = new FrameLayout(this);
+        screen.setBackgroundColor(bg);
+        screen.addView(root, new FrameLayout.LayoutParams(-1, -1));
+        loadingOverlay = buildLoadingOverlay();
+        screen.addView(loadingOverlay, new FrameLayout.LayoutParams(-1, -1));
+        setContentView(screen);
         loadIncomingFile(getIntent());
+        showLoading("正在加载打印机…");
         loadPrinters();
+    }
+
+    private FrameLayout buildLoadingOverlay() {
+        FrameLayout overlay = new FrameLayout(this);
+        overlay.setBackgroundColor(bg);overlay.setClickable(true);overlay.setFocusable(true);
+        loadingPet = new PetScene(this);loadingPet.setTheme(dark);loadingPet.setMoving(!prefs.getBoolean("reduceMotion", false));
+        overlay.addView(loadingPet, new FrameLayout.LayoutParams(-1, -1));
+        LinearLayout message = new LinearLayout(this);message.setOrientation(LinearLayout.VERTICAL);message.setGravity(Gravity.CENTER);
+        TextView title = new TextView(this);title.setText("Gray 正在准备");title.setTextSize(19);title.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));title.setTextColor(foreground);title.setGravity(Gravity.CENTER);message.addView(title);
+        loadingStatus = new TextView(this);loadingStatus.setTextSize(13);loadingStatus.setTextColor(secondary);loadingStatus.setGravity(Gravity.CENTER);loadingStatus.setPadding(0,dp(8),0,0);message.addView(loadingStatus);
+        FrameLayout.LayoutParams messageParams = new FrameLayout.LayoutParams(-1,-2,Gravity.BOTTOM);messageParams.leftMargin=dp(24);messageParams.rightMargin=dp(24);messageParams.bottomMargin=dp(82);overlay.addView(message,messageParams);
+        overlay.setOnApplyWindowInsetsListener((v,insets)->{android.graphics.Insets bars=insets.getInsets(WindowInsets.Type.systemBars()|WindowInsets.Type.displayCutout());v.setPadding(bars.left,bars.top,bars.right,bars.bottom);return insets;});
+        return overlay;
+    }
+
+    private void showLoading(String status) {
+        if (pendingLoadingHide != null) handler.removeCallbacks(pendingLoadingHide);
+        loadingStatus.setText(status);loadingOverlay.animate().cancel();loadingOverlay.setAlpha(1f);loadingOverlay.setVisibility(View.VISIBLE);loadingOverlay.bringToFront();loadingShownAt=android.os.SystemClock.uptimeMillis();loadingPet.resumeScene();
+    }
+
+    private void hideLoading() {
+        long wait=Math.max(0,500-(android.os.SystemClock.uptimeMillis()-loadingShownAt));
+        pendingLoadingHide=()->loadingOverlay.animate().alpha(0f).setDuration(220).withEndAction(()->{loadingOverlay.setVisibility(View.GONE);loadingOverlay.setAlpha(1f);loadingPet.pauseScene();}).start();
+        handler.postDelayed(pendingLoadingHide,wait);
     }
 
     private void loadIncomingFile(Intent intent) {
@@ -167,14 +202,17 @@ public class PrintActivity extends Activity {
         tp.leftMargin = dp(14);
         header.addView(identity, tp);
 
-        LinearLayout refresh = new LinearLayout(this);refresh.setGravity(Gravity.CENTER);refresh.setOrientation(LinearLayout.HORIZONTAL);
-        refresh.setBackground(toolbarSurface(false));refresh.setClickable(true);refresh.setFocusable(true);
+        TextView jobs = new TextView(this);jobs.setText("任务");jobs.setTextSize(14);jobs.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));jobs.setTextColor(foreground);jobs.setGravity(Gravity.CENTER);jobs.setIncludeFontPadding(false);
+        jobs.setBackground(toolbarSurface(false));jobs.setClickable(true);jobs.setFocusable(true);jobs.setContentDescription("查看打印任务");
+        jobs.setOnClickListener(v -> startActivity(new Intent(this, PrintJobsActivity.class)));
+        LinearLayout.LayoutParams jobsParams=new LinearLayout.LayoutParams(dp(66),dp(48));jobsParams.rightMargin=dp(8);header.addView(jobs,jobsParams);
+
+        FrameLayout refresh = new FrameLayout(this);
+        refresh.setBackground(toolbarSurface(true));refresh.setClickable(true);refresh.setFocusable(true);
         refresh.setContentDescription("刷新打印机列表");
         refresh.setOnClickListener(v -> refreshPrinters());
-        ToolbarGlyph refreshGlyph=new ToolbarGlyph(true);refresh.addView(refreshGlyph,new LinearLayout.LayoutParams(dp(23),dp(23)));
-        TextView refreshText=new TextView(this);refreshText.setText("刷新");refreshText.setTextSize(14);refreshText.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));refreshText.setTextColor(foreground);refreshText.setIncludeFontPadding(false);
-        LinearLayout.LayoutParams rtp=new LinearLayout.LayoutParams(-2,-2);rtp.leftMargin=dp(7);refresh.addView(refreshText,rtp);
-        header.addView(refresh, new LinearLayout.LayoutParams(dp(92), dp(48)));
+        ToolbarGlyph refreshGlyph=new ToolbarGlyph(true);refresh.addView(refreshGlyph,new FrameLayout.LayoutParams(dp(25),dp(25),Gravity.CENTER));
+        header.addView(refresh, new LinearLayout.LayoutParams(dp(48), dp(48)));
 
         return header;
     }
@@ -438,24 +476,26 @@ public class PrintActivity extends Activity {
         executor.execute(() -> {
             try {
                 List<PrinterApi.Printer> printers = PrinterApi.listPrinters(PrintActivity.this);
-                handler.post(() -> renderPrinters(printers));
+                handler.post(() -> {renderPrinters(printers);hideLoading();});
             } catch (Exception e) {
-                handler.post(() -> showToast(e.getMessage()));
+                handler.post(() -> {renderPrinters(java.util.Collections.emptyList());hideLoading();showToast(e.getMessage());});
             }
         });
     }
 
     private void refreshPrinters() {
+        showLoading("正在扫描局域网打印机…");
         executor.execute(() -> {
             try {
                 PrinterApi.discover(PrintActivity.this);
                 List<PrinterApi.Printer> printers = PrinterApi.listPrinters(PrintActivity.this);
                 handler.post(() -> {
                     renderPrinters(printers);
+                    hideLoading();
                     showToast("已刷新打印机列表");
                 });
             } catch (Exception e) {
-                handler.post(() -> showToast("刷新失败：" + e.getMessage()));
+                handler.post(() -> {hideLoading();showToast("刷新失败：" + e.getMessage());});
             }
         });
     }
@@ -602,6 +642,7 @@ public class PrintActivity extends Activity {
         printing = true;
         printBtn.setEnabled(false);
         printBtn.setText("打印中...");
+        showLoading("正在发送打印任务…");
         final String pid = selectedPrinterId;
         final int c = copies;
         final boolean fileJob=fileMode;final Uri fileUri=selectedFileUri;final String jobText=fileJob?null:((EditText)textInput).getText().toString().trim();final String paper=paperSize, color=colorMode;
@@ -616,6 +657,7 @@ public class PrintActivity extends Activity {
                     printing = false;
                     printBtn.setEnabled(true);
                     printBtn.setText("🖨  开始打印");
+                    hideLoading();
                     showToast("打印任务已发送");
                     if (fileJob) {
                         selectedFileUri = null;
@@ -631,6 +673,7 @@ public class PrintActivity extends Activity {
                     printing = false;
                     printBtn.setEnabled(true);
                     printBtn.setText("🖨  开始打印");
+                    hideLoading();
                     showToast("打印失败：" + e.getMessage());
                 });
             }
@@ -645,10 +688,18 @@ public class PrintActivity extends Activity {
     protected void onResume() {
         super.onResume();
         applyColors();
+        if (loadingOverlay != null && loadingOverlay.getVisibility() == View.VISIBLE) loadingPet.resumeScene();
+    }
+
+    @Override
+    protected void onPause() {
+        if (loadingPet != null) loadingPet.pauseScene();
+        super.onPause();
     }
 
     @Override
     protected void onDestroy() {
+        if (pendingLoadingHide != null) handler.removeCallbacks(pendingLoadingHide);
         super.onDestroy();
         executor.shutdownNow();
     }

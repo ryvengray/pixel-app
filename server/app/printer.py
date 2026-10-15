@@ -44,24 +44,108 @@ def _build_request(operation: int, printer_uri: str, extra_ops: bytes = b"", job
     return req + data
 
 
-def _printer_uri(host: str, port: int, scheme: str = "ipp") -> str:
-    return f"{scheme}://{host}:{port}/ipp/print"
+IPP_PATHS = ["/ipp/print", "/ipp", "/printers/ipp", ""]
+
+
+def _printer_uri(host: str, port: int, scheme: str = "ipp", path: str = "/ipp/print") -> str:
+    return f"{scheme}://{host}:{port}{path}"
+
+
+def _http_url(uri: str) -> str:
+    if uri.startswith("ipps://"):
+        return "https://" + uri.removeprefix("ipps://")
+    return "http://" + uri.removeprefix("ipp://")
+
+
+async def find_ipp_path(host: str, port: int, scheme: str = "ipp") -> str | None:
+    timeout = httpx.Timeout(connect=3, read=3, write=3, pool=3)
+    async with httpx.AsyncClient(
+        timeout=timeout, trust_env=False, verify=scheme != "ipps"
+    ) as client:
+        for path in IPP_PATHS:
+            uri = _printer_uri(host, port, scheme, path)
+            try:
+                response = await client.post(
+                    _http_url(uri),
+                    content=_build_request(0x000B, uri),
+                    headers={"Content-Type": "application/ipp"},
+                )
+                if response.status_code == 200 and len(response.content) >= 4:
+                    return path
+            except httpx.HTTPError:
+                continue
+    return None
+
+
+def _ipp_text_values(payload: bytes, attribute_name: str) -> set[str]:
+    """Extract repeated text values for one attribute from a binary IPP response."""
+    values: set[str] = set()
+    index = 8  # IPP version, status code, request id
+    current_name = ""
+    while index < len(payload):
+        tag = payload[index]
+        index += 1
+        if tag == 0x03:  # end-of-attributes
+            break
+        if tag <= 0x0F:  # delimiter tag
+            current_name = ""
+            continue
+        if index + 4 > len(payload):
+            break
+        name_length = struct.unpack(">H", payload[index:index + 2])[0]
+        index += 2
+        if index + name_length + 2 > len(payload):
+            break
+        if name_length:
+            current_name = payload[index:index + name_length].decode("utf-8", errors="replace")
+        index += name_length
+        value_length = struct.unpack(">H", payload[index:index + 2])[0]
+        index += 2
+        if index + value_length > len(payload):
+            break
+        value = payload[index:index + value_length]
+        index += value_length
+        if current_name == attribute_name:
+            values.add(value.decode("utf-8", errors="replace"))
+    return values
+
+
+async def get_document_formats(host: str, port: int, scheme: str = "ipp") -> set[str]:
+    path = await find_ipp_path(host, port, scheme)
+    if path is None:
+        return set()
+    uri = _printer_uri(host, port, scheme, path)
+    requested = _str_attr(0x44, "requested-attributes", "document-format-supported")
+    timeout = httpx.Timeout(connect=5, read=5, write=5, pool=5)
+    try:
+        async with httpx.AsyncClient(
+            timeout=timeout, trust_env=False, verify=scheme != "ipps"
+        ) as client:
+            response = await client.post(
+                _http_url(uri),
+                content=_build_request(0x000B, uri, extra_ops=requested),
+                headers={"Content-Type": "application/ipp"},
+            )
+        if response.status_code != 200:
+            return set()
+        return _ipp_text_values(response.content, "document-format-supported")
+    except httpx.HTTPError:
+        return set()
 
 
 # ---------------------------------------------------------------------------
 # Printer status check (IPP Get-Printer-Attributes)
 # ---------------------------------------------------------------------------
 
-async def check_online(host: str, port: int = 631) -> tuple[bool, str]:
+async def check_online(host: str, port: int = 631, scheme: str = "ipp") -> tuple[bool, str]:
     """Returns (online, printer_state_description)."""
-    ipp_paths = ["/ipp/print", "/ipp", "/printers/ipp", ""]
-    for path in ipp_paths:
-        uri = f"ipp://{host}:{port}{path}"
+    for path in IPP_PATHS:
+        uri = _printer_uri(host, port, scheme, path)
         body = _build_request(0x000B, uri)
         try:
-            async with httpx.AsyncClient(timeout=3, trust_env=False) as client:
+            async with httpx.AsyncClient(timeout=3, trust_env=False, verify=scheme != "ipps") as client:
                 resp = await client.post(
-                    f"http://{host}:{port}{path}",
+                    _http_url(uri),
                     content=body,
                     headers={"Content-Type": "application/ipp"},
                 )
@@ -110,8 +194,11 @@ DOC_FORMATS = {
 }
 
 
-async def send_print_job(host: str, port: int, data: bytes, job_name: str, doc_format: str, copies: int = 1, paper_size: str = "a4", color_mode: str = "monochrome") -> dict[str, Any]:
-    uri = _printer_uri(host, port)
+async def send_print_job(host: str, port: int, data: bytes, job_name: str, doc_format: str, copies: int = 1, paper_size: str = "a4", color_mode: str = "monochrome", scheme: str = "ipp") -> dict[str, Any]:
+    path = await find_ipp_path(host, port, scheme)
+    if path is None:
+        return {"ok": False, "error": "未找到打印机的 IPP 接收地址"}
+    uri = _printer_uri(host, port, scheme, path)
     extra = _str_attr(0x42, "job-name", job_name) + _str_attr(0x49, "document-format", doc_format)
     job_attrs = _int_attr(0x21, "copies", copies) if copies > 1 else b""
     media = {"a4": "iso_a4_210x297mm", "a5": "iso_a5_148x210mm", "letter": "na_letter_8.5x11in"}[paper_size]
@@ -119,9 +206,13 @@ async def send_print_job(host: str, port: int, data: bytes, job_name: str, doc_f
     job_attrs += _str_attr(0x44, "print-color-mode", color_mode)
     body = _build_request(0x0002, uri, extra_ops=extra, job_attrs=job_attrs, data=data)
     try:
-        async with httpx.AsyncClient(timeout=60, trust_env=False) as client:
+        # Consumer printers often pause while spooling or processing a PDF and
+        # may stop reading briefly. Keep connect failures fast, but allow the
+        # document body enough time to drain without blocking the API request.
+        timeout = httpx.Timeout(connect=8, read=180, write=600, pool=8)
+        async with httpx.AsyncClient(timeout=timeout, trust_env=False, verify=scheme != "ipps") as client:
             resp = await client.post(
-                uri.replace("ipp://", "http://").replace("ipps://", "https://"),
+                _http_url(uri),
                 content=body,
                 headers={"Content-Type": "application/ipp"},
             )
@@ -131,8 +222,15 @@ async def send_print_job(host: str, port: int, data: bytes, job_name: str, doc_f
                     return {"ok": True}
                 return {"ok": False, "error": f"IPP status {status_code:#06x}"}
             return {"ok": False, "error": f"HTTP {resp.status_code}"}
+    except httpx.WriteTimeout:
+        return {"ok": False, "error": "向打印机传输文件超时"}
+    except httpx.ReadTimeout:
+        return {"ok": False, "error": "打印机接收文件后没有及时确认"}
+    except httpx.ConnectError:
+        return {"ok": False, "error": "无法连接打印机"}
     except Exception as exc:
-        return {"ok": False, "error": str(exc)}
+        message = str(exc).strip() or type(exc).__name__
+        return {"ok": False, "error": message}
 
 
 # ---------------------------------------------------------------------------
@@ -215,6 +313,30 @@ def text_to_pdf(text: str, output_dir: Path, job_name: str = "text") -> Path:
     txt_path = output_dir / f"{job_name}.txt"
     txt_path.write_text(text, encoding="utf-8")
     return convert_to_pdf(txt_path, output_dir)
+
+
+def pdf_to_pwg_raster(source: Path, output_dir: Path, paper_size: str, color_mode: str) -> Path:
+    """Convert PDF to PWG Raster for driverless printers that do not accept PDF."""
+    media = {
+        "a4": "iso_a4_210x297mm",
+        "a5": "iso_a5_148x210mm",
+        "letter": "na_letter_8.5x11in",
+    }[paper_size]
+    target = output_dir / f"{source.stem}.pwg"
+    with target.open("wb") as output:
+        result = subprocess.run(
+            [
+                "cupsfilter", "-i", "application/pdf", "-m", "image/pwg-raster",
+                "-o", f"media={media}", "-o", f"print-color-mode={color_mode}", str(source),
+            ],
+            stdout=output,
+            stderr=subprocess.PIPE,
+            timeout=180,
+        )
+    if result.returncode != 0 or not target.exists() or target.stat().st_size == 0:
+        message = result.stderr.decode(errors="replace").strip()
+        raise RuntimeError(f"PWG Raster conversion failed: {message or result.returncode}")
+    return target
 
 
 # ---------------------------------------------------------------------------

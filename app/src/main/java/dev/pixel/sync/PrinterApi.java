@@ -26,6 +26,23 @@ public final class PrinterApi {
         }
     }
 
+    public static final class PrintJob {
+        public final String id, printerId, printerName, fileName, fileType, status, error, createdAt, completedAt;
+        public final int copies;
+        PrintJob(JSONObject o) {
+            id = o.optString("id", "");
+            printerId = o.optString("printer_id", "");
+            printerName = o.optString("printer_name", "未知打印机");
+            fileName = o.optString("file_name", "未命名文件");
+            fileType = o.optString("file_type", "");
+            copies = o.optInt("copies", 1);
+            status = o.optString("status", "unknown");
+            error = o.optString("error", "");
+            createdAt = o.optString("created_at", "");
+            completedAt = o.optString("completed_at", "");
+        }
+    }
+
     private static String read(InputStream s) throws IOException {
         ByteArrayOutputStream out = new ByteArrayOutputStream(); byte[] b = new byte[4096]; int n;
         while ((n = s.read(b)) != -1) out.write(b, 0, n);
@@ -78,6 +95,17 @@ public final class PrinterApi {
         JSONArray arr = new JSONArray(body);
         List<Printer> result = new ArrayList<>();
         for (int i = 0; i < arr.length(); i++) result.add(new Printer(arr.getJSONObject(i)));
+        return result;
+    }
+
+    public static List<PrintJob> listPrintJobs(Context ctx) throws Exception {
+        HttpURLConnection c = open(ctx, "/v1/print-jobs", "GET");
+        int code = c.getResponseCode();
+        String body = read(code < 300 ? c.getInputStream() : c.getErrorStream());
+        if (code >= 300) throw new IOException("请求失败（" + code + "）：" + body);
+        JSONArray arr = new JSONArray(body);
+        List<PrintJob> result = new ArrayList<>();
+        for (int i = 0; i < arr.length(); i++) result.add(new PrintJob(arr.getJSONObject(i)));
         return result;
     }
 

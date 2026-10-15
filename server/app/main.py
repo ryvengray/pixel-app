@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import httpx
-from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
 
@@ -376,9 +376,24 @@ from . import printer as _printer  # noqa: E402
 async def get_printers() -> list[dict[str, Any]]:
     printers = _printer.list_printers()
     async def enrich(p: dict) -> dict:
-        online, state = await _printer.check_online(p["host"], p["port"])
+        online, state = await _printer.check_online(p["host"], p["port"], p.get("protocol", "ipp"))
         return {**p, "online": online, "state": state}
     return list(await asyncio.gather(*(enrich(p) for p in printers)))
+
+
+@app.get("/v1/print-jobs", dependencies=[Depends(require_device)])
+async def get_print_jobs() -> list[dict[str, Any]]:
+    with connect() as db:
+        rows = db.execute(
+            """
+            SELECT j.*, COALESCE(p.name, '未知打印机') AS printer_name
+            FROM print_job AS j
+            LEFT JOIN printer AS p ON p.id = j.printer_id
+            ORDER BY j.created_at DESC
+            LIMIT 50
+            """
+        ).fetchall()
+    return [dict(row) for row in rows]
 
 
 @app.post("/v1/printers/discover", dependencies=[Depends(require_device)])
@@ -396,7 +411,7 @@ async def printer_status(printer_id: str) -> dict[str, Any]:
     p = _printer.get_printer(printer_id)
     if not p:
         raise HTTPException(404, "Printer not found")
-    online, state = await _printer.check_online(p["host"], p["port"])
+    online, state = await _printer.check_online(p["host"], p["port"], p.get("protocol", "ipp"))
     if online:
         _printer.touch_printer(printer_id)
     return {"id": printer_id, "online": online, "state": state}
@@ -414,8 +429,53 @@ IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png"}
 OFFICE_SUFFIXES = {".docx", ".doc", ".xlsx", ".xls"}
 
 
+async def deliver_print_job(
+    job_id: str,
+    printer: dict[str, Any],
+    pdf_bytes: bytes,
+    job_name: str,
+    copies: int,
+    paper_size: str,
+    color_mode: str,
+) -> None:
+    try:
+        formats = await _printer.get_document_formats(
+            printer["host"], printer["port"], printer.get("protocol", "ipp")
+        )
+        document_bytes = pdf_bytes
+        document_format = "application/pdf"
+        if document_format not in formats:
+            if "image/pwg-raster" not in formats:
+                advertised = ", ".join(sorted(formats)) or "未返回支持格式"
+                raise RuntimeError(f"打印机不支持 PDF 或 PWG Raster（{advertised}）")
+            with tempfile.TemporaryDirectory() as tmp:
+                source = Path(tmp) / "document.pdf"
+                source.write_bytes(pdf_bytes)
+                pwg_path = await asyncio.get_event_loop().run_in_executor(
+                    None, _printer.pdf_to_pwg_raster, source, Path(tmp), paper_size, color_mode
+                )
+                document_bytes = pwg_path.read_bytes()
+                document_format = "image/pwg-raster"
+        result = await _printer.send_print_job(
+            printer["host"], printer["port"], document_bytes, job_name,
+            document_format, copies, paper_size, color_mode,
+            printer.get("protocol", "ipp"),
+        )
+        status = "completed" if result.get("ok") else "failed"
+        error = result.get("error")
+    except Exception as exc:
+        status = "failed"
+        error = str(exc).strip() or type(exc).__name__
+    with connect() as db:
+        db.execute(
+            "UPDATE print_job SET status=?, error=?, completed_at=? WHERE id=?",
+            (status, error, utc_now(), job_id),
+        )
+
+
 @app.post("/v1/printers/{printer_id}/print", dependencies=[Depends(require_device)])
 async def print_document(
+    background_tasks: BackgroundTasks,
     printer_id: str,
     file: UploadFile | None = File(None),
     text: str | None = Form(None),
@@ -430,7 +490,7 @@ async def print_document(
         raise HTTPException(400, "Provide a file or text")
     copies = max(1, min(copies, 99))
 
-    online, _ = await _printer.check_online(p["host"], p["port"])
+    online, _ = await _printer.check_online(p["host"], p["port"], p.get("protocol", "ipp"))
     if not online:
         raise HTTPException(503, "Printer is offline")
 
@@ -473,17 +533,11 @@ async def print_document(
                     "INSERT INTO print_job(id,printer_id,file_name,file_type,copies,status,created_at) VALUES(?,?,?,?,?,?,?)",
                     (job_id, printer_id, job_name, file_type, copies, "printing", utc_now()),
                 )
-            result = await _printer.send_print_job(p["host"], p["port"], pdf_bytes, job_name, "application/pdf", copies, paper_size, color_mode)
-            status = "completed" if result.get("ok") else "failed"
-            error = result.get("error")
-            with connect() as db:
-                db.execute(
-                    "UPDATE print_job SET status=?, error=?, completed_at=? WHERE id=?",
-                    (status, error, utc_now(), job_id),
-                )
-            if not result.get("ok"):
-                raise HTTPException(502, error or "Print job failed")
-            return {"ok": True, "job_id": job_id}
+            background_tasks.add_task(
+                deliver_print_job, job_id, p, pdf_bytes, job_name,
+                copies, paper_size, color_mode,
+            )
+            return {"ok": True, "job_id": job_id, "status": "printing"}
         except HTTPException:
             raise
         except Exception as exc:
