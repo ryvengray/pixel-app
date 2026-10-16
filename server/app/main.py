@@ -186,8 +186,9 @@ def upsert_memory(record: dict[str, Any]) -> None:
 
 
 def create_pairing() -> dict[str, str]:
-    if not PUBLIC_BASE_URL.startswith("https://"):
-        raise RuntimeError("GRAY_PUBLIC_BASE_URL must be a public HTTPS URL")
+    allow_insecure = os.getenv("ALLOW_INSECURE_HTTP", "").lower() in ("1", "true", "yes")
+    if not PUBLIC_BASE_URL.startswith("https://") and not allow_insecure:
+        raise RuntimeError("GRAY_PUBLIC_BASE_URL must be a public HTTPS URL (or set ALLOW_INSECURE_HTTP=1 for dev)")
     pairing_id = secrets.token_urlsafe(12)
     secret = secrets.token_urlsafe(32)
     expires_at = (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat()
@@ -501,7 +502,7 @@ Use only a concrete topic in the supplied conversation or explicit saved memorie
             raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0]
         content = json.loads(raw).get("content", "")
         return {"content": content.strip()[:120] if isinstance(content, str) else ""}
-    except (HTTPException, ValueError, TypeError, AttributeError):
+    except Exception:
         return {"content": ""}
 
 

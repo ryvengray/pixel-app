@@ -23,7 +23,7 @@ public class MainActivity extends Activity {
  private boolean dark;
  private FrameLayout overlay;
  private FrameLayout root;
- private TextView title,menuButton,historyButton,petTouch;
+ private TextView title,menuButton,petTouch;
  private Dialog menu;
  private Dialog fileActionDialog;
  private int foreground,secondary;
@@ -49,9 +49,8 @@ public class MainActivity extends Activity {
   FrameLayout.LayoutParams pp=new FrameLayout.LayoutParams(dp(290),dp(300),Gravity.CENTER);pp.bottomMargin=dp(30);overlay.addView(petTouch,pp);
   home=new HomeConversationView(this,()->scene.react());home.setElevation(dp(14));
   overlay.addView(home,new FrameLayout.LayoutParams(-1,-1));
-  historyButton=text("历史",14);historyButton.setGravity(Gravity.CENTER);historyButton.setElevation(dp(16));historyButton.setContentDescription("查看完整聊天历史");historyButton.setOnClickListener(v->home.showHistory());
-  FrameLayout.LayoutParams hp=new FrameLayout.LayoutParams(dp(52),dp(48),Gravity.TOP|Gravity.RIGHT);hp.topMargin=dp(18);hp.rightMargin=dp(80);overlay.addView(historyButton,hp);
   root.setOnApplyWindowInsetsListener((v,insets)->{android.graphics.Insets safe=insets.getInsets(WindowInsets.Type.systemBars()|WindowInsets.Type.displayCutout());android.graphics.Insets ime=insets.getInsets(WindowInsets.Type.ime());overlay.setPadding(safe.left,safe.top,safe.right,safe.bottom);home.setPadding(0,0,0,Math.max(0,ime.bottom-safe.bottom));home.onKeyboard(insets.isVisible(WindowInsets.Type.ime()));return insets;});
+  root.setOnTouchListener((v,event)->{if(event.getAction()==android.view.MotionEvent.ACTION_DOWN){View focus=getCurrentFocus();if(focus instanceof android.widget.EditText){android.view.inputmethod.InputMethodManager imm=(android.view.inputmethod.InputMethodManager)getSystemService(Activity.INPUT_METHOD_SERVICE);imm.hideSoftInputFromWindow(focus.getWindowToken(),0);focus.clearFocus();}}return false;});
   setContentView(root);applyColors();
   if(state==null)root.post(()->handleIncomingFile(getIntent()));
  }
@@ -60,7 +59,7 @@ public class MainActivity extends Activity {
  private void applyColors(){
   foreground=Color.parseColor(dark?"#E5EDE3":"#263C31");secondary=Color.parseColor(dark?"#92A99A":"#708675");
   root.setBackgroundColor(Color.parseColor(dark?"#102019":"#F0F5E9"));
-  title.setTextColor(foreground);menuButton.setTextColor(foreground);historyButton.setTextColor(foreground);
+  title.setTextColor(foreground);menuButton.setTextColor(foreground);
   menuButton.setBackground(surface(Color.parseColor(dark?"#263D33":"#DDE8DC"),24));scene.setTheme(dark);home.setTheme(dark);
   WindowInsetsController controller=getWindow().getInsetsController();if(controller!=null){
    int appearance=WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS|WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;
@@ -76,6 +75,7 @@ public class MainActivity extends Activity {
   TextView subtitle=text("选择你想做的事",13);subtitle.setTextColor(secondary);subtitle.setPadding(0,dp(3),0,dp(17));sheet.addView(subtitle);
   menuSection(sheet,"GRETA");
   sheet.addView(menuAction("✦   和 Greta 聊聊","继续这段对话",()->{menu.dismiss();home.focusInput();}));
+  sheet.addView(menuAction("▤   历史记录","查看完整聊天历史",()->{menu.dismiss();home.showHistory();}));
   sheet.addView(menuAction("▤   长期记忆","查看和修正 Greta 记住的事",()->{menu.dismiss();startActivity(new Intent(this,MemoryActivity.class));}));
   sheet.addView(menuAction("⚙   助理设置","配对设备与服务地址",()->{menu.dismiss();startActivity(new Intent(this,AssistantSettingsActivity.class));}));
   Switch proactive=new Switch(this);proactive.setText("偶尔主动聊两句");proactive.setTextColor(foreground);proactive.setChecked(getSharedPreferences("home_conversation",0).getBoolean("proactive",true));proactive.setOnCheckedChangeListener((v,checked)->getSharedPreferences("home_conversation",0).edit().putBoolean("proactive",checked).apply());sheet.addView(proactive);

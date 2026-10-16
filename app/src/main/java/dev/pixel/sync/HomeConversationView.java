@@ -28,7 +28,7 @@ public final class HomeConversationView extends FrameLayout {
     private VoiceInputOverlay voice;
     private Dialog detail;
     private boolean dark, busy, active, closed, touching, keyboard, syncing;
-    private long generation, lastInteraction;
+    private long generation, lastInteraction, pausedAt;
     private int sceneHeight;
     private boolean greetingEvaluated;
     private String requestedMessageId;
@@ -43,7 +43,7 @@ public final class HomeConversationView extends FrameLayout {
         setClipChildren(false);
         assistant=label("",16);assistant.setPadding(dp(17),dp(12),dp(17),dp(12));assistant.setMaxLines(4);assistant.setEllipsize(TextUtils.TruncateAt.END);
         assistant.setMaxWidth(dp(290));assistant.setContentDescription("Greta 最新发言，点击展开");assistant.setOnClickListener(v->showText("Greta",assistantText));
-        FrameLayout.LayoutParams ap=new FrameLayout.LayoutParams(-2,-2,Gravity.TOP|Gravity.CENTER_HORIZONTAL);ap.setMargins(dp(24),dp(88),dp(24),0);addView(assistant,ap);
+        FrameLayout.LayoutParams ap=new FrameLayout.LayoutParams(-2,-2,Gravity.TOP|Gravity.CENTER_HORIZONTAL);ap.setMargins(dp(24),dp(40),dp(24),0);addView(assistant,ap);
         // A short tail makes the speech belong to the character without covering her face.
         TextView tail=label("▾",22);tail.setTextColor(Color.TRANSPARENT);tail.setTag("tail");
         FrameLayout.LayoutParams tp=new FrameLayout.LayoutParams(dp(28),dp(26),Gravity.TOP|Gravity.CENTER_HORIZONTAL);tp.topMargin=dp(146);addView(tail,tp);
@@ -78,7 +78,7 @@ public final class HomeConversationView extends FrameLayout {
     }
     @Override protected void onLayout(boolean changed,int left,int top,int right,int bottomEdge){
         super.onLayout(changed,left,top,right,bottomEdge);sceneHeight=Math.max(sceneHeight,getHeight());
-        if(assistant.getVisibility()==VISIBLE){FrameLayout.LayoutParams p=(FrameLayout.LayoutParams)assistant.getLayoutParams();int minimum=keyboard&&user.getVisibility()==VISIBLE?user.getBottom()+dp(10):dp(82);int margin=Math.max(minimum,Math.round(sceneHeight*.32f)-assistant.getMeasuredHeight()-dp(16));if(p.topMargin!=margin){p.topMargin=margin;assistant.setLayoutParams(p);}}
+        if(assistant.getVisibility()==VISIBLE){FrameLayout.LayoutParams p=(FrameLayout.LayoutParams)assistant.getLayoutParams();int minimum=keyboard&&user.getVisibility()==VISIBLE?user.getBottom()+dp(10):dp(40);int margin=Math.max(minimum,Math.round(sceneHeight*.22f)-assistant.getMeasuredHeight()-dp(16));if(p.topMargin!=margin){p.topMargin=margin;assistant.setLayoutParams(p);}}
     }
     private int dp(float n){return Math.round(n*getResources().getDisplayMetrics().density);}
     private TextView label(String text,int size){TextView v=new TextView(activity);v.setText(text);v.setTextSize(size);return v;}
@@ -151,8 +151,8 @@ public final class HomeConversationView extends FrameLayout {
             state.setText("未能确认发送结果 · 点击重试");state.setVisibility(VISIBLE);
         });}});
     }
-    public void resume(){active=true;if(!busy)restore();main.removeCallbacks(poll);main.post(poll);main.postDelayed(this::maybeGreet,1400);}
-    public void pause(){active=false;main.removeCallbacks(poll);main.removeCallbacks(beginVoice);touching=false;if(voice!=null)voice.interrupt();}
+    public void resume(){active=true;if(!busy)restore();main.removeCallbacks(poll);main.post(poll);if(pausedAt>0&&System.currentTimeMillis()-pausedAt>30*60*1000L)greetingEvaluated=false;main.postDelayed(this::maybeGreet,1400);}
+    public void pause(){active=false;pausedAt=System.currentTimeMillis();main.removeCallbacks(poll);main.removeCallbacks(beginVoice);touching=false;if(voice!=null)voice.interrupt();}
     private boolean idleForProactive(){return active&&!closed&&!busy&&pendingGroup==null&&!keyboard&&input.length()==0&&!touching&&voice==null&&(detail==null||!detail.isShowing())&&activity.hasWindowFocus()&&System.currentTimeMillis()-lastInteraction>1200;}
     private void maybeGreet(){
         if(greetingEvaluated||!idleForProactive()||!prefs.getBoolean("proactive",true))return;

@@ -24,11 +24,11 @@ services:
       # daemon rather than the printer's unreliable embedded IPP endpoint.
       CUPS_SERVER: 127.0.0.1:631
       CUPS_PRINTER: ${CUPS_PRINTER:-HP_DeskJet_2700_series_CB7F78}
-      HTTP_PROXY: http://127.0.0.1:7890
-      HTTPS_PROXY: http://127.0.0.1:7890
-      http_proxy: http://127.0.0.1:7890
-      https_proxy: http://127.0.0.1:7890
-    command: ["uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8787", "--proxy-headers"]
+      HTTP_PROXY: http://127.0.0.1:${HTTP_PROXY_PORT:-7890}
+      HTTPS_PROXY: http://127.0.0.1:${HTTP_PROXY_PORT:-7890}
+      http_proxy: http://127.0.0.1:${HTTP_PROXY_PORT:-7890}
+      https_proxy: http://127.0.0.1:${HTTP_PROXY_PORT:-7890}
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8787", "--proxy-headers"]
     volumes:
       - ./server/data:/data
     secrets:

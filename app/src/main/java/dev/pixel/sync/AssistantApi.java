@@ -56,7 +56,7 @@ public final class AssistantApi {
         post(url+"/v1/devices",token,new JSONObject().put("fcm_token",fcmToken));
     }
     public static void claimPairing(Context context,String rawCode,String deviceName)throws Exception{
-        JSONObject code=new JSONObject(rawCode);if(code.optInt("version")!=1)throw new IOException("这不是 Greta 的配对二维码。");String endpoint=code.optString("endpoint","");String secret=code.optString("secret","");if(!endpoint.startsWith("https://")||secret.isEmpty())throw new IOException("二维码内容无效。");
+        JSONObject code=new JSONObject(rawCode);if(code.optInt("version")!=1)throw new IOException("这不是 Greta 的配对二维码。");String endpoint=code.optString("endpoint","");String secret=code.optString("secret","");if(!(endpoint.startsWith("https://")||endpoint.startsWith("http://"))||secret.isEmpty())throw new IOException("二维码内容无效。");
         JSONObject result=new JSONObject(post(endpoint,"",new JSONObject().put("secret",secret).put("device_name",deviceName)));String deviceToken=result.getString("device_token");int marker=endpoint.indexOf("/v1/pairings/");if(marker<0)throw new IOException("二维码服务地址无效。");String base=endpoint.substring(0,marker);context.getSharedPreferences("gray_settings",Context.MODE_PRIVATE).edit().putString("server_url",base).apply();new SecureStore(context).put("device_token",deviceToken);
     }
 }
