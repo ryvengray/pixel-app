@@ -2,7 +2,8 @@
 .gradle-user/
 **/build/
 local.properties
-.gray-wireless-device
+.greta-wireless-device
+.qoder/
 .idea/
 *.iml
 .signing/
