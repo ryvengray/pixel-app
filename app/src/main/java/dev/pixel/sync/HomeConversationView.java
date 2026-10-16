@@ -30,6 +30,7 @@ public final class HomeConversationView extends FrameLayout {
     private boolean dark, busy, active, closed, touching, keyboard, syncing;
     private long generation, lastInteraction, pausedAt;
     private int sceneHeight;
+    private float touchStartX, touchStartY;
     private boolean greetingEvaluated;
     private String requestedMessageId;
     private String pendingGroup, inFlightGroup, assistantText = "", userText = "", resultText = "";
@@ -204,8 +205,8 @@ public final class HomeConversationView extends FrameLayout {
     private String friendlyTime(String value){try{return java.time.OffsetDateTime.parse(value).atZoneSameInstant(java.time.ZoneId.systemDefault()).format(java.time.format.DateTimeFormatter.ofPattern("MM-dd HH:mm"));}catch(Exception e){return value;}}
     private void actOnReminder(String id,String action,View row){row.setEnabled(false);background.execute(()->{try{AssistantApi.reminderAction(activity,id,action);main.post(()->{if(closed)return;((android.view.ViewGroup)row.getParent()).removeView(row);String text=action.equals("complete")?"提醒已完成":"已延后 15 分钟";store.addMessage("tool",text);Toast.makeText(activity,text,Toast.LENGTH_SHORT).show();});}catch(Exception e){main.post(()->{row.setEnabled(true);Toast.makeText(activity,"操作未完成，请重试",Toast.LENGTH_SHORT).show();});}});}
     private boolean voiceTouch(android.view.MotionEvent event){
-        if(event.getActionMasked()==MotionEvent.ACTION_DOWN){touching=true;lastInteraction=System.currentTimeMillis();main.postDelayed(beginVoice,300);return true;}
-        if(event.getActionMasked()==MotionEvent.ACTION_MOVE){if(voice!=null)voice.move(event.getRawX(),event.getRawY());return true;}
+        if(event.getActionMasked()==MotionEvent.ACTION_DOWN){touching=true;touchStartX=event.getRawX();touchStartY=event.getRawY();lastInteraction=System.currentTimeMillis();main.postDelayed(beginVoice,500);return true;}
+        if(event.getActionMasked()==MotionEvent.ACTION_MOVE){float dx=event.getRawX()-touchStartX,dy=event.getRawY()-touchStartY;if(voice==null&&Math.abs(dy)>dp(20))touching=false;if(voice!=null)voice.move(event.getRawX(),event.getRawY());return true;}
         if(event.getActionMasked()==MotionEvent.ACTION_UP){main.removeCallbacks(beginVoice);touching=false;if(voice!=null)voice.release(event.getRawX(),event.getRawY());else speak.performClick();return true;}
         if(event.getActionMasked()==MotionEvent.ACTION_CANCEL){main.removeCallbacks(beginVoice);touching=false;if(voice!=null)voice.interrupt();return true;}return true;
     }
