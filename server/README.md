@@ -31,3 +31,14 @@ The app attaches the device token as a Bearer header for each request. A later d
 FCM is wired into both sides. Save the Firebase service-account JSON as `server/private/firebase-service-account.json`; Compose mounts it as the read-only Docker Secret `/run/secrets/firebase-service-account.json`, and the path is already configured in `.env.example`. The entire `private/` directory is ignored by Git. After QR pairing, the app registers its FCM token automatically and receives reminders as system notifications; every reminder is also retained in the message inbox for later retrieval.
 
 The phone is the source of truth for the user’s complete long-term memory. This service retains only the synchronized memory projection necessary for service-side reminders and proactive work. Delete events are tombstones and remove the service copy.
+
+
+## Home conversation harness
+
+`POST /v1/chat` accepts `client_message_id`. The Android client freezes attempted requests and reuses their ID on retry. The service caches completed replies and checkpoints exact tool plans before execution so a failed final reply can resume without creating another reminder. Paired requests no longer silently switch to the direct model path after a server failure.
+
+`POST /v1/home` evaluates a short context-based opening without tools; an empty content string means silence. Frequency and interaction gates run on the phone. `GET /v1/inbox?after_sequence=N` reads persistent messages in pages of 100. `GET /v1/reminders` and `POST /v1/reminders/{id}/action` support completing and snoozing reminders. Model tools can list, update, complete or cancel an existing reminder when requested.
+
+The scheduler writes reminder state, inbox message and per-device push jobs atomically. FCM delivery retries with backoff; the inbox remains the source for reconciliation. This is at-least-once delivery, with message IDs used for client deduplication.
+
+Run the isolated harness tests with `PYTHONPATH=server python -m unittest discover -s tests -p 'test_*.py'` from the repository root, after installing the service dependencies. The tests use a temporary database and mocked model calls.

@@ -11,6 +11,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
@@ -48,9 +49,17 @@ def token_hash(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
+class DatabaseConnection(sqlite3.Connection):
+    def __exit__(self, exc_type, exc_value, traceback):
+        try:
+            return super().__exit__(exc_type, exc_value, traceback)
+        finally:
+            self.close()
+
+
 def connect() -> sqlite3.Connection:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, factory=DatabaseConnection)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -77,6 +86,17 @@ def setup_db() -> None:
         CREATE TABLE IF NOT EXISTS inbox_message (
             id TEXT PRIMARY KEY, title TEXT NOT NULL, body TEXT NOT NULL,
             created_at TEXT NOT NULL, read_at TEXT
+        );
+        CREATE TABLE IF NOT EXISTS chat_response (
+            id TEXT PRIMARY KEY, response TEXT NOT NULL, created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS chat_checkpoint (
+            id TEXT PRIMARY KEY, state TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS push_outbox (
+            message_id TEXT NOT NULL, device_id TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
+            next_attempt_at TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'pending',
+            PRIMARY KEY(message_id,device_id)
         );
         CREATE TABLE IF NOT EXISTS printer (
             id TEXT PRIMARY KEY, name TEXT NOT NULL, host TEXT NOT NULL UNIQUE,
@@ -118,7 +138,8 @@ class Turn(BaseModel):
 
 class ChatRequest(BaseModel):
     messages: list[Turn] = Field(min_length=1, max_length=30)
-    timezone: str = "Asia/Shanghai"
+    timezone: str = Field(default="Asia/Shanghai", max_length=80)
+    client_message_id: str | None = Field(default=None, min_length=8, max_length=100)
 
 
 class DeviceRequest(BaseModel):
@@ -196,13 +217,21 @@ def claim_pairing(pairing_id: str, claim: PairingClaim) -> dict[str, str]:
 TOOLS = [
     {"type": "function", "function": {"name": "save_memory", "description": "Save one stable, explicit user preference or fact. Never save a fleeting mood, sensitive data, or a guess.", "parameters": {"type": "object", "properties": {"category": {"type": "string", "enum": ["preference", "profile", "goal", "project", "relationship", "other"]}, "fact": {"type": "string"}, "confidence": {"type": "number"}}, "required": ["category", "fact", "confidence"], "additionalProperties": False}}},
     {"type": "function", "function": {"name": "create_reminder", "description": "Create a reminder only when the user asks and the due time is explicit. due_at must be ISO-8601 with timezone.", "parameters": {"type": "object", "properties": {"title": {"type": "string"}, "due_at": {"type": "string"}}, "required": ["title", "due_at"], "additionalProperties": False}}},
+    {"type": "function", "function": {"name": "list_reminders", "description": "Read active reminders to identify the exact reminder the user wants to change or complete.", "parameters": {"type": "object", "properties": {}, "additionalProperties": False}}},
+    {"type": "function", "function": {"name": "manage_reminder", "description": "Change, complete or cancel an existing reminder only at the user's request. Use list_reminders to obtain its id. Ask if the target is ambiguous. For update pass an explicit timezone-aware due_at and/or title.", "parameters": {"type": "object", "properties": {"id": {"type": "string"}, "action": {"type": "string", "enum": ["update", "complete", "cancel"]}, "title": {"type": "string"}, "due_at": {"type": "string"}}, "required": ["id", "action"], "additionalProperties": False}}},
 ]
 
 
 def system_prompt(user_timezone: str) -> str:
     memories = active_memories()
     memory_text = "\n".join(f"- [{m['category']}] {m['fact']}" for m in memories) or "(none yet)"
-    return f"""You are Greta, a warm concise personal assistant. The user time zone is {user_timezone}.
+    try:
+        current = datetime.now(ZoneInfo(user_timezone)).isoformat()
+    except (ZoneInfoNotFoundError, ValueError):
+        current = utc_now()
+    return f"""You are Greta, a warm concise personal assistant. The user time zone is {user_timezone}. Current date and time: {current}.
+The user talks to you through a pet's speech bubble on the home screen. Keep replies natural and concise; put tool results in tools rather than repeating long output. Consecutive user messages can be supplements or corrections; consider them together before taking action.
+Only claim an action succeeded when its tool result confirms success. Never claim an unavailable tool ran.
 Use memories only when relevant; they may be outdated and the user's correction wins. Do not mention hidden memory unless useful.
 For a stable, explicit preference or fact, call save_memory. Do not infer personality from one event and do not save sensitive information.
 For a requested reminder with an unambiguous date/time, call create_reminder. If the time is unclear, ask a short follow-up.
@@ -225,47 +254,122 @@ async def deepseek(messages: list[dict[str, Any]], tools: list[dict[str, Any]] |
         raise HTTPException(502, f"DeepSeek request failed: {exc}") from exc
 
 
-def create_reminder(title: str, due_at: str) -> dict[str, str]:
+def create_reminder(title: str, due_at: str, operation_id: str | None = None) -> dict[str, str]:
     try:
         due = datetime.fromisoformat(due_at.replace("Z", "+00:00"))
     except ValueError as exc:
         return {"ok": "false", "error": "due_at is not a valid ISO-8601 timestamp"}
-    reminder_id = secrets.token_urlsafe(12)
+    if due.tzinfo is None:
+        return {"ok": "false", "error": "due_at must include a timezone"}
+    if not title.strip() or len(title) > 300:
+        return {"ok": "false", "error": "title must contain 1 to 300 characters"}
+    if due <= datetime.now(timezone.utc):
+        return {"ok": "false", "error": "due_at must be in the future"}
+    reminder_id = operation_id or secrets.token_urlsafe(12)
     with connect() as db:
+        existing = db.execute("SELECT title,due_at FROM reminder WHERE id=?", (reminder_id,)).fetchone()
+        if existing:
+            return {"ok": "true", "id": reminder_id, "title": existing["title"], "due_at": existing["due_at"]}
         db.execute("INSERT INTO reminder(id,title,due_at,created_at) VALUES(?,?,?,?)", (reminder_id, title, due.astimezone(timezone.utc).isoformat(), utc_now()))
-    return {"ok": "true", "id": reminder_id, "due_at": due.isoformat()}
+    return {"ok": "true", "id": reminder_id, "title": title, "due_at": due.isoformat()}
 
 
-async def run_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+async def run_tool(name: str, arguments: dict[str, Any], operation_id: str | None = None) -> dict[str, Any]:
     if name == "save_memory":
-        record = {"id": secrets.token_urlsafe(12), "category": arguments["category"], "fact": arguments["fact"], "confidence": arguments["confidence"], "source": "assistant extraction", "revision": 1, "deleted": 0, "updated_at": utc_now()}
+        record = {"id": operation_id or secrets.token_urlsafe(12), "category": arguments["category"], "fact": arguments["fact"], "confidence": arguments["confidence"], "source": "assistant extraction", "revision": 1, "deleted": 0, "updated_at": utc_now()}
         upsert_memory(record)
         return {"ok": True, "memory": record}
     if name == "create_reminder":
-        return create_reminder(arguments["title"], arguments["due_at"])
+        return create_reminder(arguments["title"], arguments["due_at"], operation_id)
+    if name == "list_reminders":
+        with connect() as db:
+            return {"ok": True, "reminders": [dict(row) for row in db.execute("SELECT id,title,due_at,state FROM reminder WHERE state IN ('pending','fired') ORDER BY due_at LIMIT 100").fetchall()]}
+    if name == "manage_reminder":
+        with connect() as db:
+            row = db.execute("SELECT * FROM reminder WHERE id=?", (arguments["id"],)).fetchone()
+            if not row:
+                return {"ok": False, "error": "Reminder not found"}
+            action = arguments["action"]
+            if action in ("complete", "cancel"):
+                state = "completed" if action == "complete" else "cancelled"
+                db.execute("UPDATE reminder SET state=? WHERE id=?", (state, row["id"]))
+            elif action == "update":
+                title = arguments.get("title", row["title"])
+                if not isinstance(title, str) or not title.strip() or len(title) > 300:
+                    return {"ok": False, "error": "Invalid reminder title"}
+                due = datetime.fromisoformat(arguments.get("due_at", row["due_at"]).replace("Z", "+00:00"))
+                if due.tzinfo is None or due <= datetime.now(timezone.utc):
+                    return {"ok": False, "error": "A future timezone-aware time is required"}
+                db.execute("UPDATE reminder SET title=?,due_at=?,state='pending',fired_at=NULL WHERE id=?", (title, due.astimezone(timezone.utc).isoformat(), row["id"]))
+            else:
+                return {"ok": False, "error": "Unknown action"}
+            db.execute("UPDATE push_outbox SET state='cancelled' WHERE message_id IN (SELECT id FROM inbox_message WHERE id LIKE ?)", (f"reminder:{row['id']}:%",))
+            updated = dict(db.execute("SELECT * FROM reminder WHERE id=?", (row["id"],)).fetchone())
+            return {"ok": True, "reminder": updated}
     return {"ok": False, "error": "unknown tool"}
 
 
 async def agent_reply(request: ChatRequest) -> dict[str, Any]:
-    messages: list[dict[str, Any]] = [{"role": "system", "content": system_prompt(request.timezone)}]
-    messages.extend(turn.model_dump() for turn in request.messages)
-    changes: list[dict[str, Any]] = []
-    for _ in range(4):
-        assistant = await deepseek(messages, TOOLS)
-        calls = assistant.get("tool_calls") or []
-        if not calls:
-            return {"content": assistant.get("content") or "", "memory_changes": changes}
-        messages.append(assistant)
-        for call in calls:
+    state: dict[str, Any] = {
+        "messages": [{"role": "system", "content": system_prompt(request.timezone)}, *[turn.model_dump() for turn in request.messages]],
+        "changes": [], "tool_results": [], "step": 0, "pending": [], "call_index": 0,
+    }
+    if request.client_message_id:
+        with connect() as db:
+            checkpoint = db.execute("SELECT state FROM chat_checkpoint WHERE id=?", (request.client_message_id,)).fetchone()
+        if checkpoint:
+            state = json.loads(checkpoint["state"])
+
+    def checkpoint() -> None:
+        if request.client_message_id:
+            with connect() as db:
+                db.execute("INSERT OR REPLACE INTO chat_checkpoint(id,state) VALUES(?,?)", (request.client_message_id, json.dumps(state, ensure_ascii=False)))
+
+    while state["step"] < 4:
+        if not state["pending"]:
+            assistant = await deepseek(state["messages"], TOOLS)
+            calls = assistant.get("tool_calls") or []
+            if not calls:
+                return {"content": assistant.get("content") or "", "memory_changes": state["changes"], "tool_results": state["tool_results"]}
+            state["messages"].append(assistant)
+            state["pending"] = calls
+            state["call_index"] = 0
+            # Persist the exact tool plan before its first side effect. Retry resumes this plan.
+            checkpoint()
+        calls = state["pending"]
+        for index in range(state["call_index"], len(calls)):
+            call = calls[index]
+            name = call["function"]["name"]
             try:
                 args = json.loads(call["function"]["arguments"])
-                result = await run_tool(call["function"]["name"], args)
-                if call["function"]["name"] == "save_memory" and result.get("ok"):
-                    changes.append(result["memory"])
-            except (KeyError, json.JSONDecodeError, ValueError) as exc:
+                operation = hashlib.sha256(f"{request.client_message_id}:{state['step']}:{index}:{name}".encode()).hexdigest() if request.client_message_id else None
+                result = await run_tool(name, args, operation)
+                success = result.get("ok") in (True, "true")
+                if not success:
+                    summary = f"操作未完成 · {result.get('error', '请重试')}"
+                elif name == "create_reminder":
+                    summary = f"提醒已创建 · {result.get('title', '')} · {result.get('due_at', '')}"
+                elif name == "save_memory":
+                    summary = "已更新一条记忆"
+                elif name == "list_reminders":
+                    summary = "已读取待办提醒"
+                else:
+                    reminder = result.get("reminder", {})
+                    labels = {"completed": "已完成", "cancelled": "已取消", "pending": "待提醒", "fired": "已到期"}
+                    summary = f"提醒已更新 · {reminder.get('title', '')} · {labels.get(reminder.get('state'), '')}"
+                state["tool_results"].append({"name": name, "summary": summary, "result": result})
+                if name == "save_memory" and success:
+                    state["changes"].append(result["memory"])
+            except (KeyError, json.JSONDecodeError, ValueError, TypeError) as exc:
                 result = {"ok": False, "error": str(exc)}
-            messages.append({"role": "tool", "tool_call_id": call["id"], "content": json.dumps(result, ensure_ascii=False)})
-    return {"content": "我这次处理得有些久了，请再试一次。", "memory_changes": changes}
+                state["tool_results"].append({"name": name, "summary": "操作未完成，请检查请求", "result": result})
+            state["messages"].append({"role": "tool", "tool_call_id": call["id"], "content": json.dumps(result, ensure_ascii=False)})
+            state["call_index"] = index + 1
+            checkpoint()
+        state["step"] += 1
+        state["pending"] = []
+        checkpoint()
+    return {"content": "已完成的操作请查看结果，我暂时没能整理好回复。", "memory_changes": state["changes"], "tool_results": state["tool_results"]}
 
 
 def put_inbox(title: str, body: str) -> str:
@@ -275,7 +379,31 @@ def put_inbox(title: str, body: str) -> str:
     return message_id
 
 
+def enqueue_push(db: sqlite3.Connection, message_id: str) -> None:
+    db.execute("""INSERT OR IGNORE INTO push_outbox(message_id,device_id,next_attempt_at)
+        SELECT ?,id,? FROM device WHERE fcm_token IS NOT NULL""", (message_id, utc_now()))
+
+
 def notify_devices(title: str, body: str, message_id: str) -> None:
+    # Keep compatibility with other callers; delivery is persisted before any network I/O.
+    with connect() as db:
+        enqueue_push(db, message_id)
+
+
+def fire_due_reminders() -> None:
+    now = utc_now()
+    with connect() as db:
+        db.execute("BEGIN IMMEDIATE")
+        due = db.execute("SELECT * FROM reminder WHERE state='pending' AND due_at <= ?", (now,)).fetchall()
+        for row in due:
+            message_id = f"reminder:{row['id']}:{row['due_at']}"
+            db.execute("INSERT OR IGNORE INTO inbox_message(id,title,body,created_at) VALUES(?,?,?,?)",
+                       (message_id, "Greta 提醒你", row["title"], now))
+            enqueue_push(db, message_id)
+            db.execute("UPDATE reminder SET state='fired',fired_at=? WHERE id=?", (now, row["id"]))
+
+
+def deliver_pushes() -> None:
     service_file = os.getenv("FIREBASE_SERVICE_ACCOUNT_FILE", "")
     if not service_file:
         return
@@ -285,25 +413,33 @@ def notify_devices(title: str, body: str, message_id: str) -> None:
         if not firebase_admin._apps:
             firebase_admin.initialize_app(credentials.Certificate(service_file))
         with connect() as db:
-            tokens = [row["fcm_token"] for row in db.execute("SELECT fcm_token FROM device WHERE fcm_token IS NOT NULL").fetchall()]
-        for token in tokens:
-            messaging.send(messaging.Message(notification=messaging.Notification(title=title, body=body), data={"message_id": message_id}, token=token))
+            deliveries = db.execute("""SELECT p.*,d.fcm_token,m.title,m.body FROM push_outbox p
+                JOIN device d ON d.id=p.device_id JOIN inbox_message m ON m.id=p.message_id
+                WHERE p.state='pending' AND p.next_attempt_at <= ? LIMIT 30""", (utc_now(),)).fetchall()
+        for row in deliveries:
+            try:
+                messaging.send(messaging.Message(
+                    notification=messaging.Notification(title=row["title"], body=row["body"]),
+                    data={"message_id": row["message_id"], "body": row["body"]}, token=row["fcm_token"]))
+                with connect() as db:
+                    db.execute("UPDATE push_outbox SET state='sent' WHERE message_id=? AND device_id=?", (row["message_id"], row["device_id"]))
+            except Exception:
+                attempts = row["attempts"] + 1
+                retry_at = (datetime.now(timezone.utc) + timedelta(seconds=min(3600, 15 * 2 ** min(attempts, 8)))).isoformat()
+                with connect() as db:
+                    db.execute("UPDATE push_outbox SET attempts=?,next_attempt_at=? WHERE message_id=? AND device_id=?", (attempts, retry_at, row["message_id"], row["device_id"]))
     except Exception:
-        # Inbox persistence is the reliable delivery path; a push failure must not rerun a reminder.
         return
 
 
 async def reminder_loop() -> None:
     while True:
-        now = utc_now()
-        with connect() as db:
-            due = db.execute("SELECT * FROM reminder WHERE state='pending' AND due_at <= ?", (now,)).fetchall()
-            for row in due:
-                db.execute("UPDATE reminder SET state='fired', fired_at=? WHERE id=?", (now, row["id"]))
-        for reminder in due:
-            body = reminder["title"]
-            message_id = put_inbox("Greta 提醒你", body)
-            notify_devices("Greta 提醒你", body, message_id)
+        try:
+            await asyncio.to_thread(fire_due_reminders)
+            await asyncio.to_thread(deliver_pushes)
+        except sqlite3.Error:
+            # A transient database lock must not permanently kill the scheduler.
+            pass
         await asyncio.sleep(15)
 
 
@@ -322,6 +458,7 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="Greta private service", lifespan=lifespan)
+chat_lock = asyncio.Lock()
 
 
 @app.get("/health")
@@ -331,7 +468,41 @@ async def health() -> dict[str, str]:
 
 @app.post("/v1/chat", dependencies=[Depends(require_device)])
 async def chat(request: ChatRequest) -> dict[str, Any]:
-    return await agent_reply(request)
+    if not request.client_message_id:
+        return await agent_reply(request)
+    # A stable request key survives retries; never replay a successfully completed turn.
+    async with chat_lock:
+        with connect() as db:
+            cached = db.execute("SELECT response FROM chat_response WHERE id=?", (request.client_message_id,)).fetchone()
+        if cached:
+            return json.loads(cached["response"])
+        response = await agent_reply(request)
+        with connect() as db:
+            db.execute("INSERT INTO chat_response(id,response,created_at) VALUES(?,?,?)", (request.client_message_id, json.dumps(response, ensure_ascii=False), utc_now()))
+            db.execute("DELETE FROM chat_checkpoint WHERE id=?", (request.client_message_id,))
+        return response
+
+
+class HomeRequest(BaseModel):
+    messages: list[Turn] = Field(default_factory=list, max_length=12)
+    timezone: str = Field(default="Asia/Shanghai", max_length=80)
+
+
+@app.post("/v1/home", dependencies=[Depends(require_device)])
+async def home_opening(request: HomeRequest) -> dict[str, str]:
+    context = system_prompt(request.timezone)
+    prompt = """Choose whether to start a short conversation on the pet home screen.
+Return JSON only: {"content":"one short Chinese sentence"} or {"content":""} to stay quiet.
+Use only a concrete topic in the supplied conversation or explicit saved memories. Do not invent unfinished tasks, deadlines, emotions, or user activity. Do not repeat your last reply or make promises to execute tools. If there is no useful grounded topic, return empty content. No tools are available in this evaluation."""
+    try:
+        reply = await deepseek([{"role": "system", "content": context + "\n" + prompt}, *[m.model_dump() for m in request.messages]])
+        raw = (reply.get("content") or "").strip()
+        if raw.startswith("```"):
+            raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0]
+        content = json.loads(raw).get("content", "")
+        return {"content": content.strip()[:120] if isinstance(content, str) else ""}
+    except (HTTPException, ValueError, TypeError, AttributeError):
+        return {"content": ""}
 
 
 @app.post("/v1/devices")
@@ -368,10 +539,38 @@ async def add_reminder(reminder: ReminderRequest) -> dict[str, str]:
     return result
 
 
-@app.get("/v1/inbox", dependencies=[Depends(require_device)])
-async def inbox() -> list[dict[str, Any]]:
+class ReminderAction(BaseModel):
+    action: Literal["complete", "snooze"]
+
+
+@app.get("/v1/reminders", dependencies=[Depends(require_device)])
+async def list_reminders() -> list[dict[str, Any]]:
     with connect() as db:
-        return [dict(row) for row in db.execute("SELECT * FROM inbox_message ORDER BY created_at DESC LIMIT 100").fetchall()]
+        return [dict(row) for row in db.execute("SELECT * FROM reminder WHERE state IN ('pending','fired') ORDER BY due_at LIMIT 100").fetchall()]
+
+
+@app.post("/v1/reminders/{reminder_id}/action", dependencies=[Depends(require_device)])
+async def reminder_action(reminder_id: str, action: ReminderAction) -> dict[str, Any]:
+    with connect() as db:
+        row = db.execute("SELECT * FROM reminder WHERE id=?", (reminder_id,)).fetchone()
+        if not row:
+            raise HTTPException(404, "Reminder not found")
+        if action.action == "complete":
+            db.execute("UPDATE reminder SET state='completed' WHERE id=?", (reminder_id,))
+        elif row["state"] != "completed":
+            due = (datetime.now(timezone.utc) + timedelta(minutes=15)).isoformat()
+            db.execute("UPDATE reminder SET state='pending',due_at=?,fired_at=NULL WHERE id=?", (due, reminder_id))
+        # Do not deliver old retries after the user has acted on this reminder.
+        db.execute("UPDATE push_outbox SET state='cancelled' WHERE message_id IN (SELECT id FROM inbox_message WHERE id LIKE ?)", (f"reminder:{reminder_id}:%",))
+    return {"ok": True}
+
+
+@app.get("/v1/inbox", dependencies=[Depends(require_device)])
+async def inbox(after_sequence: int | None = None) -> list[dict[str, Any]]:
+    with connect() as db:
+        if after_sequence is not None:
+            return [dict(row) for row in db.execute("SELECT rowid AS sequence,* FROM inbox_message WHERE rowid>? ORDER BY rowid LIMIT 100", (max(0, after_sequence),)).fetchall()]
+        return [dict(row) for row in db.execute("SELECT rowid AS sequence,* FROM inbox_message ORDER BY created_at DESC LIMIT 100").fetchall()]
 
 
 # ---------------------------------------------------------------------------
