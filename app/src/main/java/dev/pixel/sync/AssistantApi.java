@@ -10,17 +10,18 @@ import java.util.*;
 /** Network boundary for the private service, with direct DeepSeek fallback. */
 public final class AssistantApi {
     public static final class Reply { public final String content; public final List<AssistantStore.Memory> memories; public final boolean directFallback; public final String toolResults; Reply(String c,List<AssistantStore.Memory> m,boolean d){this(c,m,d,"");} Reply(String c,List<AssistantStore.Memory> m,boolean d,String tools){content=c;memories=m;directFallback=d;toolResults=tools;} }
+    public static final class ApiException extends IOException {public final int status;ApiException(int code,String body){super("请求失败（"+code+"）："+body);status=code;}}
     private static String read(InputStream stream) throws IOException { ByteArrayOutputStream out=new ByteArrayOutputStream();byte[] b=new byte[4096];int n;while((n=stream.read(b))!=-1)out.write(b,0,n);return out.toString("UTF-8"); }
     private static String post(String url,String bearer,JSONObject body) throws Exception {
         HttpURLConnection connection=(HttpURLConnection)new URL(url).openConnection();connection.setConnectTimeout(10000);connection.setReadTimeout(65000);connection.setRequestMethod("POST");connection.setRequestProperty("Content-Type","application/json");if(!bearer.isEmpty())connection.setRequestProperty("Authorization","Bearer "+bearer);connection.setDoOutput(true);
         try(OutputStream out=connection.getOutputStream()){out.write(body.toString().getBytes(StandardCharsets.UTF_8));}
-        int code=connection.getResponseCode();String result=read(code>=200&&code<300?connection.getInputStream():connection.getErrorStream());if(code<200||code>=300)throw new IOException("请求失败（"+code+"）："+result);return result;
+        int code=connection.getResponseCode();String result=read(code>=200&&code<300?connection.getInputStream():connection.getErrorStream());if(code<200||code>=300)throw new ApiException(code,result);return result;
     }
     private static String serverUrl(Context context){return context.getSharedPreferences("gray_settings",Context.MODE_PRIVATE).getString("server_url","").replaceAll("/+$","");}
     private static String secret(Context context,String name)throws Exception{return new SecureStore(context).get(name);}
     public static Reply chat(Context context,List<AssistantStore.Message> messages,List<AssistantStore.Memory> memories) throws Exception {return chat(context,messages,memories,UUID.randomUUID().toString());}
     public static Reply chat(Context context,List<AssistantStore.Message> messages,List<AssistantStore.Memory> memories,String messageId) throws Exception {
-        JSONObject request=new JSONObject();JSONArray turns=new JSONArray();for(AssistantStore.Message message:messages)turns.put(new JSONObject().put("role",message.role).put("content",message.content));request.put("messages",turns);request.put("client_message_id",messageId);request.put("timezone",java.util.TimeZone.getDefault().getID());
+        JSONObject request=new JSONObject();JSONArray turns=new JSONArray();for(AssistantStore.Message message:messages)turns.put(new JSONObject().put("role",message.role).put("content",message.content));request.put("messages",turns);request.put("client_message_id",messageId);request.put("timezone",java.util.TimeZone.getDefault().getID());try(TopicRepository topics=new TopicRepository(context)){request.put("suppressed_topic_ids",topics.suppressed());}
         String url=serverUrl(context), token=secret(context,"device_token");
         if(!url.isEmpty()&&!token.isEmpty()){
             SharedPreferences requests=context.getSharedPreferences("chat_requests",Context.MODE_PRIVATE);
@@ -44,6 +45,11 @@ public final class AssistantApi {
         String url=serverUrl(context),token=secret(context,"device_token");if(url.isEmpty()||token.isEmpty())return "";
         JSONArray turns=new JSONArray();for(AssistantStore.Message m:messages)turns.put(new JSONObject().put("role",m.role).put("content",m.content));
         return new JSONObject(post(url+"/v1/home",token,new JSONObject().put("messages",turns).put("timezone",java.util.TimeZone.getDefault().getID()))).optString("content","");
+    }
+    public static JSONArray topics(Context context)throws Exception{if(serverUrl(context).isEmpty()||secret(context,"device_token").isEmpty())throw new IOException("连接助理服务后才能整理重要话题");return getArray(context,"/v1/topics");}
+    public static JSONObject updateTopic(Context context,String id,JSONObject change)throws Exception{
+        String token=secret(context,"device_token");if(serverUrl(context).isEmpty()||token.isEmpty())throw new IOException("尚未配对服务，修改已保存在本机");
+        return new JSONObject(post(serverUrl(context)+"/v1/topics/"+URLEncoder.encode(id,"UTF-8"),token,change));
     }
     public static JSONArray inbox(Context context)throws Exception{return getArray(context,"/v1/inbox?after_sequence="+context.getSharedPreferences("home_conversation",0).getLong("inbox_sequence",0));}
     public static JSONArray reminders(Context context)throws Exception{return getArray(context,"/v1/reminders");}

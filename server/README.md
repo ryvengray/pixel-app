@@ -42,3 +42,8 @@ The phone is the source of truth for the user’s complete long-term memory. Thi
 The scheduler writes reminder state, inbox message and per-device push jobs atomically. FCM delivery retries with backoff; the inbox remains the source for reconciliation. This is at-least-once delivery, with message IDs used for client deduplication.
 
 Run the isolated harness tests with `PYTHONPATH=server python -m unittest discover -s tests -p 'test_*.py'` from the repository root, after installing the service dependencies. The tests use a temporary database and mocked model calls.
+
+
+## Important topics
+
+Successful keyed chat responses enqueue an evidence-backed extraction job in the same transaction as the response cache. The separate topic worker does not delay the reply. It creates time-bounded topics without follow-up permission. GET /v1/topics and POST /v1/topics/{id} expose a revisioned projection and idempotent user edits. A specific future time and explicit consent are required for one follow-up; push additionally requires notify=true. Expiry, pause, resolution and forgetting stop future follow-ups. See [implementation details](../docs/greta-important-topics.md). Run all tests using `PYTHONPATH=server python -m unittest discover -s tests -p "test_*.py"`.

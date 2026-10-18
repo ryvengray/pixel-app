@@ -10,10 +10,15 @@ public final class AssistantStore extends SQLiteOpenHelper {
     public static final class Message { public final String role, content, groupId, status; public final long id, createdAt; Message(String r,String c,long t){this(0,r,c,t,"", "sent");} Message(long id,String r,String c,long t,String g,String s){this.id=id;role=r;content=c;createdAt=t;groupId=g;status=s;} }
     public static final class Memory { public final String id,category,fact,source,updatedAt; public final double confidence; public final int revision; public final boolean deleted;
         Memory(String id,String c,String f,double confidence,String source,int revision,boolean deleted,String updatedAt){this.id=id;category=c;fact=f;this.confidence=confidence;this.source=source;this.revision=revision;this.deleted=deleted;this.updatedAt=updatedAt;} }
-    public AssistantStore(Context context) { super(context, "greta.db", null, 2); }
+    public AssistantStore(Context context) { super(context, "greta.db", null, 3); }
     @Override public void onCreate(SQLiteDatabase db) {
         db.execSQL("CREATE TABLE message(id INTEGER PRIMARY KEY AUTOINCREMENT, role TEXT NOT NULL, content TEXT NOT NULL, created_at INTEGER NOT NULL, group_id TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'sent', external_id TEXT UNIQUE)");
         db.execSQL("CREATE TABLE memory(id TEXT PRIMARY KEY, category TEXT NOT NULL, fact TEXT NOT NULL, confidence REAL NOT NULL, source TEXT, revision INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL)");
+        createTopics(db);
+    }
+    private void createTopics(SQLiteDatabase db){
+        db.execSQL("CREATE TABLE IF NOT EXISTS topic(id TEXT PRIMARY KEY,payload TEXT NOT NULL,revision INTEGER NOT NULL)");
+        db.execSQL("CREATE TABLE IF NOT EXISTS topic_outbox(sequence INTEGER PRIMARY KEY AUTOINCREMENT,operation_id TEXT NOT NULL UNIQUE,topic_id TEXT NOT NULL,payload TEXT NOT NULL,error TEXT)");
     }
     @Override public void onUpgrade(SQLiteDatabase db,int oldVersion,int newVersion) {
         if(oldVersion<2){
@@ -22,6 +27,7 @@ public final class AssistantStore extends SQLiteOpenHelper {
             db.execSQL("ALTER TABLE message ADD COLUMN external_id TEXT");
             db.execSQL("CREATE UNIQUE INDEX message_external ON message(external_id)");
         }
+        if(oldVersion<3)createTopics(db);
     }
     public void addMessage(String role,String content){ addMessage(role,content,UUID.randomUUID().toString(),"sent",null,System.currentTimeMillis()); }
     public long addMessage(String role,String content,String group,String status,String external,long timestamp){

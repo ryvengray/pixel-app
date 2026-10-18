@@ -245,3 +245,11 @@ App 只有收到 Termux 成功退出结果才显示成功；结果通过 Pending
 当前验证：Windows Git Bash 下通过以上 Git 流程测试（使用 `MOCK_FLOCK=1` 模拟缺失的 flock，未验证真实文件锁）。`1.0.0` Release APK 已通过本地构建及签名检查，尚未进行 Pixel 真机验证。
 
 接口参考：[Termux RUN_COMMAND 官方文档](https://github.com/termux/termux-app/wiki/RUN_COMMAND-Intent)。
+
+
+## 对话与陪伴架构
+
+当前实现、陪伴 agent 的目标分层、记忆与主动跟进缺口、可靠性问题及实施顺序见 [Greta 陪伴 Harness 架构](docs/greta-companion-harness-architecture.md)。
+
+
+重要话题已接入：聊天回复后由私有服务异步整理，在首页菜单“重要话题”查看原话、修正或忘记。默认只记住、不追问；可选一个时间仅在首页关心一次，或明确选择系统通知。离线修改有持久同步队列，待同步时不代表服务端已生效。实现与边界见 [重要话题说明](docs/greta-important-topics.md)。

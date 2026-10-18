@@ -36,7 +36,7 @@ public final class HomeConversationView extends FrameLayout {
     private String pendingGroup, inFlightGroup, assistantText = "", userText = "", resultText = "";
     private final Runnable dispatch = this::dispatch;
     private final Runnable beginVoice = () -> { if(touching) startVoice(); };
-    private final Runnable poll = new Runnable(){public void run(){if(!active||closed)return;syncInbox();main.postDelayed(this,30000);}};
+    private final Runnable poll = new Runnable(){public void run(){if(!active||closed)return;syncInbox();background.execute(()->{try{TopicRepository.synchronize(activity);}catch(Exception ignored){}});main.postDelayed(this,30000);}};
 
     public HomeConversationView(Activity activity, Runnable react) {
         super(activity); this.activity=activity;this.react=react;
@@ -174,7 +174,7 @@ public final class HomeConversationView extends FrameLayout {
         if(syncing||closed)return;syncing=true;
         background.execute(()->{try{JSONArray items=AssistantApi.inbox(activity);main.post(()->{syncing=false;if(closed)return;
             long sequence=prefs.getLong("inbox_sequence",0);boolean changed=false;for(int i=0;i<items.length();i++){JSONObject m=items.optJSONObject(i);if(m==null)continue;
-                sequence=Math.max(sequence,m.optLong("sequence",0));String id=m.optString("id"),body=m.optString("body");if(id.isEmpty()||body.isEmpty())continue;
+                sequence=Math.max(sequence,m.optLong("sequence",0));String id=m.optString("id"),body=m.optString("body");if(id.isEmpty()||body.isEmpty())continue;if(TopicRepository.blocksIncoming(activity,id))continue;
                 long timestamp=System.currentTimeMillis();try{timestamp=java.time.Instant.parse(m.optString("created_at")).toEpochMilli();}catch(Exception ignored){}
                 if(store.addMessage("assistant",body,"inbox:"+id,"sent","inbox:"+id,timestamp)!=-1){store.addMessage("tool",m.optString("title","提醒")+"\n"+body,"inbox:"+id,"sent","inbox-card:"+id,timestamp);resultText=m.optString("title","提醒")+" · "+body;changed=true;}
             }

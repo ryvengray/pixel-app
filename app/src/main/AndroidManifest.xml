@@ -21,6 +21,7 @@
                 <data android:mimeType="application/pdf" />
             </intent-filter>
         </activity>
+        <activity android:name=".TopicsActivity" android:exported="false" />
         <activity android:name=".HistoryActivity" android:exported="false" />
         <activity android:name=".MemoryActivity" android:exported="false" />
         <activity android:name=".AssistantSettingsActivity" android:exported="false" />

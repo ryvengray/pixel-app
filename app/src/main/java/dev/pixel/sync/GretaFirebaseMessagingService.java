@@ -14,6 +14,7 @@ public class GretaFirebaseMessagingService extends FirebaseMessagingService {
     private static final String CHANNEL = "greta_reminders";
     @Override public void onNewToken(String token) { FcmManager.register(this, token); }
     @Override public void onMessageReceived(RemoteMessage message) {
+        if(TopicRepository.blocksIncoming(this,message.getData().getOrDefault("message_id","")))return;
         String title = message.getNotification() == null ? "Greta" : message.getNotification().getTitle();
         String body = message.getNotification() == null ? message.getData().get("body") : message.getNotification().getBody();
         if (title == null || title.isEmpty()) title = "Greta";
