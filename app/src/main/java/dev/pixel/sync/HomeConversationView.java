@@ -22,14 +22,17 @@ public final class HomeConversationView extends FrameLayout {
     private final ExecutorService network = Executors.newSingleThreadExecutor();
     private final ExecutorService background = Executors.newFixedThreadPool(2);
     private final Runnable react;
+    private final java.util.function.Consumer<Boolean> thinking;
     private final TextView assistant, user, state, result, write, speak, send;
-    private final LinearLayout bottom, idle, editing;
+    private final LinearLayout bottom, idle, editing, utterances;
+    private final ScrollView conversation;
     private final EditText input;
     private VoiceInputOverlay voice;
     private Dialog detail;
-    private boolean dark, busy, active, closed, touching, keyboard, syncing;
+    private boolean dark, busy, active, closed, touching, keyboard, syncing, composing, queued;
+    private String failureText;
+    private int thinkingStep;
     private long generation, lastInteraction, pausedAt;
-    private int sceneHeight;
     private float touchStartX, touchStartY;
     private boolean greetingEvaluated;
     private String requestedMessageId;
@@ -38,26 +41,38 @@ public final class HomeConversationView extends FrameLayout {
     private final Runnable beginVoice = () -> { if(touching) startVoice(); };
     private final Runnable poll = new Runnable(){public void run(){if(!active||closed)return;syncInbox();background.execute(()->{try{TopicRepository.synchronize(activity);}catch(Exception ignored){}});main.postDelayed(this,30000);}};
 
-    public HomeConversationView(Activity activity, Runnable react) {
-        super(activity); this.activity=activity;this.react=react;
+    private final Runnable thinkingTick = new Runnable(){public void run(){
+        if(closed||!active||!waiting())return;
+        if(reducedMotion()){state.setText("Greta 正在想…");return;}
+        thinkingStep=(thinkingStep+1)%4;
+        if(pendingGroup==null||!busy)state.setText("Greta 正在想"+new String(new char[thinkingStep]).replace("\0","·"));
+        main.postDelayed(this,550);
+    }};
+
+    public HomeConversationView(Activity activity, Runnable react) {this(activity,react,value->{});}
+    public HomeConversationView(Activity activity, Runnable react,java.util.function.Consumer<Boolean> thinking) {
+        super(activity); this.activity=activity;this.react=react;this.thinking=thinking;
         store=new AssistantStore(activity);prefs=activity.getSharedPreferences("home_conversation",0);
         setClipChildren(false);
-        assistant=label("",16);assistant.setPadding(dp(17),dp(12),dp(17),dp(12));assistant.setMaxLines(4);assistant.setEllipsize(TextUtils.TruncateAt.END);
+        conversation=new ScrollView(activity);conversation.setFillViewport(false);conversation.setVerticalScrollBarEnabled(false);conversation.setClipToPadding(false);
+        utterances=new LinearLayout(activity);utterances.setOrientation(LinearLayout.VERTICAL);utterances.setPadding(0,0,0,dp(8));
+        conversation.addView(utterances,new ScrollView.LayoutParams(-1,-2));
+        FrameLayout.LayoutParams cp=new FrameLayout.LayoutParams(-1,dp(240),Gravity.TOP);cp.setMargins(dp(24),dp(88),dp(24),0);addView(conversation,cp);
+        user=label("",15);user.setTag("home_user_message");user.setPadding(dp(16),dp(11),dp(16),dp(11));user.setMaxLines(3);user.setMaxWidth(dp(280));user.setEllipsize(TextUtils.TruncateAt.END);
+        user.setContentDescription("我刚刚说的话，点击展开");user.setOnClickListener(v->showText("我",userText));
+        LinearLayout.LayoutParams up=new LinearLayout.LayoutParams(-2,-2);up.gravity=Gravity.END;up.leftMargin=dp(40);up.bottomMargin=dp(12);utterances.addView(user,up);
+        assistant=label("",16);assistant.setTag("home_assistant_message");assistant.setPadding(dp(17),dp(12),dp(17),dp(12));assistant.setMaxLines(4);assistant.setEllipsize(TextUtils.TruncateAt.END);
         assistant.setMaxWidth(dp(290));assistant.setContentDescription("Greta 最新发言，点击展开");assistant.setOnClickListener(v->showText("Greta",assistantText));
-        FrameLayout.LayoutParams ap=new FrameLayout.LayoutParams(-2,-2,Gravity.TOP|Gravity.CENTER_HORIZONTAL);ap.setMargins(dp(24),dp(40),dp(24),0);addView(assistant,ap);
-        // A short tail makes the speech belong to the character without covering her face.
-        TextView tail=label("▾",22);tail.setTextColor(Color.TRANSPARENT);tail.setTag("tail");
-        FrameLayout.LayoutParams tp=new FrameLayout.LayoutParams(dp(28),dp(26),Gravity.TOP|Gravity.CENTER_HORIZONTAL);tp.topMargin=dp(146);addView(tail,tp);
+        LinearLayout.LayoutParams ap=new LinearLayout.LayoutParams(-2,-2);ap.gravity=Gravity.START;ap.rightMargin=dp(20);utterances.addView(assistant,ap);
+        TextView tail=label("▾",20);tail.setTag("tail");tail.setIncludeFontPadding(false);
+        LinearLayout.LayoutParams tp=new LinearLayout.LayoutParams(dp(24),dp(14));tp.leftMargin=dp(28);tp.topMargin=-dp(4);utterances.addView(tail,tp);
+        state=label("",13);state.setTag("home_reply_state");state.setPadding(dp(6),dp(4),dp(6),dp(8));state.setOnClickListener(v->retry());utterances.addView(state);
         bottom=new LinearLayout(activity);bottom.setOrientation(LinearLayout.VERTICAL);
-        FrameLayout.LayoutParams bp=new FrameLayout.LayoutParams(-1,-2,Gravity.BOTTOM);bp.setMargins(dp(24),0,dp(24),dp(12));addView(bottom,bp);
-        user=label("",15);user.setPadding(dp(15),dp(10),dp(15),dp(10));user.setMaxLines(3);user.setEllipsize(TextUtils.TruncateAt.END);
-        user.setOnClickListener(v->showText("我",userText));
-        LinearLayout.LayoutParams up=new LinearLayout.LayoutParams(-2,-2);up.gravity=Gravity.RIGHT;up.leftMargin=dp(52);up.bottomMargin=dp(8);bottom.addView(user,up);
-        state=label("",12);state.setPadding(dp(4),dp(3),dp(4),dp(6));state.setOnClickListener(v->retry());bottom.addView(state);
+        FrameLayout.LayoutParams bp=new FrameLayout.LayoutParams(-1,-2,Gravity.BOTTOM);bp.setMargins(dp(16),0,dp(16),dp(10));addView(bottom,bp);
         result=label("",13);result.setMaxLines(2);result.setEllipsize(TextUtils.TruncateAt.END);result.setPadding(dp(12),dp(9),dp(12),dp(9));
         result.setOnClickListener(v->showResults());result.setOnLongClickListener(v->{resultText="最近结果 · 点击查看";prefs.edit().putString("result",resultText).apply();render();return true;});
         LinearLayout.LayoutParams rp=new LinearLayout.LayoutParams(-1,-2);rp.bottomMargin=dp(8);bottom.addView(result,rp);
-        idle=new LinearLayout(activity);idle.setGravity(Gravity.CENTER_VERTICAL);
+        idle=new LinearLayout(activity);idle.setTag("home_idle");idle.setGravity(Gravity.CENTER_VERTICAL);
         write=label("写点什么…",14);write.setGravity(Gravity.CENTER);write.setMinHeight(dp(56));write.setOnClickListener(v->focusInput());
         idle.addView(write,new LinearLayout.LayoutParams(0,-2,1));
         speak=label("按住说话",14);speak.setGravity(Gravity.CENTER);speak.setMinHeight(dp(56));
@@ -65,21 +80,27 @@ public final class HomeConversationView extends FrameLayout {
         speak.setOnClickListener(v->Toast.makeText(activity,"按住说话，松开发送文字",Toast.LENGTH_SHORT).show());
         speak.setOnLongClickListener(v->{startVoice();return true;});
         idle.addView(speak,new LinearLayout.LayoutParams(0,-2,2));bottom.addView(idle);
-        editing=new LinearLayout(activity);editing.setGravity(Gravity.CENTER_VERTICAL);editing.setPadding(dp(8),dp(4),dp(5),dp(4));
-        input=new EditText(activity);input.setTextSize(15);input.setHint("跟 Greta 说说…");input.setBackgroundColor(Color.TRANSPARENT);input.setMaxLines(4);input.setMinHeight(dp(48));
+        editing=new LinearLayout(activity);editing.setTag("home_composer");editing.setGravity(Gravity.BOTTOM);editing.setBaselineAligned(false);editing.setPadding(dp(16),dp(8),dp(8),dp(8));editing.setMinimumHeight(dp(60));
+        input=new EditText(activity);input.setTag("home_input");input.setTextSize(16);input.setHint("跟 Greta 说说…");input.setContentDescription("给 Greta 的消息");
+        input.setBackgroundColor(Color.TRANSPARENT);input.setIncludeFontPadding(false);input.setGravity(Gravity.TOP|Gravity.START);input.setPadding(0,dp(10),dp(12),dp(10));
+        input.setMaxLines(5);input.setMinLines(1);input.setMinHeight(dp(44));input.setLineSpacing(dp(3),1f);input.setHorizontallyScrolling(false);
         input.setInputType(android.text.InputType.TYPE_CLASS_TEXT|android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE|android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
-        input.setImeOptions(EditorInfo.IME_ACTION_SEND);input.setText(prefs.getString("draft",""));
-        input.addTextChangedListener(new TextWatcher(){public void beforeTextChanged(CharSequence s,int a,int c,int f){} public void afterTextChanged(Editable e){} public void onTextChanged(CharSequence s,int a,int b,int c){lastInteraction=System.currentTimeMillis();prefs.edit().putString("draft",s.toString()).apply();}});
+        input.setImeOptions(EditorInfo.IME_ACTION_SEND|EditorInfo.IME_FLAG_NO_EXTRACT_UI);input.setText(prefs.getString("draft",""));composing=input.length()>0;
+        input.addTextChangedListener(new TextWatcher(){public void beforeTextChanged(CharSequence s,int a,int c,int f){} public void afterTextChanged(Editable e){} public void onTextChanged(CharSequence s,int a,int b,int c){lastInteraction=System.currentTimeMillis();prefs.edit().putString("draft",s.toString()).apply();updateSend();}});
+        input.setOnFocusChangeListener((v,focused)->{if(focused)composing=true;updateComposer();});
         input.setOnEditorActionListener((v,a,e)->{if(a==EditorInfo.IME_ACTION_SEND){submitInput();return true;}return false;});
         editing.addView(input,new LinearLayout.LayoutParams(0,-2,1));
-        send=label("发送",14);send.setGravity(Gravity.CENTER);send.setPadding(dp(12),0,dp(12),0);send.setMinHeight(dp(48));send.setOnClickListener(v->submitInput());editing.addView(send);
-        bottom.addView(editing);editing.setVisibility(GONE);
+        send=label("发送",14);send.setTag("home_send");send.setGravity(Gravity.CENTER);send.setIncludeFontPadding(false);send.setContentDescription("发送消息");
+        send.setOnClickListener(v->submitInput());editing.addView(send,new LinearLayout.LayoutParams(dp(58),dp(44)));
+        bottom.addView(editing);updateComposer();
         resultText=prefs.getString("result","");restore();setTheme(false);
-        assistant.addOnLayoutChangeListener((v,l,t,r,b,ol,ot,or,ob)->{FrameLayout.LayoutParams p=(FrameLayout.LayoutParams)tail.getLayoutParams();p.topMargin=b-dp(7);tail.setLayoutParams(p);});
     }
-    @Override protected void onLayout(boolean changed,int left,int top,int right,int bottomEdge){
-        super.onLayout(changed,left,top,right,bottomEdge);sceneHeight=Math.max(sceneHeight,getHeight());
-        if(assistant.getVisibility()==VISIBLE){FrameLayout.LayoutParams p=(FrameLayout.LayoutParams)assistant.getLayoutParams();int minimum=keyboard&&user.getVisibility()==VISIBLE?user.getBottom()+dp(10):dp(40);int margin=Math.max(minimum,Math.round(sceneHeight*.22f)-assistant.getMeasuredHeight()-dp(16));if(p.topMargin!=margin){p.topMargin=margin;assistant.setLayoutParams(p);}}
+    @Override protected void onMeasure(int width,int height){
+        super.onMeasure(width,height);
+        // Bound the conversation above the composer even on small screens/landscape.
+        int available=getMeasuredHeight()-getPaddingTop()-getPaddingBottom()-dp(88)-bottom.getMeasuredHeight()-dp(24);
+        FrameLayout.LayoutParams p=(FrameLayout.LayoutParams)conversation.getLayoutParams();int limit=Math.max(0,Math.min(dp(250),available));
+        if(p.height!=limit){p.height=limit;conversation.setLayoutParams(p);super.onMeasure(width,height);}
     }
     private int dp(float n){return Math.round(n*getResources().getDisplayMetrics().density);}
     private TextView label(String text,int size){TextView v=new TextView(activity);v.setText(text);v.setTextSize(size);return v;}
@@ -88,7 +109,10 @@ public final class HomeConversationView extends FrameLayout {
         for(TextView v:new TextView[]{assistant,user,write,speak,send,result,input})v.setTextColor(fg);state.setTextColor(muted);input.setHintTextColor(muted);
         int bubble=Color.parseColor(dark?"#E62B4235":"#EBE0EBDD");assistant.setBackground(surface(bubble,22));((TextView)findViewWithTag("tail")).setTextColor(bubble);
         user.setBackground(surface(Color.parseColor(dark?"#DC365441":"#DBD3E3CE"),20));
-        for(View v:new View[]{idle,editing})v.setBackground(surface(Color.parseColor(dark?"#CC263D30":"#CCDCE7D5"),28));
+        idle.setBackground(surface(Color.parseColor(dark?"#E6263D30":"#E6DCE7D5"),28));
+        GradientDrawable field=surface(Color.parseColor(dark?"#F523382D":"#FAFFFFFF"),26);
+        field.setStroke(dp(1),Color.parseColor(dark?"#557C9A85":"#D8E4D9"));editing.setBackground(field);
+        send.setTextColor(Color.parseColor(dark?"#102019":"#FFFFFF"));send.setBackground(surface(Color.parseColor(dark?"#8BCB9A":"#327C4E"),18));
         result.setBackground(surface(Color.parseColor(dark?"#CC243B2E":"#CCDDE8D7"),16));render();
     }
     private void restore(){
@@ -102,37 +126,66 @@ public final class HomeConversationView extends FrameLayout {
         for(int i=messages.size()-1;i>=0;i--){AssistantStore.Message m=messages.get(i);if(!m.role.equals("user"))continue;if(!m.status.equals("sent")&&!m.groupId.equals(inFlightGroup))pendingGroup=m.groupId;break;}
         render();
     }
-    private void render(){assistant.setText(assistantText);assistant.setVisibility(assistantText.isEmpty()?GONE:VISIBLE);findViewWithTag("tail").setVisibility(assistantText.isEmpty()?GONE:VISIBLE);
-        user.setText(userText);user.setVisibility(userText.isEmpty()?GONE:VISIBLE);result.setText(resultText);result.setVisibility(resultText.isEmpty()?GONE:VISIBLE);
-        if(!busy)state.setText(pendingGroup==null?"":"尚未发送 · 点击重试");state.setVisibility(state.length()==0?GONE:VISIBLE);
+    private boolean waiting(){return busy||queued;}
+    private boolean reducedMotion(){return activity.getSharedPreferences("home",0).getBoolean("reduceMotion",false);}
+    private void updateFeedback(){
+        boolean show=active&&waiting();thinking.accept(show);
+        if(show&&!reducedMotion()){if(!main.hasCallbacks(thinkingTick))main.postDelayed(thinkingTick,550);}
+        else main.removeCallbacks(thinkingTick);
     }
-    public void focusInput(){lastInteraction=System.currentTimeMillis();editing.setVisibility(VISIBLE);idle.setVisibility(GONE);input.requestFocus();input.setSelection(input.length());input.post(()->((InputMethodManager)activity.getSystemService(Context.INPUT_METHOD_SERVICE)).showSoftInput(input,InputMethodManager.SHOW_IMPLICIT));}
+    private void updateSend(){if(send!=null){boolean ready=!input.getText().toString().trim().isEmpty();send.setEnabled(ready);send.setAlpha(ready?1f:.38f);}}
+    private void updateComposer(){
+        boolean show=composing||keyboard;
+        editing.setVisibility(show?VISIBLE:GONE);idle.setVisibility(show?GONE:VISIBLE);updateSend();
+    }
+    private void reveal(View view){
+        if(!active||reducedMotion()||view.getVisibility()!=VISIBLE)return;
+        view.animate().cancel();view.setAlpha(0f);view.setTranslationY(dp(7));
+        view.animate().alpha(1f).translationY(0).setDuration(180).start();
+    }
+    private void render(){
+        assistant.setText(assistantText);boolean showAssistant=!waiting()&&pendingGroup==null&&!assistantText.isEmpty();
+        assistant.setVisibility(showAssistant?VISIBLE:GONE);findViewWithTag("tail").setVisibility(showAssistant?VISIBLE:GONE);
+        user.setText(userText);user.setVisibility(userText.isEmpty()?GONE:VISIBLE);result.setText(resultText);result.setVisibility(resultText.isEmpty()?GONE:VISIBLE);
+        if(waiting())state.setText(busy&&pendingGroup!=null?"收到补充，接着处理…":"Greta 正在想…");
+        else state.setText(pendingGroup==null?"":failureText==null?"尚未发送 · 点击重试":failureText);
+        state.setVisibility(state.length()==0?GONE:VISIBLE);updateComposer();updateFeedback();
+    }
+    public void focusInput(){
+        lastInteraction=System.currentTimeMillis();composing=true;updateComposer();input.requestFocus();input.setSelection(input.length());
+        input.post(()->{if(!closed&&composing&&input.hasFocus())((InputMethodManager)activity.getSystemService(Context.INPUT_METHOD_SERVICE)).showSoftInput(input,InputMethodManager.SHOW_IMPLICIT);});
+    }
     public void onKeyboard(boolean shown){
         boolean was=keyboard;keyboard=shown;
-        if(was!=shown){
-            ((android.view.ViewGroup)user.getParent()).removeView(user);
-            if(shown){FrameLayout.LayoutParams p=new FrameLayout.LayoutParams(-2,-2,Gravity.TOP|Gravity.RIGHT);p.setMargins(dp(64),dp(82),dp(24),0);addView(user,p);user.setMaxLines(2);result.setMaxLines(1);}
-            else{LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-2,-2);p.gravity=Gravity.RIGHT;p.leftMargin=dp(52);p.bottomMargin=dp(8);bottom.addView(user,0,p);user.setMaxLines(3);result.setMaxLines(2);if(!busy)restore();}
-        }
-        if(!shown&&input.length()==0){input.clearFocus();editing.setVisibility(GONE);idle.setVisibility(VISIBLE);}
+        if(shown)composing=true;
+        // Initial false insets can arrive between tapping Write and IME appearance.
+        // Only an actual visible -> hidden transition may collapse an empty editor.
+        else if(was&&input.length()==0){composing=false;input.clearFocus();}
+        user.setMaxLines(shown?2:3);assistant.setMaxLines(shown?3:4);result.setMaxLines(shown?1:2);updateComposer();
     }
-    private void submitInput(){String text=input.getText().toString().trim();if(text.isEmpty())return;input.setText("");submit(text);}
+    private void submitInput(){
+        String text=input.getText().toString().trim();if(text.isEmpty())return;
+        input.setText("");composing=false;input.clearFocus();
+        ((InputMethodManager)activity.getSystemService(Context.INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(input.getWindowToken(),0);
+        updateComposer();submit(text);
+    }
     private void submit(String text){
-        DecisionActions.cancelPending(activity);
+        DecisionActions.cancelPending(activity);queued=true;failureText=null;
         lastInteraction=System.currentTimeMillis();prefs.edit().putLong("last_conversation_at",lastInteraction).apply();generation++;
         if(pendingGroup==null){pendingGroup=UUID.randomUUID().toString();if(inFlightGroup!=null)prefs.edit().putString("display:"+pendingGroup,prefs.getString("display:"+inFlightGroup,inFlightGroup)).apply();}
         // A request that has already been attempted must remain immutable on retry.
         boolean frozen=prefs.contains("attempted:"+pendingGroup);
         if(frozen){pendingGroup=UUID.randomUUID().toString();}
         store.addMessage("user",text,pendingGroup,"pending",null,System.currentTimeMillis());restore();
-        state.setText(busy?"收到补充，接着处理…":"正在听你说…");state.setVisibility(VISIBLE);
+        reveal(user);
+        conversation.post(()->conversation.fullScroll(View.FOCUS_DOWN));
         main.removeCallbacks(dispatch);main.postDelayed(dispatch,800);
     }
     private void retry(){if(pendingGroup!=null&&!busy){main.removeCallbacks(dispatch);dispatch();}}
     private void dispatch(){
         if(closed||busy||pendingGroup==null)return;
-        busy=true;inFlightGroup=pendingGroup;pendingGroup=null;final String group=inFlightGroup;final long version=generation;
-        prefs.edit().putBoolean("attempted:"+group,true).apply();store.setStatus(group,"pending");state.setText("正在想…");state.setVisibility(VISIBLE);
+        queued=false;failureText=null;busy=true;inFlightGroup=pendingGroup;pendingGroup=null;final String group=inFlightGroup;final long version=generation;
+        prefs.edit().putBoolean("attempted:"+group,true).apply();store.setStatus(group,"pending");render();
         List<AssistantStore.Message> turns=store.conversation(28);
         List<AssistantStore.Message> supplements=new ArrayList<>();for(AssistantStore.Message m:turns)if(m.role.equals("user")&&m.groupId.equals(group))supplements.add(m);turns.removeAll(supplements);turns.addAll(supplements);
         List<AssistantStore.Memory> memories=store.memories(false);
@@ -144,17 +197,17 @@ public final class HomeConversationView extends FrameLayout {
             store.setStatus(group,"sent");
             main.post(()->{if(closed)return;busy=false;inFlightGroup=null;
                 if(!reply.toolResults.isEmpty()){resultText=reply.toolResults;prefs.edit().putString("result",resultText).apply();}
-                if(version==generation){restore();react.run();DecisionActions.open(activity,reply.clientAction);}else{prefs.edit().putBoolean("superseded:reply:"+group,true).apply();render();}
+                if(version==generation){restore();reveal(assistant);react.run();DecisionActions.open(activity,reply.clientAction);}else{prefs.edit().putBoolean("superseded:reply:"+group,true).apply();render();}
                 if(pendingGroup!=null)dispatch();else syncInbox();
             });
-        }catch(Exception e){store.setStatus(group,"failed");main.post(()->{if(closed)return;busy=false;inFlightGroup=null;
+        }catch(Exception e){store.setStatus(group,"failed");main.post(()->{if(closed)return;busy=false;queued=false;inFlightGroup=null;
             // Keep a failed older request available in history; the current turn includes the user's supplements.
             if(pendingGroup==null)pendingGroup=group;
-            state.setText("未能确认发送结果 · 点击重试");state.setVisibility(VISIBLE);
+            failureText="未能确认发送结果 · 点击重试";render();
         });}});
     }
-    public void resume(){active=true;if(!busy)restore();main.removeCallbacks(poll);main.post(poll);if(pausedAt>0&&System.currentTimeMillis()-pausedAt>30*60*1000L)greetingEvaluated=false;main.postDelayed(this::maybeGreet,1400);}
-    public void pause(){active=false;pausedAt=System.currentTimeMillis();main.removeCallbacks(poll);main.removeCallbacks(beginVoice);touching=false;if(voice!=null)voice.interrupt();}
+    public void resume(){active=true;if(!busy)restore();else render();main.removeCallbacks(poll);main.post(poll);if(pausedAt>0&&System.currentTimeMillis()-pausedAt>30*60*1000L)greetingEvaluated=false;main.postDelayed(this::maybeGreet,1400);}
+    public void pause(){active=false;updateFeedback();pausedAt=System.currentTimeMillis();main.removeCallbacks(poll);main.removeCallbacks(beginVoice);touching=false;if(voice!=null)voice.interrupt();}
     private boolean idleForProactive(){return active&&!closed&&!busy&&pendingGroup==null&&!keyboard&&input.length()==0&&!touching&&voice==null&&(detail==null||!detail.isShowing())&&activity.hasWindowFocus()&&System.currentTimeMillis()-lastInteraction>1200;}
     private void maybeGreet(){
         if(greetingEvaluated||!idleForProactive()||!prefs.getBoolean("proactive",true))return;
@@ -186,7 +239,7 @@ public final class HomeConversationView extends FrameLayout {
         });}catch(Exception ignored){main.post(()->syncing=false);}});
     }
     private void showText(String title,String text){if(text.isEmpty())return;lastInteraction=System.currentTimeMillis();TextView body=label(text,16);body.setTextIsSelectable(true);android.text.util.Linkify.addLinks(body,android.text.util.Linkify.WEB_URLS);body.setPadding(dp(22),dp(18),dp(22),dp(18));body.setTextColor(Color.parseColor(dark?"#E5EDE3":"#263C31"));ScrollView scroll=new ScrollView(activity);scroll.addView(body);showDialog(title,scroll);}
-    private void showDialog(String title,View body){Context themed=new android.view.ContextThemeWrapper(activity,dark?android.R.style.Theme_Material_Dialog_Alert:android.R.style.Theme_Material_Light_Dialog_Alert);detail=new AlertDialog.Builder(themed).setTitle(title).setView(body).setPositiveButton("收起",null).setNeutralButton("历史记录",(d,w)->showHistory()).create();detail.show();}
+    private void showDialog(String title,View body){Context themed=new android.view.ContextThemeWrapper(activity,dark?android.R.style.Theme_Material_Dialog_Alert:android.R.style.Theme_Material_Light_Dialog_Alert);detail=new AlertDialog.Builder(themed).setTitle(title).setView(body).setPositiveButton("收起",null).create();detail.show();}
     public void showHistory(){lastInteraction=System.currentTimeMillis();Intent intent=new Intent(activity,HistoryActivity.class);intent.putExtra("dark",dark);activity.startActivity(intent);}
     public void showResults(){
         lastInteraction=System.currentTimeMillis();

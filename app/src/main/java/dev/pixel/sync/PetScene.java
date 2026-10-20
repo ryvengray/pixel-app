@@ -14,10 +14,12 @@ import javax.microedition.khronos.opengles.GL10;
 public final class PetScene extends GLSurfaceView implements GLSurfaceView.Renderer {
  private final String fragment;
  private final FloatBuffer vertices=ByteBuffer.allocateDirect(32).order(ByteOrder.nativeOrder()).asFloatBuffer();
- private int program,position,resolution,timeUniform,darkUniform,reactionUniform,motionUniform,compactUniform,compactCenterUniform,width,height;
+ private int program,position,resolution,timeUniform,darkUniform,reactionUniform,motionUniform,compactUniform,compactCenterUniform,thinkingUniform,width,height;
  private final long start=SystemClock.uptimeMillis();
  private volatile long tapped=-10000;
- private volatile boolean dark,moving=true;
+ private volatile boolean dark,moving=true,thinking;
+ private float thinkingBlend;
+ private long lastFrame;
  private volatile float compact;
  private volatile float compactCenterX=.90f,compactCenterY=.08f;
  private ValueAnimator compactAnimator;
@@ -36,6 +38,8 @@ public final class PetScene extends GLSurfaceView implements GLSurfaceView.Rende
  public void setTheme(boolean value){dark=value;requestRender();}
  public void setMoving(boolean value){moving=value;if(active){removeCallbacks(frame);post(frame);}}
  public boolean isMoving(){return moving;}
+ public void setThinking(boolean value){thinking=value;requestRender();}
+ public boolean isThinking(){return thinking;}
  public void react(){tapped=SystemClock.uptimeMillis();requestRender();}
  public void setCompactTarget(float xFraction,float yFraction){compactCenterX=xFraction;compactCenterY=yFraction;requestRender();}
  public void setCompact(boolean value,boolean animate){
@@ -68,15 +72,18 @@ public final class PetScene extends GLSurfaceView implements GLSurfaceView.Rende
   position=GLES20.glGetAttribLocation(program,"position");resolution=GLES20.glGetUniformLocation(program,"resolution");
   timeUniform=GLES20.glGetUniformLocation(program,"time");darkUniform=GLES20.glGetUniformLocation(program,"dark");
   reactionUniform=GLES20.glGetUniformLocation(program,"reaction");motionUniform=GLES20.glGetUniformLocation(program,"motion");
-  compactUniform=GLES20.glGetUniformLocation(program,"compact");compactCenterUniform=GLES20.glGetUniformLocation(program,"compactCenter");
+  compactUniform=GLES20.glGetUniformLocation(program,"compact");compactCenterUniform=GLES20.glGetUniformLocation(program,"compactCenter");thinkingUniform=GLES20.glGetUniformLocation(program,"thinking");
  }
  public void onSurfaceChanged(GL10 gl,int w,int h){width=w;height=h;GLES20.glViewport(0,0,w,h);}
  public void onDrawFrame(GL10 gl){
   if(program==0){GLES20.glClearColor(.1f,.2f,.14f,1);GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);return;}
   long now=SystemClock.uptimeMillis();float elapsed=(now-tapped)/1000f;
+  float dt=lastFrame==0?1f:Math.min(1f,(now-lastFrame)/220f);lastFrame=now;
+  thinkingBlend+=( (thinking?1f:0f)-thinkingBlend)*(moving?dt:1f);
   float bounce=elapsed<1.8f&&moving?(float)(Math.pow(Math.sin(elapsed*Math.PI/.6),2)*Math.exp(-elapsed*2)):0;
   GLES20.glUseProgram(program);GLES20.glUniform2f(resolution,width,height);GLES20.glUniform1f(timeUniform,(now-start)/1000f);
   GLES20.glUniform1f(darkUniform,dark?1:0);GLES20.glUniform1f(reactionUniform,bounce);GLES20.glUniform1f(motionUniform,moving?1:0);
+  GLES20.glUniform1f(thinkingUniform,thinkingBlend);
   GLES20.glUniform1f(compactUniform,compact);GLES20.glUniform2f(compactCenterUniform,compactCenterX,compactCenterY);
   vertices.position(0);GLES20.glVertexAttribPointer(position,2,GLES20.GL_FLOAT,false,0,vertices);
   GLES20.glEnableVertexAttribArray(position);GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP,0,4);

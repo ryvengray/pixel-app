@@ -20,10 +20,11 @@ public class MainActivity extends Activity {
  private PetScene scene;
  private HomeConversationView home;
  private SharedPreferences preferences;
- private boolean dark;
+ private boolean dark,imeAnimating;
  private FrameLayout overlay;
  private FrameLayout root;
  private TextView title,menuButton,petTouch;
+ private ImageButton historyButton;
  private Dialog menu;
  private Dialog fileActionDialog;
  private int foreground,secondary;
@@ -42,17 +43,31 @@ public class MainActivity extends Activity {
   FrameLayout.LayoutParams header=new FrameLayout.LayoutParams(-2,-2,Gravity.TOP|Gravity.LEFT);header.leftMargin=dp(28);header.topMargin=dp(26);overlay.addView(title,header);
   menuButton=text("•••",22);menuButton.setGravity(Gravity.CENTER);menuButton.setElevation(dp(16));menuButton.setContentDescription("打开功能和外观菜单");menuButton.setOnClickListener(v->showMenu());
   FrameLayout.LayoutParams button=new FrameLayout.LayoutParams(dp(MENU_WIDTH_DP),dp(MENU_HEIGHT_DP),Gravity.TOP|Gravity.RIGHT);button.topMargin=dp(MENU_TOP_DP);button.rightMargin=dp(MENU_RIGHT_DP);overlay.addView(menuButton,button);
+  historyButton=new ImageButton(this);historyButton.setImageResource(R.drawable.ic_chat_history);historyButton.setPadding(dp(13),dp(13),dp(13),dp(13));
+  historyButton.setContentDescription("查看聊天历史");historyButton.setTooltipText("聊天历史");historyButton.setElevation(dp(16));historyButton.setOnClickListener(v->home.showHistory());
+  FrameLayout.LayoutParams historyPosition=new FrameLayout.LayoutParams(dp(48),dp(48),Gravity.TOP|Gravity.RIGHT);historyPosition.topMargin=dp(MENU_TOP_DP);historyPosition.rightMargin=dp(MENU_RIGHT_DP+MENU_WIDTH_DP+10);overlay.addView(historyButton,historyPosition);
   petTouch=new TextView(this);petTouch.setContentDescription("玉绿色宠物，点击打个招呼，长按打开菜单");
   petTouch.setElevation(dp(12));
   petTouch.setOnClickListener(v->scene.react());
   petTouch.setOnLongClickListener(v->{showMenu();return true;});
   FrameLayout.LayoutParams pp=new FrameLayout.LayoutParams(dp(290),dp(300),Gravity.CENTER);pp.bottomMargin=dp(30);overlay.addView(petTouch,pp);
-  home=new HomeConversationView(this,()->scene.react());home.setElevation(dp(14));
+  home=new HomeConversationView(this,()->scene.react(),waiting->{scene.setThinking(waiting);petTouch.setContentDescription(waiting?"Greta 正在想，稍等一下":"玉绿色宠物，点击打个招呼，长按打开菜单");});home.setElevation(dp(14));
   overlay.addView(home,new FrameLayout.LayoutParams(-1,-1));
-  root.setOnApplyWindowInsetsListener((v,insets)->{android.graphics.Insets safe=insets.getInsets(WindowInsets.Type.systemBars()|WindowInsets.Type.displayCutout());android.graphics.Insets ime=insets.getInsets(WindowInsets.Type.ime());overlay.setPadding(safe.left,safe.top,safe.right,safe.bottom);home.setPadding(0,0,0,Math.max(0,ime.bottom-safe.bottom));home.onKeyboard(insets.isVisible(WindowInsets.Type.ime()));return insets;});
+  root.setOnApplyWindowInsetsListener((v,insets)->{applyInputInsets(insets,!imeAnimating);return insets;});
+  root.setWindowInsetsAnimationCallback(new WindowInsetsAnimation.Callback(WindowInsetsAnimation.Callback.DISPATCH_MODE_CONTINUE_ON_SUBTREE){
+   @Override public void onPrepare(WindowInsetsAnimation animation){if((animation.getTypeMask()&WindowInsets.Type.ime())!=0)imeAnimating=true;}
+   @Override public WindowInsets onProgress(WindowInsets insets,java.util.List<WindowInsetsAnimation> running){applyInputInsets(insets,true);return insets;}
+   @Override public void onEnd(WindowInsetsAnimation animation){if((animation.getTypeMask()&WindowInsets.Type.ime())!=0){imeAnimating=false;WindowInsets insets=root.getRootWindowInsets();if(insets!=null)applyInputInsets(insets,true);}}
+  });
   root.setOnTouchListener((v,event)->{if(event.getAction()==android.view.MotionEvent.ACTION_DOWN){View focus=getCurrentFocus();if(focus instanceof android.widget.EditText){android.view.inputmethod.InputMethodManager imm=(android.view.inputmethod.InputMethodManager)getSystemService(Activity.INPUT_METHOD_SERVICE);imm.hideSoftInputFromWindow(focus.getWindowToken(),0);focus.clearFocus();}}return false;});
   setContentView(root);applyColors();
   if(state==null)root.post(()->handleIncomingFile(getIntent()));
+ }
+ private void applyInputInsets(WindowInsets insets,boolean moveComposer){
+  android.graphics.Insets safe=insets.getInsets(WindowInsets.Type.systemBars()|WindowInsets.Type.displayCutout());
+  android.graphics.Insets ime=insets.getInsets(WindowInsets.Type.ime());overlay.setPadding(safe.left,safe.top,safe.right,safe.bottom);
+  if(moveComposer)home.setPadding(0,0,0,Math.max(0,ime.bottom-safe.bottom));
+  if(!imeAnimating)home.onKeyboard(insets.isVisible(WindowInsets.Type.ime()));
  }
  @Override public void onWindowFocusChanged(boolean focused){super.onWindowFocusChanged(focused);if(focused)DecisionActions.onFocus(this);}
  private TextView text(String value,int size){TextView v=new TextView(this);v.setText(value);v.setTextSize(size);return v;}
@@ -61,6 +76,7 @@ public class MainActivity extends Activity {
   foreground=Color.parseColor(dark?"#E5EDE3":"#263C31");secondary=Color.parseColor(dark?"#92A99A":"#708675");
   root.setBackgroundColor(Color.parseColor(dark?"#102019":"#F0F5E9"));
   title.setTextColor(foreground);menuButton.setTextColor(foreground);
+  historyButton.setImageTintList(android.content.res.ColorStateList.valueOf(foreground));historyButton.setBackground(surface(Color.parseColor(dark?"#263D33":"#DDE8DC"),24));
   menuButton.setBackground(surface(Color.parseColor(dark?"#263D33":"#DDE8DC"),24));scene.setTheme(dark);home.setTheme(dark);
   WindowInsetsController controller=getWindow().getInsetsController();if(controller!=null){
    int appearance=WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS|WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;
@@ -83,6 +99,7 @@ public class MainActivity extends Activity {
   Switch proactive=new Switch(this);proactive.setText("偶尔主动聊两句");proactive.setTextColor(foreground);proactive.setChecked(getSharedPreferences("home_conversation",0).getBoolean("proactive",true));proactive.setOnCheckedChangeListener((v,checked)->getSharedPreferences("home_conversation",0).edit().putBoolean("proactive",checked).apply());sheet.addView(proactive);
   sheet.addView(menuAction("◷   提醒与最近结果","查看工具结果、完成或延后提醒",()->{menu.dismiss();home.showResults();}));
   menuSection(sheet,"工具");
+  sheet.addView(menuAction("▤   生活记录","日记与记账，自动保存到手机",()->{menu.dismiss();startActivity(DecisionActions.intent(this,"open_records",new org.json.JSONObject()));}));
   sheet.addView(menuAction("↻   Obsidian 同步","同步你的笔记库",()->{menu.dismiss();startActivity(DecisionActions.intent(this,"open_sync",new org.json.JSONObject()));}));
   sheet.addView(menuAction("▣   打印文件","选择文件或文字并设置打印",()->{menu.dismiss();startActivity(DecisionActions.intent(this,"open_print",new org.json.JSONObject()));}));
   menuSection(sheet,"外观");
@@ -125,7 +142,7 @@ public class MainActivity extends Activity {
  private void menuSection(LinearLayout sheet,String title){TextView label=text(title,11);label.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));label.setTextColor(secondary);label.setPadding(dp(4),dp(13),0,dp(8));sheet.addView(label);}
  private View menuAction(String label,String detail,Runnable action){LinearLayout card=new LinearLayout(this);card.setOrientation(LinearLayout.VERTICAL);card.setPadding(dp(15),dp(10),dp(15),dp(10));card.setBackground(new android.graphics.drawable.RippleDrawable(android.content.res.ColorStateList.valueOf(Color.parseColor(dark?"#406651":"#CADBC7")),surface(Color.parseColor(dark?"#294536":"#E3ECDC"),15),null));TextView name=text(label,15);name.setTextColor(foreground);name.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));card.addView(name);TextView sub=text(detail,12);sub.setTextColor(secondary);sub.setPadding(dp(27),dp(2),0,0);card.addView(sub);LinearLayout.LayoutParams cp=new LinearLayout.LayoutParams(-1,-2);cp.bottomMargin=dp(6);card.setLayoutParams(cp);card.setOnClickListener(v->action.run());return card;}
  @Override protected void onNewIntent(Intent intent){super.onNewIntent(intent);setIntent(intent);handleIncomingFile(intent);home.syncInbox();}
- @Override public void onResume(){super.onResume();if(preferences.getInt("theme",0)==0)dark=systemDark();scene.resumeScene();applyColors();home.resume();home.openIncoming(getIntent().getStringExtra("message_id"));getIntent().removeExtra("message_id");}
+ @Override public void onResume(){super.onResume();LifeSync.schedule(this);if(preferences.getInt("theme",0)==0)dark=systemDark();scene.resumeScene();applyColors();home.resume();home.openIncoming(getIntent().getStringExtra("message_id"));getIntent().removeExtra("message_id");}
  @Override public void onPause(){home.pause();scene.pauseScene();super.onPause();}
  @Override public void onDestroy(){DecisionActions.cancelPending(this);if(menu!=null)menu.dismiss();if(fileActionDialog!=null)fileActionDialog.dismiss();home.shutdown();super.onDestroy();}
 }

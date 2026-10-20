@@ -43,6 +43,7 @@ public final class DecisionActions {
             case "open_sync":target=SyncActivity.class;break;
             case "open_print":target=PrintActivity.class;break;
             case "open_topics":target=TopicsActivity.class;break;
+            case "open_records":target=RecordsActivity.class;break;
             default:return null;
         }
         Intent intent=new Intent(activity,target);

@@ -19,7 +19,7 @@ App 的“助理设置”包含两种连接方式：
 
 没有网络时，App 仍可查看、编辑记忆和历史，但无法获得模型回复；服务端恢复后才能继续后台提醒和主动通知。Android 端已接入 Firebase Cloud Messaging：扫码配对后会自动注册设备令牌，服务端使用 Firebase 服务账户发送系统推送。Android 13 及以上首次配对时会请求通知权限。
 
-适用于 Pixel 9 Pro 的原生 Android App（Android 12 及以上）。点击“立即同步”，通过 Termux 执行固定目录 `~/storage/shared/Documents/obsidian` 的 Git 同步。
+适用于 Pixel 9 Pro 的原生 Android App（Android 12 及以上）。打开同步工具后倒计时 3 秒自动开始，可在倒计时内取消或点击“立即同步”跳过等待；同步期间按钮禁用并显示加载状态。通过 Termux 执行固定目录 `~/storage/shared/Documents/obsidian` 的 Git 同步。
 
 流程：检查仓库 → 有更改时 `git add -A` 和 `git commit` → `git pull --no-rebase --no-edit` → `git push`。使用当前分支的 upstream 远程和分支，不强制推送。`.gitignore` 中的文件不会提交，其他新增、修改、删除会全部提交。拉取采用合并方式，出现冲突时停止，需手动解决后重试。
 
@@ -257,3 +257,5 @@ App 只有收到 Termux 成功退出结果才显示成功；结果通过 Pending
 ### 可选 Decision Engine
 
 CPU 工具路由与参数提取接入见 [Decision Engine 部署与测试](docs/decision-engine.md)。默认关闭，可通过 `compose.decision.yaml` 启用 BGE 路由容器，手机继续使用现有配对服务地址。
+
+日记与记账已合并为「生活记录」：支持对助理说一句话自动本地保存，以及授权后的 Obsidian 后台导出/同步。首次配置和保存规则见 [生活记录说明](docs/life-records.md)。

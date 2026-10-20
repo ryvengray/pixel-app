@@ -78,5 +78,33 @@
     ],
     "direct_phrases": [],
     "target": "server"
+  },
+  {
+    "name": "create_life_record",
+    "description": "记录日记、生活和收支，可有多笔金额",
+    "parameter_policy": "REQUIRED",
+    "examples": [
+      "记一下我今天加了油400块",
+      "帮我记一笔午饭28元",
+      "记日记今天很开心"
+    ],
+    "direct_phrases": [],
+    "target": "android"
+  },
+  {
+    "name": "open_records",
+    "description": "打开日记和记账记录本",
+    "parameter_policy": "NONE",
+    "examples": [
+      "打开生活记录",
+      "查看日记",
+      "查看账本"
+    ],
+    "direct_phrases": [
+      "打开生活记录",
+      "查看日记",
+      "查看账本"
+    ],
+    "target": "android"
   }
 ]

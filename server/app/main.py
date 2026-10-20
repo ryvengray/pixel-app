@@ -18,8 +18,8 @@ from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, Header, HTTPE
 from pydantic import BaseModel, Field
 
 from . import topics
-from .decision import Decision, DecisionRequest, apply_policy, fallback, non_action, informational
-from jsonschema import Draft202012Validator
+from .decision import Decision, DecisionRequest, apply_policy, fallback, non_action, informational, record_intent
+from jsonschema import Draft202012Validator, FormatChecker
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -146,7 +146,7 @@ class ChatRequest(BaseModel):
     timezone: str = Field(default="Asia/Shanghai", max_length=80)
     client_message_id: str | None = Field(default=None, min_length=8, max_length=100)
     decision_enabled: bool = False
-    client_tools: list[Literal["open_sync", "open_print", "open_topics"]] = Field(default_factory=list, max_length=3)
+    client_tools: list[Literal["open_sync", "open_print", "open_topics", "create_life_record", "open_records"]] = Field(default_factory=list, max_length=5)
     suppressed_topic_ids: list[str] = Field(default_factory=list, max_length=200)
 
 
@@ -436,14 +436,16 @@ async def agent_reply(request: ChatRequest, decision: Decision | None = None) ->
                 if name not in allowed:
                     raise ValueError("Tool is not allowed for this turn")
                 if name in CLIENT_TOOL_NAMES:
-                    if name not in request.client_tools or non_action(request.messages[-1].content):
+                    if name not in request.client_tools or non_action(request.messages[-1].content) or len(calls) != 1:
                         raise ValueError("Local tools require an explicit user command and client capability")
-                    errors = list(Draft202012Validator(SCHEMAS[name]).iter_errors(args))
+                    if name == "create_life_record" and not record_intent(request.messages[-1].content):
+                        raise ValueError("Saving a life record requires an explicit request to record it")
+                    errors = list(Draft202012Validator(SCHEMAS[name], format_checker=FormatChecker()).iter_errors(args))
                     needs_text = (name == "open_print" and state.get("decision") and
                                   state["decision"]["type"] == "TOOL_WITH_LLM")
                     if errors or (needs_text and not args.get("text")):
                         raise ValueError("Invalid local tool parameters; preserve explicit text and clarify unsupported options")
-                    return {"content": "已准备打开本地工具，请在工具中确认操作。", "memory_changes": state["changes"],
+                    return {"content": "等待手机保存记录。" if name == "create_life_record" else "已准备打开本地工具，请在工具中确认操作。", "memory_changes": state["changes"],
                             "tool_results": state["tool_results"], "decision": state.get("decision"),
                             "client_action": {"name": name, "arguments": args, "id": request.client_message_id}}
                 result = await run_tool(name, args, operation)

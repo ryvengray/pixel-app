@@ -49,7 +49,11 @@ def operation_intent(text: str) -> bool:
     # The lexical gate intentionally sacrifices recall; the original LLM handles variants.
     return bool(re.search(
         r"提醒我|提醒一下我|^(?:请|麻烦|帮我|给我|我要|我想|我需要)*"
-        r"(?:打开|查看|看看|看一下|同步|打印(?!机)|设置提醒)", text.strip()))
+        r"(?:打开|查看|看看|看一下|同步|打印(?!机)|设置提醒|记一下|记录一下|记一笔|记录一笔|记日记|写日记)", text.strip()))
+
+
+def record_intent(text: str) -> bool:
+    return bool(re.search(r"^(?:请|麻烦|帮我|给我|我要|我想|我需要)*(?:记一下|记录一下|记一笔|记录一笔|记日记|写日记)", text.strip())) and not non_action(text)
 
 
 def non_action(text: str) -> bool:

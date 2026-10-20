@@ -1,6 +1,6 @@
 precision highp float;
 uniform vec2 resolution;
-uniform float time, dark, reaction, motion, compact;
+uniform float time, dark, reaction, motion, compact, thinking;
 uniform vec2 compactCenter;
 mat2 rot(float a){float c=cos(a),s=sin(a);return mat2(c,-s,s,c);}
 float triangle(vec2 p){
@@ -11,8 +11,8 @@ float triangle(vec2 p){
 }
 vec3 local(vec3 p){
  float t=time*motion;
- p.y-=.06*sin(t*1.5)+reaction*.35;
- p.xy=rot(.055*sin(t*.8)+reaction*.13)*p.xy;
+ p.y-=.06*sin(t*1.5)+reaction*.35+thinking*.055*sin(t*3.2);
+ p.xy=rot(.055*sin(t*.8)+reaction*.13+thinking*.075*sin(t*1.8))*p.xy;
  p.xz=rot(.11*sin(t*.6)+.12+reaction*.16*p.y)*p.xz;
  float stretch=1.+.025*sin(t*1.5)+reaction*.06;p.y/=stretch;p.x*=stretch;return p;
 }
@@ -48,7 +48,7 @@ void main(){
    float diffuse=max(dot(n,l),0.),rim=pow(1.-max(n.z,0.),2.),spec=pow(max(dot(reflect(-l,n),-rd),0.),45.);
    col=vec3(.57,.78,.56)*(.45+.53*diffuse)+vec3(.91,.98,.79)*spec*.36+vec3(.22,.38,.23)*rim;
    float blink=motion<.5?1.:1.-.93*pow(max(cos(t*1.27),0.),70.);
-   vec2 eye=vec2(abs(q.x)-.22,(q.y-.10)/max(blink,.07));
+   vec2 eye=vec2(abs(q.x+thinking*.018*sin(t*1.5))-.22,(q.y-.10-thinking*.018)/max(blink,.07));
    float eyes=1.-smoothstep(0.,.008,length(eye/vec2(.061,.083))-1.);
    float smile=abs(q.y-(-.19+1.4*q.x*q.x))-.014;
    float mouth=(1.-smoothstep(0.,.009,smile))*(1.-smoothstep(.13,.15,abs(q.x)));
@@ -58,6 +58,14 @@ void main(){
    float shine=(1.-smoothstep(.011,.018,length(vec2(abs(q.x)-.206,q.y-.127))))*eyes*front;
    col=mix(col,vec3(.91,1.,.89),shine*.8);
   }
+ }
+ if(thinking>.001){
+  float dots=0.;
+  for(int i=0;i<3;i++){
+   float index=float(i);vec2 center=vec2(-.13+index*.13,.84+.025*sin(t*3.2-index*.9));
+   dots+=1.-smoothstep(.019,.029,length(petUv-center));
+  }
+  col=mix(col,mix(vec3(.24,.49,.30),vec3(.65,.84,.66),dark),clamp(dots,0.,1.)*thinking*.8);
  }
  gl_FragColor=vec4(col,1.);
 }

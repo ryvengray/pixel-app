@@ -33,7 +33,7 @@ Android → 已有 HTTP/HTTPS `POST /v1/chat`（设备 Bearer token）→ Greta 
 - BGE 为通用检索模型，相似度不是概率；使用归一化向量内积、默认阈值 0.82、第一二候选差距 0.08。启动一次加载模型与候选向量，单 worker，CPU 4 线程；忙时返回 503，让 gateway 回原 LLM。
 - 先检查明确操作意图；“我的打印机坏了”等陈述不会直接路由。短命令完整别名匹配可直接路由；语义匹配主要用于 REQUIRED / OPTIONAL 参数路径。首版保守接受中文输入；疑问、引号、假设、否定、多操作不走直接路径。疑问/说明性输入的 LLM 不提供工具，执行层也拒绝强行返回的调用；取消提醒、多操作与连续补充交还现有上下文 LLM。
 - Gateway 会按本地注册表和手机能力重新校验 sidecar 结果。服务端工具使用 JSON Schema 校验必填、类型、枚举和未知字段，提醒继续校验未来时间、时区与标题。一次参数提取最多允许一次成功操作；失败可修正。
-- Android 仅允许 open_sync/open_print/open_topics 固定工具，校验参数、文本长度，拒绝任意类名、URI、命令。open_sync 只打开同步页面，后续继续复用 Termux 安装和 RUN_COMMAND 权限检查。打印只预填草稿，不提交作业。
+- Android 仅允许 open_sync/open_print/open_topics 固定工具，校验参数、文本长度，拒绝任意类名、URI、命令。open_sync 打开同步页面后启动可取消的 3 秒倒计时，结束后复用 Termux 安装和 RUN_COMMAND 权限检查执行同步。打印只预填草稿，不提交作业。
 - 复用 chat_response 与 chat_checkpoint，重试恢复原计划而不再次路由；路由后的工具结果仍使用现有 operation_id 去重。不改变数据库结构、配对、提醒调度或手机直连 DeepSeek 兜底。
 - 相对时间由现有 system_prompt 按 App 提供的 IANA timezone 和当前时间解释，提醒必须是带时区的 ISO 时间。不由 BGE 提取日期，也不依赖服务器本地时区。
 
@@ -134,7 +134,7 @@ JAVA_HOME=/path/to/jdk17 ANDROID_HOME=/path/to/android-sdk ./gradlew :app:compil
 
 助理设置 → 工具打开方式：默认“底部抽屉”，也可选择“打开新界面”。同步、打印、重要话题使用共同的 ToolActivity 外壳，复用原工具全部内容、生命周期、权限回调和执行逻辑。抽屉从底部滑入，支持拖动顶部把手向下关闭、关闭按钮、返回键及点击外部关闭，并提供临时“全屏”按钮。菜单入口遵循同一设置；全屏转换保留打印草稿和传入文件信息。“减少动态效果”关闭抽屉窗口动画。
 
-服务端普通 DeepSeek 流程也注册 App 声明可用的本地工具，不要求启用 BGE 或部署模型。手机直连 DeepSeek 也从同一份 tools.json 加载工具定义。LLM 返回 open_sync 后，只会打开 Obsidian 同步模块，点击“立即同步”才执行；打印仍需手动确认。疑问、否定、未知工具或非法参数不产生页面动作。旧版 App 不声明 client_tools，仍获得原工具集合。
+服务端普通 DeepSeek 流程也注册 App 声明可用的本地工具，不要求启用 BGE 或部署模型。手机直连 DeepSeek 也从同一份 tools.json 加载工具定义。LLM 返回 open_sync 后打开 Obsidian 同步模块，倒计时 3 秒自动开始，可取消或立即开始；正在同步时按钮禁用并显示加载状态。关闭、失焦、旋转或切换全屏会取消尚未开始的倒计时；切换回来不会自动重新启动。打印仍需手动确认。疑问、否定、未知工具或非法参数不产生页面动作。旧版 App 不声明 client_tools，仍获得原工具集合。
 
 主要代码：DecisionActions.java 校验与调度；ClientTools.java 负责手机端定义读取和参数检查；ToolActivity.java 负责抽屉/全屏外壳；AssistantSettingsActivity.java 保存展示偏好。手机和服务端都需更新到本次版本，旧服务端不会在普通 LLM 路径返回新本地工具。
 
@@ -148,3 +148,9 @@ adb -s emulator-5554 shell am instrument -w dev.pixel.sync.dev.test/dev.pixel.sy
 ```
 
 测试抽屉默认展示、全屏偏好、打印草稿及切换全屏后的编辑内容、重要话题、关闭 BGE 后的本地调度、重复动作去重、失焦恢复及非法工具/疑问句防护。
+
+同步倒计时/取消/运行锁定测试仅在未安装 Termux 的独立模拟器运行，自动到期验证走缺少 Termux 的可控失败路径，运行中和完成状态通过模拟回调验证，不执行真实 Git 命令：
+
+```bash
+adb -s emulator-5554 shell am instrument -w -e suite sync dev.pixel.sync.dev.test/dev.pixel.sync.ToolUiInstrumentation
+```

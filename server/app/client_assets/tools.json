@@ -3,8 +3,12 @@
     "type": "function",
     "function": {
       "name": "open_sync",
-      "description": "Open the Android Obsidian sync tool only when the user asks to sync notes or open that tool. This prepares the UI; it does not perform Git sync. Never call for questions or explanations.",
-      "parameters": {"type": "object", "properties": {}, "additionalProperties": false}
+      "description": "Open the Android Obsidian sync tool only when the user asks to sync notes or open that tool. The UI starts a cancellable 3-second countdown, then syncs locally through Termux if authorized. Do not claim sync succeeded before receiving an actual result. Never call for questions or explanations.",
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
     }
   },
   {
@@ -14,7 +18,13 @@
       "description": "Open the Android print tool at the user's request. Preserve explicitly supplied text as a draft. Never submit a print job. Ask when requested file or options cannot be represented; never call for questions or explanations.",
       "parameters": {
         "type": "object",
-        "properties": {"text": {"type": "string", "minLength": 1, "maxLength": 4000}},
+        "properties": {
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          }
+        },
         "additionalProperties": false
       }
     }
@@ -24,7 +34,93 @@
     "function": {
       "name": "open_topics",
       "description": "Open the Android important-topics tool only when explicitly requested. Does not change topics or schedule follow-ups. Never call for questions or explanations.",
-      "parameters": {"type": "object", "properties": {}, "additionalProperties": false}
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "create_life_record",
+      "description": "Save a diary/life record and optional multiple financial items ON THE PHONE, only when the user explicitly asks to record it (记一下/记一笔/记日记). Preserve all supplied amounts; never treat this as stable memory. Do not invent amounts or currency conversions. Date defaults to today in user's timezone; resolve 昨天/今天 to YYYY-MM-DD. Ask if ambiguous. This returns a pending local action; never claim saved until phone commits it.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "content": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          },
+          "date": {
+            "type": "string",
+            "format": "date"
+          },
+          "items": {
+            "type": "array",
+            "maxItems": 30,
+            "items": {
+              "type": "object",
+              "properties": {
+                "amount": {
+                  "type": "string",
+                  "pattern": "^[0-9]{1,9}(\\.[0-9]{1,2})?$",
+                  "description": "Positive decimal amount in currency units, e.g. 400 or 12.50; never floating point"
+                },
+                "currency": {
+                  "type": "string",
+                  "enum": [
+                    "CNY",
+                    "USD",
+                    "EUR",
+                    "JPY",
+                    "HKD",
+                    "GBP"
+                  ]
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "expense",
+                    "income"
+                  ]
+                },
+                "category": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 80
+                }
+              },
+              "required": [
+                "amount",
+                "currency",
+                "kind",
+                "category"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "content",
+          "items"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "open_records",
+      "description": "Open the Android life record book (diary and bookkeeping) only at user's explicit request.",
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
     }
   }
 ]

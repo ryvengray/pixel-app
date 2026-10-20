@@ -16,8 +16,12 @@ import org.json.JSONObject;
 public final class ToolUiInstrumentation extends Instrumentation {
     private Activity current;
     private int passed;
-    @Override public void onCreate(Bundle args){super.onCreate(args);start();}
+    private boolean homeSuite,syncSuite,recordSuite;
+    @Override public void onCreate(Bundle args){super.onCreate(args);homeSuite=args!=null&&"home".equals(args.getString("suite"));syncSuite=args!=null&&"sync".equals(args.getString("suite"));recordSuite=args!=null&&"records".equals(args.getString("suite"));start();}
     @Override public void onStart(){
+        if(recordSuite){new RecordChecks(this).run();return;}
+        if(homeSuite){new HomeInteractionChecks(this).run();return;}
+        if(syncSuite){new SyncInteractionChecks(this).run();return;}
         SharedPreferences prefs=getTargetContext().getSharedPreferences("gray_settings",0);
         String previous=prefs.getString("tool_presentation",null),server=prefs.getString("server_url",null);
         boolean decision=prefs.getBoolean("decision_enabled",false);
@@ -95,7 +99,7 @@ public final class ToolUiInstrumentation extends Instrumentation {
                 expect(ClientTools.explicitCommand("同步笔记"),"sync command rejected");
                 expect(!ClientTools.explicitCommand("如何同步笔记"),"question accepted");
                 expect(!ClientTools.explicitCommand("不要同步笔记"),"negative accepted");
-                expect(ClientTools.definitions(getTargetContext()).length()==3,"shared tool assets missing");
+                expect(ClientTools.definitions(getTargetContext()).length()==5,"shared tool assets missing");
             });
             result.putString("stream","\nTool UI tests passed: "+passed+"\n");
         }catch(Throwable error){

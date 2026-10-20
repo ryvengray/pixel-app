@@ -135,7 +135,7 @@ class GatewayTests(unittest.TestCase):
             self.payload["client_message_id"] += "x"
             with patch.object(main,"route_request",AsyncMock(return_value=fallback(reason))), patch.object(main,"deepseek",AsyncMock(return_value={"content":"原有回复"})) as model:
                 self.assertEqual(self.send().json()["content"],"原有回复")
-            self.assertEqual(model.call_args.args[1],[*main.TOOLS,*main.CLIENT_TOOLS])
+            self.assertEqual(model.call_args.args[1],[*main.TOOLS,*[t for t in main.CLIENT_TOOLS if t["function"]["name"] in self.payload["client_tools"]]])
 
     def test_gateway_rejects_forged_direct_policy_and_handles_timeout(self):
         request=main.ChatRequest(**self.payload)
@@ -214,6 +214,29 @@ class GatewayTests(unittest.TestCase):
     def test_executor_rejects_types_unknown_keys_and_unknown_tool(self):
         for name,args in [("create_reminder",{"title":42,"due_at":False}), ("list_reminders",{"shell":"ls"}), ("unknown",{})]:
             self.assertFalse(asyncio.run(main.run_tool(name,args))["ok"])
+
+    def test_life_record_returns_pending_phone_action_with_multiple_amounts(self):
+        self.payload.update(decision_enabled=False,client_tools=["create_life_record"])
+        self.payload["messages"][0]["content"]="记一下我今天加油400元、买水5元"
+        args={"content":"今天加油、买水","items":[{"amount":"400","currency":"CNY","kind":"expense","category":"加油"},{"amount":"5","currency":"CNY","kind":"expense","category":"饮料"}]}
+        with patch.object(main,"deepseek",AsyncMock(return_value=self.call("create_life_record",args))) as model:
+            first=self.send();retry=self.send()
+        self.assertEqual(first.status_code,200)
+        self.assertEqual(first.json()["client_action"]["arguments"],args)
+        self.assertNotIn("已记录",first.json()["content"])
+        self.assertEqual(first.json(),retry.json());model.assert_awaited_once()
+
+    def test_diary_question_cannot_write_or_use_unadvertised_tool(self):
+        for text,capability in [("可以记一下我今天的支出吗",["create_life_record"]),("记一下今天很开心",[]),("同步笔记",["create_life_record"])]:
+            self.payload["client_message_id"] += "x"
+            self.payload.update(decision_enabled=False,client_tools=capability)
+            self.payload["messages"][0]["content"]=text
+            with patch.object(main,"deepseek",AsyncMock(side_effect=[self.call("create_life_record",{"content":"今天很开心","items":[]}),{"content":"请说明要记录的内容"}])):
+                self.assertNotIn("client_action",self.send().json())
+
+    def test_record_required_policy_never_direct(self):
+        request=DecisionRequest(text="记一下我今天加了油400块",available_tools=["create_life_record"])
+        self.assertEqual(apply_policy(request,"create_life_record",1).type,"TOOL_WITH_LLM")
 
 if __name__ == "__main__":
     unittest.main()

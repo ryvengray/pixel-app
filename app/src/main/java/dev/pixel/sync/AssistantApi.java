@@ -21,21 +21,32 @@ public final class AssistantApi {
     private static String secret(Context context,String name)throws Exception{return new SecureStore(context).get(name);}
     public static Reply chat(Context context,List<AssistantStore.Message> messages,List<AssistantStore.Memory> memories) throws Exception {return chat(context,messages,memories,UUID.randomUUID().toString());}
     public static Reply chat(Context context,List<AssistantStore.Message> messages,List<AssistantStore.Memory> memories,String messageId) throws Exception {
-        JSONObject request=new JSONObject();JSONArray turns=new JSONArray();for(AssistantStore.Message message:messages)turns.put(new JSONObject().put("role",message.role).put("content",message.content));request.put("messages",turns);request.put("client_message_id",messageId);request.put("decision_enabled",context.getSharedPreferences("gray_settings",0).getBoolean("decision_enabled",false));request.put("client_tools",new JSONArray(Arrays.asList("open_sync","open_print","open_topics")));request.put("timezone",java.util.TimeZone.getDefault().getID());try(TopicRepository topics=new TopicRepository(context)){request.put("suppressed_topic_ids",topics.suppressed());}
+        try(LifeRecords records=new LifeRecords(context)){LifeRecords.Record saved=records.find(messageId);if(saved!=null){LifeSync.schedule(context);return new Reply(saved.deleted?"这条记录已保存，随后已删除。":"已记录。"+LifeRecords.summary(saved.payload),Collections.emptyList(),false);}}
+        JSONObject request=new JSONObject();JSONArray turns=new JSONArray();for(AssistantStore.Message message:messages)turns.put(new JSONObject().put("role",message.role).put("content",message.content));request.put("messages",turns);request.put("client_message_id",messageId);request.put("decision_enabled",context.getSharedPreferences("gray_settings",0).getBoolean("decision_enabled",false));request.put("client_tools",new JSONArray(Arrays.asList("open_sync","open_print","open_topics","create_life_record","open_records")));request.put("timezone",java.util.TimeZone.getDefault().getID());try(TopicRepository topics=new TopicRepository(context)){request.put("suppressed_topic_ids",topics.suppressed());}
         String url=serverUrl(context), token=secret(context,"device_token");
         if(!url.isEmpty()&&!token.isEmpty()){
             SharedPreferences requests=context.getSharedPreferences("chat_requests",Context.MODE_PRIVATE);
             String saved=requests.getString(messageId,null);if(saved!=null)request=new JSONObject(saved);else requests.edit().putString(messageId,request.toString()).commit();
             Reply reply=parseServer(post(url+"/v1/chat",token,request));
             if(reply.clientAction!=null&&!messageId.equals(reply.clientAction.optString("id")))reply.clientAction=null;
+            reply=commitRecord(context,reply,messages,messageId);
             requests.edit().remove(messageId).apply();return reply;
         }
-        String key=secret(context,"deepseek_key");if(key.isEmpty())throw new IOException("服务端不可用，且尚未设置本地 DeepSeek 密钥。");return direct(context,key,messages,memories,messageId);
+        String key=secret(context,"deepseek_key");if(key.isEmpty())throw new IOException("服务端不可用，且尚未设置本地 DeepSeek 密钥。");return commitRecord(context,direct(context,key,messages,memories,messageId),messages,messageId);
+    }
+    private static Reply commitRecord(Context context,Reply reply,List<AssistantStore.Message> messages,String id)throws Exception{
+        if(reply.clientAction==null||!"create_life_record".equals(reply.clientAction.optString("name")))return reply;
+        String original=messages.isEmpty()?"":messages.get(messages.size()-1).content;
+        if(!id.equals(reply.clientAction.optString("id"))||!ClientTools.recordCommand(original))throw new IOException("记录指令未通过校验");
+        StringBuilder evidence=new StringBuilder();for(AssistantStore.Message m:messages)if(m.role.equals("user")&&m.groupId.equals(id)){if(evidence.length()>0)evidence.append("\n");evidence.append(m.content);}
+        try(LifeRecords records=new LifeRecords(context)){records.save(id,reply.clientAction.getJSONObject("arguments"),evidence.length()>0?evidence.toString():original);}
+        LifeSync.schedule(context);
+        return new Reply("已记录。"+LifeRecords.summary(reply.clientAction.getJSONObject("arguments")),reply.memories,reply.directFallback,reply.toolResults);
     }
     private static Reply parseServer(String value)throws Exception{ JSONObject json=new JSONObject(value);ArrayList<AssistantStore.Memory> changes=new ArrayList<>();JSONArray items=json.optJSONArray("memory_changes");if(items!=null)for(int i=0;i<items.length();i++)changes.add(memory(items.getJSONObject(i)));StringBuilder tools=new StringBuilder();JSONArray results=json.optJSONArray("tool_results");if(results!=null)for(int i=0;i<results.length();i++){JSONObject item=results.getJSONObject(i);if(tools.length()>0)tools.append("\n\n");tools.append(item.optString("summary",item.toString()));}Reply reply=new Reply(json.optString("content",""),changes,false,tools.toString());reply.clientAction=json.optJSONObject("client_action");return reply; }
     private static AssistantStore.Memory memory(JSONObject item) throws JSONException {return new AssistantStore.Memory(item.getString("id"),item.getString("category"),item.getString("fact"),item.optDouble("confidence",.8),item.optString("source",""),item.optInt("revision",1),item.optBoolean("deleted",false),item.getString("updated_at"));}
     private static Reply direct(Context phone,String key,List<AssistantStore.Message> messages,List<AssistantStore.Memory> memories,String messageId)throws Exception{
-        JSONArray turns=new JSONArray();StringBuilder context=new StringBuilder("You are Greta, a warm concise personal assistant. These are the user's saved memories; use them only if relevant.\\n");for(AssistantStore.Memory m:memories)context.append("- [").append(m.category).append("] ").append(m.fact).append("\\n");turns.put(new JSONObject().put("role","system").put("content",context.toString()));for(AssistantStore.Message m:messages)turns.put(new JSONObject().put("role",m.role).put("content",m.content));
+        JSONArray turns=new JSONArray();StringBuilder context=new StringBuilder("Current date/time: "+java.time.ZonedDateTime.now()+". Use today for undated life records. You are Greta, a warm concise personal assistant. These are the user's saved memories; use them only if relevant.\\n");for(AssistantStore.Memory m:memories)context.append("- [").append(m.category).append("] ").append(m.fact).append("\\n");turns.put(new JSONObject().put("role","system").put("content",context.toString()));for(AssistantStore.Message m:messages)turns.put(new JSONObject().put("role",m.role).put("content",m.content));
         JSONObject body=new JSONObject().put("model","deepseek-chat").put("messages",turns).put("temperature",.7);
         String latest=messages.isEmpty()?"":messages.get(messages.size()-1).content;
         boolean canOpen=ClientTools.explicitCommand(latest);
