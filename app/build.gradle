@@ -16,10 +16,13 @@ android {
         applicationId 'dev.pixel.sync'
         minSdk 31
         targetSdk 35
+        testInstrumentationRunner 'dev.pixel.sync.ToolUiInstrumentation'
         versionCode appVersion.getProperty('VERSION_CODE').toInteger()
         versionName appVersion.getProperty('VERSION_NAME')
     }
     buildFeatures { buildConfig true }
+    // Same local tool schemas are used by the gateway and phone-only LLM fallback.
+    sourceSets.main.assets.srcDir(rootProject.file('server/app/client_assets'))
     flavorDimensions += 'environment'
     productFlavors {
         dev {

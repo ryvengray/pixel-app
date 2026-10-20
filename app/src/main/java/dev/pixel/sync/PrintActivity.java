@@ -26,7 +26,7 @@ import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-public class PrintActivity extends Activity {
+public class PrintActivity extends ToolActivity {
     public static final String EXTRA_DRAFT_TEXT = "dev.pixel.sync.extra.DRAFT_TEXT";
     public static final String EXTRA_FILE_NAME = "dev.pixel.sync.extra.FILE_NAME";
     private boolean dark;
@@ -64,6 +64,10 @@ public class PrintActivity extends Activity {
     @Override
     protected void onCreate(Bundle state) {
         super.onCreate(state);
+        copies=Math.max(1,Math.min(99,getIntent().getIntExtra("tool_copies",1)));
+        paperSize=getIntent().getStringExtra("tool_paper");if(!java.util.Arrays.asList("a4","a5","letter").contains(paperSize))paperSize="a4";
+        colorMode="color".equals(getIntent().getStringExtra("tool_color"))?"color":"monochrome";
+        selectedPrinterId=getIntent().getStringExtra("tool_printer");
         prefs = getSharedPreferences("home", 0);
         int choice = prefs.getInt("theme", 0);
         dark = choice == 0 ? systemDark() : choice == 2;
@@ -110,9 +114,18 @@ public class PrintActivity extends Activity {
         setContentView(screen);
         loadIncomingFile(getIntent());
         String draft=getIntent().getStringExtra(EXTRA_DRAFT_TEXT);
-        if(draft!=null&&!draft.isEmpty()&&draft.length()<=4000){switchTab(false);textInput.setText(draft);}
+        if(draft!=null&&!draft.isEmpty()&&(draft.length()<=4000||getIntent().hasExtra("tool_file_mode"))){switchTab(false);textInput.setText(draft);}
+        if(getIntent().hasExtra("tool_file_mode"))switchTab(getIntent().getBooleanExtra("tool_file_mode",true));
+        copiesLabel.setText(String.valueOf(copies));refreshChoices();
         showLoading("正在加载打印机…");
         loadPrinters();
+    }
+
+    @Override protected void prepareFullPage(Intent intent){
+        intent.putExtra(EXTRA_DRAFT_TEXT,textInput.getText().toString());
+        intent.putExtra("tool_file_mode",fileMode).putExtra("tool_copies",copies)
+            .putExtra("tool_paper",paperSize).putExtra("tool_color",colorMode).putExtra("tool_printer",selectedPrinterId);
+        if(selectedFileUri!=null)intent.setData(selectedFileUri).putExtra(EXTRA_FILE_NAME,selectedFileName);
     }
 
     private FrameLayout buildLoadingOverlay() {

@@ -135,7 +135,7 @@ class GatewayTests(unittest.TestCase):
             self.payload["client_message_id"] += "x"
             with patch.object(main,"route_request",AsyncMock(return_value=fallback(reason))), patch.object(main,"deepseek",AsyncMock(return_value={"content":"原有回复"})) as model:
                 self.assertEqual(self.send().json()["content"],"原有回复")
-            self.assertEqual(model.call_args.args[1],main.TOOLS)
+            self.assertEqual(model.call_args.args[1],[*main.TOOLS,*main.CLIENT_TOOLS])
 
     def test_gateway_rejects_forged_direct_policy_and_handles_timeout(self):
         request=main.ChatRequest(**self.payload)
@@ -175,6 +175,41 @@ class GatewayTests(unittest.TestCase):
         self.assertFalse(reply["tool_results"][1]["result"]["ok"])
         with main.connect() as db:
             self.assertEqual(db.execute("SELECT count(*) FROM reminder").fetchone()[0],1)
+
+    def test_llm_fallback_opens_sync_without_bge(self):
+        self.payload["messages"][0]["content"]="同步笔记"
+        self.payload["decision_enabled"]=False
+        model=AsyncMock(return_value=self.call("open_sync",{}))
+        with patch.object(main,"deepseek",model):
+            first=self.send();retry=self.send()
+        self.assertEqual(first.status_code,200)
+        self.assertEqual(first.json()["client_action"],{"name":"open_sync","arguments":{},"id":self.payload["client_message_id"]})
+        self.assertEqual(first.json(),retry.json())
+        model.assert_awaited_once()
+        with main.connect() as db:
+            self.assertEqual(db.execute("SELECT count(*) FROM reminder").fetchone()[0],0)
+
+    def test_local_tool_rejected_for_question_or_unavailable_client(self):
+        for text,capabilities,args in [("如何同步笔记",["open_sync"],{}),("同步笔记",[],{}),("同步笔记",["open_sync"],{"command":"sync"})]:
+            self.payload.update(messages=[{"role":"user","content":text}],client_tools=capabilities,decision_enabled=False)
+            self.payload["client_message_id"] += "x"
+            with patch.object(main,"deepseek",AsyncMock(side_effect=[self.call("open_sync",args),{"content":"请确认要打开的功能。"}])):
+                reply=self.send().json()
+            self.assertNotIn("client_action",reply)
+            self.assertFalse(reply["tool_results"][0]["result"]["ok"])
+
+    def test_legacy_client_has_original_tools_only(self):
+        self.payload["client_tools"]=[]
+        self.payload["decision_enabled"]=False
+        with patch.object(main,"deepseek",AsyncMock(return_value={"content":"正常回复"})) as model:
+            self.send()
+        self.assertEqual(model.call_args.args[1],main.TOOLS)
+
+    def test_llm_opens_print_without_bge_and_preserves_draft(self):
+        self.payload.update(messages=[{"role":"user","content":"打印文字午饭28元"}],decision_enabled=False)
+        with patch.object(main,"deepseek",AsyncMock(return_value=self.call("open_print",{"text":"午饭28元"}))):
+            reply=self.send().json()
+        self.assertEqual(reply["client_action"]["arguments"],{"text":"午饭28元"})
 
     def test_executor_rejects_types_unknown_keys_and_unknown_tool(self):
         for name,args in [("create_reminder",{"title":42,"due_at":False}), ("list_reminders",{"shell":"ls"}), ("unknown",{})]:

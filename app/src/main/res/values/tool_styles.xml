@@ -1,0 +1,22 @@
+<resources>
+    <style name="ToolDrawerLight" parent="android:style/Theme.Material.Light.Dialog.NoActionBar">
+        <item name="android:windowIsFloating">true</item>
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowCloseOnTouchOutside">true</item>
+        <item name="android:backgroundDimEnabled">true</item>
+        <item name="android:windowAnimationStyle">@style/ToolDrawerAnimation</item>
+    </style>
+    <style name="ToolDrawerDark" parent="android:style/Theme.Material.Dialog.NoActionBar">
+        <item name="android:windowIsFloating">true</item>
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowCloseOnTouchOutside">true</item>
+        <item name="android:backgroundDimEnabled">true</item>
+        <item name="android:windowAnimationStyle">@style/ToolDrawerAnimation</item>
+    </style>
+    <style name="ToolDrawerAnimation">
+        <item name="android:windowEnterAnimation">@anim/tool_drawer_enter</item>
+        <item name="android:windowExitAnimation">@anim/tool_drawer_exit</item>
+    </style>
+</resources>

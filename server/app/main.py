@@ -234,10 +234,9 @@ TOOLS = [
 
 
 # UI preparation is safe; printing still requires the existing page's Print button.
-PRINT_TOOL = {"type": "function", "function": {
-    "name": "open_print", "description": "Open the Android print page. Preserve explicitly supplied text as a draft. Never submit a print job. Ask when the requested file or options cannot be represented.",
-    "parameters": {"type": "object", "properties": {"text": {"type": "string", "minLength": 1, "maxLength": 4000}}, "additionalProperties": False}}}
-EXECUTION_TOOLS = [*TOOLS, PRINT_TOOL]
+CLIENT_TOOLS = json.loads((Path(__file__).parent / "client_assets" / "tools.json").read_text(encoding="utf-8"))
+CLIENT_TOOL_NAMES = {tool["function"]["name"] for tool in CLIENT_TOOLS}
+EXECUTION_TOOLS = [*TOOLS, *CLIENT_TOOLS]
 SCHEMAS = {t["function"]["name"]: t["function"]["parameters"] for t in EXECUTION_TOOLS}
 
 
@@ -348,7 +347,7 @@ def create_reminder(title: str, due_at: str, operation_id: str | None = None) ->
 
 async def run_tool(name: str, arguments: dict[str, Any], operation_id: str | None = None) -> dict[str, Any]:
     schema = SCHEMAS.get(name)
-    if schema is None or name == "open_print":
+    if schema is None or name in CLIENT_TOOL_NAMES:
         return {"ok": False, "error": "Tool is not a server executor"}
     errors = list(Draft202012Validator(schema).iter_errors(arguments))
     if errors:
@@ -396,7 +395,9 @@ async def agent_reply(request: ChatRequest, decision: Decision | None = None) ->
         "changes": [], "tool_results": [], "step": 0, "pending": [], "call_index": 0,
         "decision": decision.model_dump() if decision else None,
         "allowed_tools": ([decision.tool] if decision and decision.type == "TOOL_WITH_LLM" else
-                          [] if decision and decision.reason == "non_action" else [t["function"]["name"] for t in TOOLS]),
+                          [] if decision and decision.reason == "non_action" else
+                          [t["function"]["name"] for t in TOOLS] +
+                          [name for name in request.client_tools if name in CLIENT_TOOL_NAMES]),
     }
     if state.get("decision") and state["decision"]["type"] == "TOOL_WITH_LLM":
         state["messages"][0]["content"] += "\nRoute candidate: " + state["decision"]["tool"] + ". Extract only explicitly provided parameters using the supplied tool schema; ask a follow-up if required values are missing or unsupported options are supplied. Do not invent values or claim success without a result."
@@ -434,11 +435,15 @@ async def agent_reply(request: ChatRequest, decision: Decision | None = None) ->
                 operation = hashlib.sha256(f"{request.client_message_id}:{state['step']}:{index}:{name}".encode()).hexdigest() if request.client_message_id else None
                 if name not in allowed:
                     raise ValueError("Tool is not allowed for this turn")
-                if name == "open_print":
+                if name in CLIENT_TOOL_NAMES:
+                    if name not in request.client_tools or non_action(request.messages[-1].content):
+                        raise ValueError("Local tools require an explicit user command and client capability")
                     errors = list(Draft202012Validator(SCHEMAS[name]).iter_errors(args))
-                    if errors or not args.get("text"):
-                        raise ValueError("Preserve explicit print text; ask a follow-up for unsupported options")
-                    return {"content": "已准备打印草稿，请在打印页面确认。", "memory_changes": state["changes"],
+                    needs_text = (name == "open_print" and state.get("decision") and
+                                  state["decision"]["type"] == "TOOL_WITH_LLM")
+                    if errors or (needs_text and not args.get("text")):
+                        raise ValueError("Invalid local tool parameters; preserve explicit text and clarify unsupported options")
+                    return {"content": "已准备打开本地工具，请在工具中确认操作。", "memory_changes": state["changes"],
                             "tool_results": state["tool_results"], "decision": state.get("decision"),
                             "client_action": {"name": name, "arguments": args, "id": request.client_message_id}}
                 result = await run_tool(name, args, operation)

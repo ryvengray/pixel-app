@@ -118,6 +118,7 @@ public final class HomeConversationView extends FrameLayout {
     }
     private void submitInput(){String text=input.getText().toString().trim();if(text.isEmpty())return;input.setText("");submit(text);}
     private void submit(String text){
+        DecisionActions.cancelPending(activity);
         lastInteraction=System.currentTimeMillis();prefs.edit().putLong("last_conversation_at",lastInteraction).apply();generation++;
         if(pendingGroup==null){pendingGroup=UUID.randomUUID().toString();if(inFlightGroup!=null)prefs.edit().putString("display:"+pendingGroup,prefs.getString("display:"+inFlightGroup,inFlightGroup)).apply();}
         // A request that has already been attempted must remain immutable on retry.
@@ -143,7 +144,7 @@ public final class HomeConversationView extends FrameLayout {
             store.setStatus(group,"sent");
             main.post(()->{if(closed)return;busy=false;inFlightGroup=null;
                 if(!reply.toolResults.isEmpty()){resultText=reply.toolResults;prefs.edit().putString("result",resultText).apply();}
-                if(version==generation){restore();react.run();if(active)DecisionActions.open(activity,reply.clientAction);}else{prefs.edit().putBoolean("superseded:reply:"+group,true).apply();render();}
+                if(version==generation){restore();react.run();DecisionActions.open(activity,reply.clientAction);}else{prefs.edit().putBoolean("superseded:reply:"+group,true).apply();render();}
                 if(pendingGroup!=null)dispatch();else syncInbox();
             });
         }catch(Exception e){store.setStatus(group,"failed");main.post(()->{if(closed)return;busy=false;inFlightGroup=null;

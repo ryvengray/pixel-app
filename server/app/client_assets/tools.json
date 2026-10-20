@@ -1,0 +1,30 @@
+[
+  {
+    "type": "function",
+    "function": {
+      "name": "open_sync",
+      "description": "Open the Android Obsidian sync tool only when the user asks to sync notes or open that tool. This prepares the UI; it does not perform Git sync. Never call for questions or explanations.",
+      "parameters": {"type": "object", "properties": {}, "additionalProperties": false}
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "open_print",
+      "description": "Open the Android print tool at the user's request. Preserve explicitly supplied text as a draft. Never submit a print job. Ask when requested file or options cannot be represented; never call for questions or explanations.",
+      "parameters": {
+        "type": "object",
+        "properties": {"text": {"type": "string", "minLength": 1, "maxLength": 4000}},
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "open_topics",
+      "description": "Open the Android important-topics tool only when explicitly requested. Does not change topics or schedule follow-ups. Never call for questions or explanations.",
+      "parameters": {"type": "object", "properties": {}, "additionalProperties": false}
+    }
+  }
+]

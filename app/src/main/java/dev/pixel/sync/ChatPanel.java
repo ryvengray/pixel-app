@@ -158,6 +158,7 @@ public final class ChatPanel extends FrameLayout {
 
     private void sendMessage(){
         String message=input.getText().toString().trim();if(message.isEmpty()||!send.isEnabled())return;
+        if(getContext() instanceof android.app.Activity)DecisionActions.cancelPending((android.app.Activity)getContext());
         input.setText("");if(welcome!=null){timeline.removeAllViews();welcome=null;}
         store.addMessage("user",message);addMessageRow("user",message);typingRow=addTypingRow();scrollToLatest(true);busy=true;setSending(false);status.setText("正在认真听你说…");
         List<AssistantStore.Message> messages=store.recentMessages(18);List<AssistantStore.Memory> memories=store.memories(false);

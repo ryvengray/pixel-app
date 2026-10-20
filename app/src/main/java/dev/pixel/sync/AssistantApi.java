@@ -26,15 +26,37 @@ public final class AssistantApi {
         if(!url.isEmpty()&&!token.isEmpty()){
             SharedPreferences requests=context.getSharedPreferences("chat_requests",Context.MODE_PRIVATE);
             String saved=requests.getString(messageId,null);if(saved!=null)request=new JSONObject(saved);else requests.edit().putString(messageId,request.toString()).commit();
-            Reply reply=parseServer(post(url+"/v1/chat",token,request));requests.edit().remove(messageId).apply();return reply;
+            Reply reply=parseServer(post(url+"/v1/chat",token,request));
+            if(reply.clientAction!=null&&!messageId.equals(reply.clientAction.optString("id")))reply.clientAction=null;
+            requests.edit().remove(messageId).apply();return reply;
         }
-        String key=secret(context,"deepseek_key");if(key.isEmpty())throw new IOException("服务端不可用，且尚未设置本地 DeepSeek 密钥。");return direct(key,messages,memories);
+        String key=secret(context,"deepseek_key");if(key.isEmpty())throw new IOException("服务端不可用，且尚未设置本地 DeepSeek 密钥。");return direct(context,key,messages,memories,messageId);
     }
     private static Reply parseServer(String value)throws Exception{ JSONObject json=new JSONObject(value);ArrayList<AssistantStore.Memory> changes=new ArrayList<>();JSONArray items=json.optJSONArray("memory_changes");if(items!=null)for(int i=0;i<items.length();i++)changes.add(memory(items.getJSONObject(i)));StringBuilder tools=new StringBuilder();JSONArray results=json.optJSONArray("tool_results");if(results!=null)for(int i=0;i<results.length();i++){JSONObject item=results.getJSONObject(i);if(tools.length()>0)tools.append("\n\n");tools.append(item.optString("summary",item.toString()));}Reply reply=new Reply(json.optString("content",""),changes,false,tools.toString());reply.clientAction=json.optJSONObject("client_action");return reply; }
     private static AssistantStore.Memory memory(JSONObject item) throws JSONException {return new AssistantStore.Memory(item.getString("id"),item.getString("category"),item.getString("fact"),item.optDouble("confidence",.8),item.optString("source",""),item.optInt("revision",1),item.optBoolean("deleted",false),item.getString("updated_at"));}
-    private static Reply direct(String key,List<AssistantStore.Message> messages,List<AssistantStore.Memory> memories)throws Exception{
+    private static Reply direct(Context phone,String key,List<AssistantStore.Message> messages,List<AssistantStore.Memory> memories,String messageId)throws Exception{
         JSONArray turns=new JSONArray();StringBuilder context=new StringBuilder("You are Greta, a warm concise personal assistant. These are the user's saved memories; use them only if relevant.\\n");for(AssistantStore.Memory m:memories)context.append("- [").append(m.category).append("] ").append(m.fact).append("\\n");turns.put(new JSONObject().put("role","system").put("content",context.toString()));for(AssistantStore.Message m:messages)turns.put(new JSONObject().put("role",m.role).put("content",m.content));
-        JSONObject body=new JSONObject().put("model","deepseek-chat").put("messages",turns).put("temperature",.7);JSONObject response=new JSONObject(post("https://api.deepseek.com/chat/completions",key,body));String content=response.getJSONArray("choices").getJSONObject(0).getJSONObject("message").optString("content","");return new Reply(content,Collections.emptyList(),true);
+        JSONObject body=new JSONObject().put("model","deepseek-chat").put("messages",turns).put("temperature",.7);
+        String latest=messages.isEmpty()?"":messages.get(messages.size()-1).content;
+        boolean canOpen=ClientTools.explicitCommand(latest);
+        if(canOpen)body.put("tools",ClientTools.definitions(phone));
+        JSONObject response=new JSONObject(post("https://api.deepseek.com/chat/completions",key,body));
+        JSONObject message=response.getJSONArray("choices").getJSONObject(0).getJSONObject("message");
+        JSONArray calls=message.optJSONArray("tool_calls");
+        if(calls!=null&&calls.length()>0){
+            if(canOpen&&calls.length()==1){
+                JSONObject function=calls.getJSONObject(0).getJSONObject("function");
+                String name=function.optString("name");JSONObject args;
+                try{args=new JSONObject(function.optString("arguments","{}"));}catch(JSONException invalid){args=null;}
+                if(ClientTools.valid(name,args)){
+                    Reply reply=new Reply("已准备打开本地工具，请在工具中确认操作。",Collections.emptyList(),true);
+                    reply.clientAction=new JSONObject().put("name",name).put("arguments",args).put("id",messageId);
+                    return reply;
+                }
+            }
+            return new Reply("工具请求不完整，请说明要打开的工具和需要填写的内容。",Collections.emptyList(),true);
+        }
+        return new Reply(message.optString("content",""),Collections.emptyList(),true);
     }
     private static JSONArray getArray(Context context,String path)throws Exception{
         String url=serverUrl(context),token=secret(context,"device_token");if(url.isEmpty()||token.isEmpty())return new JSONArray();

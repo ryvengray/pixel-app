@@ -54,6 +54,7 @@ public class MainActivity extends Activity {
   setContentView(root);applyColors();
   if(state==null)root.post(()->handleIncomingFile(getIntent()));
  }
+ @Override public void onWindowFocusChanged(boolean focused){super.onWindowFocusChanged(focused);if(focused)DecisionActions.onFocus(this);}
  private TextView text(String value,int size){TextView v=new TextView(this);v.setText(value);v.setTextSize(size);return v;}
  private GradientDrawable surface(int color,int radius){GradientDrawable d=new GradientDrawable();d.setColor(color);d.setCornerRadius(dp(radius));return d;}
  private void applyColors(){
@@ -74,7 +75,7 @@ public class MainActivity extends Activity {
   TextView heading=text("功能与设置",23);heading.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));heading.setTextColor(foreground);sheet.addView(heading);
   TextView subtitle=text("选择你想做的事",13);subtitle.setTextColor(secondary);subtitle.setPadding(0,dp(3),0,dp(17));sheet.addView(subtitle);
   menuSection(sheet,"GRETA");
-  sheet.addView(menuAction("◌   重要话题","她记住的事，以及下次关心的时间",()->{menu.dismiss();startActivity(new Intent(this,TopicsActivity.class).putExtra("dark",dark));}));
+  sheet.addView(menuAction("◌   重要话题","她记住的事，以及下次关心的时间",()->{menu.dismiss();startActivity(DecisionActions.intent(this,"open_topics",new org.json.JSONObject()));}));
   sheet.addView(menuAction("✦   和 Greta 聊聊","继续这段对话",()->{menu.dismiss();home.focusInput();}));
   sheet.addView(menuAction("▤   历史记录","查看完整聊天历史",()->{menu.dismiss();home.showHistory();}));
   sheet.addView(menuAction("▤   长期记忆","查看和修正 Greta 记住的事",()->{menu.dismiss();startActivity(new Intent(this,MemoryActivity.class));}));
@@ -82,8 +83,8 @@ public class MainActivity extends Activity {
   Switch proactive=new Switch(this);proactive.setText("偶尔主动聊两句");proactive.setTextColor(foreground);proactive.setChecked(getSharedPreferences("home_conversation",0).getBoolean("proactive",true));proactive.setOnCheckedChangeListener((v,checked)->getSharedPreferences("home_conversation",0).edit().putBoolean("proactive",checked).apply());sheet.addView(proactive);
   sheet.addView(menuAction("◷   提醒与最近结果","查看工具结果、完成或延后提醒",()->{menu.dismiss();home.showResults();}));
   menuSection(sheet,"工具");
-  sheet.addView(menuAction("↻   Obsidian 同步","同步你的笔记库",()->{menu.dismiss();startActivity(new Intent(this,SyncActivity.class));}));
-  sheet.addView(menuAction("▣   打印文件","选择文件或文字并设置打印",()->{menu.dismiss();startActivity(new Intent(this,PrintActivity.class));}));
+  sheet.addView(menuAction("↻   Obsidian 同步","同步你的笔记库",()->{menu.dismiss();startActivity(DecisionActions.intent(this,"open_sync",new org.json.JSONObject()));}));
+  sheet.addView(menuAction("▣   打印文件","选择文件或文字并设置打印",()->{menu.dismiss();startActivity(DecisionActions.intent(this,"open_print",new org.json.JSONObject()));}));
   menuSection(sheet,"外观");
   LinearLayout themes=new LinearLayout(this);themes.setPadding(0,0,0,dp(8));String[] labels={"跟随系统","浅色","深色"};
   for(int i=0;i<labels.length;i++){final int choice=i;TextView theme=text((preferences.getInt("theme",0)==i?"✓  ":"")+labels[i],13);theme.setGravity(Gravity.CENTER);theme.setTextColor(foreground);theme.setBackground(surface(Color.parseColor(preferences.getInt("theme",0)==i?(dark?"#375B44":"#D3E8D2"):(dark?"#294536":"#E3ECDC")),13));
@@ -126,5 +127,5 @@ public class MainActivity extends Activity {
  @Override protected void onNewIntent(Intent intent){super.onNewIntent(intent);setIntent(intent);handleIncomingFile(intent);home.syncInbox();}
  @Override public void onResume(){super.onResume();if(preferences.getInt("theme",0)==0)dark=systemDark();scene.resumeScene();applyColors();home.resume();home.openIncoming(getIntent().getStringExtra("message_id"));getIntent().removeExtra("message_id");}
  @Override public void onPause(){home.pause();scene.pauseScene();super.onPause();}
- @Override public void onDestroy(){if(menu!=null)menu.dismiss();if(fileActionDialog!=null)fileActionDialog.dismiss();home.shutdown();super.onDestroy();}
+ @Override public void onDestroy(){DecisionActions.cancelPending(this);if(menu!=null)menu.dismiss();if(fileActionDialog!=null)fileActionDialog.dismiss();home.shutdown();super.onDestroy();}
 }

@@ -1,6 +1,6 @@
 # Decision Engine（第一版）
 
-Android → 已有 HTTP/HTTPS `POST /v1/chat`（设备 Bearer token）→ Greta gateway → 私有 `POST /decide` → CPU BGE。手机不需要新地址或模型服务密钥，不向公网暴露 18081。手机“助理设置”中的“启用工具快速路由”默认关闭；旧版 App、未启用、未配置服务、超时、模型不可用、低分、歧义均复用原有 DeepSeek 流程和工具。直接路径不调用生成式模型；既有话题异步整理仍可能在后台调用 LLM。
+Android → 已有 HTTP/HTTPS `POST /v1/chat`（设备 Bearer token）→ Greta gateway → 私有 `POST /decide` → CPU BGE。手机不需要新地址或模型服务密钥，不向公网暴露 18081。手机“助理设置”中的“启用 BGE 快速路由”默认关闭；旧版 App、未启用、未配置服务、超时、模型不可用、低分、歧义均复用原有 DeepSeek 流程和工具。直接路径不调用生成式模型；既有话题异步整理仍可能在后台调用 LLM。
 
 ## 路由协议与注册
 
@@ -16,7 +16,7 @@ Android → 已有 HTTP/HTTPS `POST /v1/chat`（设备 Bearer token）→ Greta 
 {"type":"DIRECT_TOOL","tool":"open_print","score":1.0,"reason":"exact_command"}
 ```
 
-`server/app/decision_tools.json` 为唯一候选注册表，启动时校验结构和重复名称；修改后重建两个服务。每项有 name、description、examples、target、parameter_policy、direct_phrases。工具的可执行参数 schema 复用 `server/app/main.py` 的 TOOLS / PRINT_TOOL；注册候选并不赋予执行权限。新增功能还必须实现本地固定白名单或服务端执行器，并明确 App 能力声明。
+`server/app/decision_tools.json` 为唯一候选注册表，启动时校验结构和重复名称；修改后重建两个服务。每项有 name、description、examples、target、parameter_policy、direct_phrases。服务端工具 schema 位于 `server/app/main.py` 的 TOOLS；Android 工具 schema 由 `server/app/client_assets/tools.json` 统一提供给服务端及 APK 内的手机直连 LLM；注册候选并不赋予执行权限。新增功能还必须实现本地固定白名单或服务端执行器，并明确 App 能力声明。
 
 | 策略 | 含义 | 当前工具 |
 |---|---|---|
@@ -24,7 +24,7 @@ Android → 已有 HTTP/HTTPS `POST /v1/chat`（设备 Bearer token）→ Greta 
 | OPTIONAL | 完整无参数指令直接打开；增加任何内容都走 LLM 提取，不用数字正则判断是否有参数 | open_print |
 | REQUIRED | 只选工具，复用 DeepSeek 提取参数；缺项应追问，执行前再校验 | create_reminder |
 
-`DIRECT_TOOL`：Android 固定页面动作或服务端只读工具。`TOOL_WITH_LLM`：只向 LLM 暴露命中工具，允许拒绝或追问，不强制生成参数。`LLM_FALLBACK`：继续原有对话。HTTP chat 响应附加 `decision`，UI 动作通过 `client_action` 返回。UI 动作仅在前台、开关开启且当前回复未被新输入替代时执行，依请求 ID 去重。
+`DIRECT_TOOL`：Android 固定页面动作或服务端只读工具。`TOOL_WITH_LLM`：只向 LLM 暴露命中工具，允许拒绝或追问，不强制生成参数。`LLM_FALLBACK`：继续原有对话。HTTP chat 响应附加 `decision`，UI 动作通过 `client_action` 返回。UI 动作在窗口拥有焦点且当前回复未被新输入替代时执行，依请求 ID 去重。短暂失去焦点的动作最多保留两分钟，回来时打开；新输入清除待处理动作。BGE 开关只控制快速路由，不禁用普通 LLM 的本地工具调用。
 
 例：“打开打印”直接打开；“打印这段文字：午饭花了28元”提取 text 到草稿，保留原文；页面仍需用户选择打印机并点击打印。“打印3份某文件”目前无法完整表达文件和份数，模型应追问；未知参数会被拒绝。记账尚未实现，因此没有虚构 add_expense 注册项。
 
@@ -33,7 +33,7 @@ Android → 已有 HTTP/HTTPS `POST /v1/chat`（设备 Bearer token）→ Greta 
 - BGE 为通用检索模型，相似度不是概率；使用归一化向量内积、默认阈值 0.82、第一二候选差距 0.08。启动一次加载模型与候选向量，单 worker，CPU 4 线程；忙时返回 503，让 gateway 回原 LLM。
 - 先检查明确操作意图；“我的打印机坏了”等陈述不会直接路由。短命令完整别名匹配可直接路由；语义匹配主要用于 REQUIRED / OPTIONAL 参数路径。首版保守接受中文输入；疑问、引号、假设、否定、多操作不走直接路径。疑问/说明性输入的 LLM 不提供工具，执行层也拒绝强行返回的调用；取消提醒、多操作与连续补充交还现有上下文 LLM。
 - Gateway 会按本地注册表和手机能力重新校验 sidecar 结果。服务端工具使用 JSON Schema 校验必填、类型、枚举和未知字段，提醒继续校验未来时间、时区与标题。一次参数提取最多允许一次成功操作；失败可修正。
-- Android 仅允许 open_sync/open_print/open_topics 固定 Activity，校验参数、文本长度，拒绝任意类名、URI、命令。open_sync 只打开同步页面，后续继续复用 Termux 安装和 RUN_COMMAND 权限检查。打印只预填草稿，不提交作业。
+- Android 仅允许 open_sync/open_print/open_topics 固定工具，校验参数、文本长度，拒绝任意类名、URI、命令。open_sync 只打开同步页面，后续继续复用 Termux 安装和 RUN_COMMAND 权限检查。打印只预填草稿，不提交作业。
 - 复用 chat_response 与 chat_checkpoint，重试恢复原计划而不再次路由；路由后的工具结果仍使用现有 operation_id 去重。不改变数据库结构、配对、提醒调度或手机直连 DeepSeek 兜底。
 - 相对时间由现有 system_prompt 按 App 提供的 IANA timezone 和当前时间解释，提醒必须是带时区的 ISO 时间。不由 BGE 提取日期，也不依赖服务器本地时区。
 
@@ -73,7 +73,7 @@ Compose 使用 CPU PyTorch wheel、只读模型挂载、离线加载、非 root 
 
 Greta 现有 host 网络通过 `http://127.0.0.1:18081` 访问模型；HTTP 客户端禁用环境代理，避免请求被现有全局代理转发。对外继续使用原有 HTTPS `/gray/v1/chat` 与已配对设备 token；内网开发可沿用 App 现有 HTTP 支持。不要把未经鉴权的 /decide 暴露到公网。公网上的 TLS、配对、反向代理和访问限制沿用既有部署配置。
 
-安装新版 App，助理设置打开快速路由。依次发送“同步一下笔记”“打开打印”“打印这段文字：午饭花了28元”“明天早上八点提醒我交水电费”“如何同步笔记”“为什么天空是蓝色的”。检查页面打开、打印草稿、提醒实际保存、疑问句不执行、普通对话仍正常；断开 sidecar 后确认原有 LLM 回复。手机关闭开关即可立即回原路径。
+安装新版 App，助理设置打开快速路由。依次发送“同步一下笔记”“打开打印”“打印这段文字：午饭花了28元”“明天早上八点提醒我交水电费”“如何同步笔记”“为什么天空是蓝色的”。检查页面打开、打印草稿、提醒实际保存、疑问句不执行、普通对话仍正常；断开 sidecar 后确认原有 LLM 回复。手机关闭 BGE 开关即可回到 LLM 选择工具的路径，本地工具依然可用。
 
 ### 回滚
 
@@ -129,3 +129,22 @@ JAVA_HOME=/path/to/jdk17 ANDROID_HOME=/path/to/android-sdk ./gradlew :app:compil
 `tests/test_decision.py` 使用确定性向量及模拟模型响应验证路由、参数、权限、故障和去重。它不能证明真实 BGE 准确率。`server/decision/cases.json` 与 evaluate.py 是上线前真实模型验收语料：如果参数型请求被过度回退，可按实际正负例调整阈值和样例；不可只降低阈值追求召回率。增加你实际使用的疑问句、非操作意图、相似工具与明确参数样本，观察误执行与错误回退。首版不承诺未经测量的准确率或延迟。
 
 模型使用归一化 CPU 编码，依据 [BGE 模型卡](https://huggingface.co/BAAI/bge-small-zh-v1.5) 与 [Sentence Transformers API](https://www.sbert.net/docs/package_reference/sentence_transformer/model.html)。
+
+## Android 工具抽屉与 LLM 接入
+
+助理设置 → 工具打开方式：默认“底部抽屉”，也可选择“打开新界面”。同步、打印、重要话题使用共同的 ToolActivity 外壳，复用原工具全部内容、生命周期、权限回调和执行逻辑。抽屉从底部滑入，支持拖动顶部把手向下关闭、关闭按钮、返回键及点击外部关闭，并提供临时“全屏”按钮。菜单入口遵循同一设置；全屏转换保留打印草稿和传入文件信息。“减少动态效果”关闭抽屉窗口动画。
+
+服务端普通 DeepSeek 流程也注册 App 声明可用的本地工具，不要求启用 BGE 或部署模型。手机直连 DeepSeek 也从同一份 tools.json 加载工具定义。LLM 返回 open_sync 后，只会打开 Obsidian 同步模块，点击“立即同步”才执行；打印仍需手动确认。疑问、否定、未知工具或非法参数不产生页面动作。旧版 App 不声明 client_tools，仍获得原工具集合。
+
+主要代码：DecisionActions.java 校验与调度；ClientTools.java 负责手机端定义读取和参数检查；ToolActivity.java 负责抽屉/全屏外壳；AssistantSettingsActivity.java 保存展示偏好。手机和服务端都需更新到本次版本，旧服务端不会在普通 LLM 路径返回新本地工具。
+
+开发版仪器测试不需要额外测试依赖，建议只在独立模拟器运行（会临时调整开发版设置并恢复）：
+
+```bash
+./gradlew :app:assembleDevDebug :app:assembleDevDebugAndroidTest
+adb -s emulator-5554 install -r app/build/outputs/apk/dev/debug/app-dev-debug.apk
+adb -s emulator-5554 install -r app/build/outputs/apk/androidTest/dev/debug/app-dev-debug-androidTest.apk
+adb -s emulator-5554 shell am instrument -w dev.pixel.sync.dev.test/dev.pixel.sync.ToolUiInstrumentation
+```
+
+测试抽屉默认展示、全屏偏好、打印草稿及切换全屏后的编辑内容、重要话题、关闭 BGE 后的本地调度、重复动作去重、失焦恢复及非法工具/疑问句防护。

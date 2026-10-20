@@ -19,7 +19,7 @@ import android.widget.*;
 import java.nio.charset.StandardCharsets;
 import java.util.UUID;
 
-public class SyncActivity extends Activity {
+public class SyncActivity extends ToolActivity {
     private static final String PERMISSION = "com.termux.permission.RUN_COMMAND";
     private SharedPreferences prefs;
     private TextView status, log;

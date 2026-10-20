@@ -12,7 +12,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.concurrent.*;
 
 /** User-controlled, time-bounded topics; remembering never silently enables follow-up. */
-public final class TopicsActivity extends Activity {
+public final class TopicsActivity extends ToolActivity {
     private TopicRepository topics;
     private final ExecutorService network=Executors.newSingleThreadExecutor();
     private LinearLayout list;
@@ -22,7 +22,7 @@ public final class TopicsActivity extends Activity {
     private int dp(int n){return Math.round(n*getResources().getDisplayMetrics().density);}
     private TextView text(String value,int size){TextView v=new TextView(this);v.setText(value);v.setTextSize(size);v.setTextColor(foreground);return v;}
     @Override public void onCreate(Bundle saved){super.onCreate(saved);
-        dark=getIntent().getBooleanExtra("dark",false);setTheme(dark?android.R.style.Theme_Material_NoActionBar:android.R.style.Theme_Material_Light_NoActionBar);
+        dark=getIntent().getBooleanExtra("dark",false);
         foreground=Color.parseColor(dark?"#E5EDE3":"#263C31");muted=Color.parseColor(dark?"#A5B9AA":"#59715F");surface=Color.parseColor(dark?"#243C2E":"#DEE9D8");topics=new TopicRepository(this);
         LinearLayout root=new LinearLayout(this);root.setOrientation(LinearLayout.VERTICAL);root.setPadding(dp(20),dp(12),dp(20),dp(16));root.setBackgroundColor(Color.parseColor(dark?"#102019":"#F0F5E9"));
         TextView back=text("‹  重要话题",22);back.setPadding(0,dp(12),0,dp(14));back.setOnClickListener(v->finish());root.addView(back);
