@@ -1,0 +1,82 @@
+[
+  {
+    "name": "open_sync",
+    "description": "打开 Obsidian 笔记同步页面",
+    "parameter_policy": "NONE",
+    "examples": [
+      "同步笔记",
+      "同步一下笔记",
+      "打开笔记同步",
+      "帮我同步笔记"
+    ],
+    "direct_phrases": [
+      "同步笔记",
+      "同步一下笔记",
+      "打开笔记同步",
+      "帮我同步笔记"
+    ],
+    "target": "android"
+  },
+  {
+    "name": "open_print",
+    "description": "打开打印页面，可预填要打印的文字，不自动提交打印",
+    "parameter_policy": "OPTIONAL",
+    "examples": [
+      "打开打印",
+      "打开打印页面",
+      "打印这段文字",
+      "帮我打印"
+    ],
+    "direct_phrases": [
+      "打开打印",
+      "打开打印页面",
+      "我要打印",
+      "帮我打印"
+    ],
+    "target": "android"
+  },
+  {
+    "name": "list_reminders",
+    "description": "查看所有待办提醒",
+    "parameter_policy": "NONE",
+    "examples": [
+      "查看提醒",
+      "看看我的提醒",
+      "查看待办",
+      "看一下我的待办"
+    ],
+    "direct_phrases": [
+      "查看提醒",
+      "看看我的提醒",
+      "查看待办",
+      "看一下我的待办"
+    ],
+    "target": "server"
+  },
+  {
+    "name": "open_topics",
+    "description": "打开重要话题页面",
+    "parameter_policy": "NONE",
+    "examples": [
+      "打开重要话题",
+      "看看重要话题"
+    ],
+    "direct_phrases": [
+      "打开重要话题",
+      "看看重要话题"
+    ],
+    "target": "android"
+  },
+  {
+    "name": "create_reminder",
+    "description": "创建有明确时间和内容的提醒",
+    "parameter_policy": "REQUIRED",
+    "examples": [
+      "明天早上八点提醒我交水电费",
+      "提醒我给张三打电话",
+      "帮我设置提醒"
+    ],
+    "direct_phrases": [],
+    "target": "server"
+  }
+]

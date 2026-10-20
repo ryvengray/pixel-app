@@ -27,6 +27,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public class PrintActivity extends Activity {
+    public static final String EXTRA_DRAFT_TEXT = "dev.pixel.sync.extra.DRAFT_TEXT";
     public static final String EXTRA_FILE_NAME = "dev.pixel.sync.extra.FILE_NAME";
     private boolean dark;
     private int foreground, secondary, bg, cardBg, accent, accentText;
@@ -108,6 +109,8 @@ public class PrintActivity extends Activity {
         screen.addView(loadingOverlay, new FrameLayout.LayoutParams(-1, -1));
         setContentView(screen);
         loadIncomingFile(getIntent());
+        String draft=getIntent().getStringExtra(EXTRA_DRAFT_TEXT);
+        if(draft!=null&&!draft.isEmpty()&&draft.length()<=4000){switchTab(false);textInput.setText(draft);}
         showLoading("正在加载打印机…");
         loadPrinters();
     }

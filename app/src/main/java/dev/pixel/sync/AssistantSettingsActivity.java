@@ -16,6 +16,7 @@ import com.google.mlkit.vision.codescanner.GmsBarcodeScanning;
 /** Settings deliberately keep endpoints public and encrypt only secrets. */
 public class AssistantSettingsActivity extends Activity {
     private EditText endpoint, deepseekKey;
+    private Switch decision;
     private int dp(float n){return Math.round(n*getResources().getDisplayMetrics().density);}
     private EditText field(LinearLayout body,String label,boolean secret){
         TextView text=new TextView(this);text.setText(label);text.setTextSize(14);body.addView(text);
@@ -29,11 +30,12 @@ public class AssistantSettingsActivity extends Activity {
         deepseekKey=field(body,"本地 DeepSeek 密钥（可选兜底）",true);
         SharedPreferences prefs=getSharedPreferences("gray_settings",MODE_PRIVATE);endpoint.setText(prefs.getString("server_url", ""));
         try { SecureStore secure=new SecureStore(this);deepseekKey.setText(secure.get("deepseek_key")); } catch(Exception ignored) { }
+        decision=new Switch(this);decision.setText("启用工具快速路由（需要服务端支持）");decision.setChecked(prefs.getBoolean("decision_enabled",false));body.addView(decision);
         Button pair=new Button(this);pair.setText("扫码配对这台设备");pair.setOnClickListener(v->scanPairing());body.addView(pair);
         Button save=new Button(this);save.setText("保存设置");save.setOnClickListener(v->save());body.addView(save);
         TextView note=new TextView(this);note.setText("先在本地电脑运行 docker compose exec greta-service python -m app.pairing，它会显示一个十分钟有效的二维码。服务端密钥只保存在本地电脑的 server/.env，绝不填写到这里。\n\n长期记忆始终以手机为主库。服务端只保存同步副本，用来运行提醒和主动任务。");body.addView(note);
     }
     private void scanPairing(){GmsBarcodeScannerOptions options=new GmsBarcodeScannerOptions.Builder().setBarcodeFormats(Barcode.FORMAT_QR_CODE).build();GmsBarcodeScanning.getClient(this,options).startScan().addOnSuccessListener(barcode->{String raw=barcode.getRawValue();if(raw==null)return;pair(raw);}).addOnFailureListener(error->Toast.makeText(this,"无法扫描二维码："+error.getMessage(),Toast.LENGTH_LONG).show());}
     private void pair(String code){new Thread(()->{try{AssistantApi.claimPairing(this,code,android.os.Build.MODEL);runOnUiThread(()->{endpoint.setText(getSharedPreferences("gray_settings",MODE_PRIVATE).getString("server_url",""));FcmManager.refresh(this);if(Build.VERSION.SDK_INT>=33&&checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED)requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS},42);Toast.makeText(this,"这台设备已配对，正在启用提醒",Toast.LENGTH_SHORT).show();});}catch(Exception e){runOnUiThread(()->Toast.makeText(this,"配对失败："+e.getMessage(),Toast.LENGTH_LONG).show());}}).start();}
-    private void save(){try{getSharedPreferences("gray_settings",MODE_PRIVATE).edit().putString("server_url",endpoint.getText().toString().trim().replaceAll("/+$","")).apply();SecureStore secure=new SecureStore(this);secure.put("deepseek_key",deepseekKey.getText().toString());Toast.makeText(this,"已保存",Toast.LENGTH_SHORT).show();finish();}catch(Exception e){Toast.makeText(this,"无法安全保存："+e.getMessage(),Toast.LENGTH_LONG).show();}}
+    private void save(){try{getSharedPreferences("gray_settings",MODE_PRIVATE).edit().putBoolean("decision_enabled",decision.isChecked()).putString("server_url",endpoint.getText().toString().trim().replaceAll("/+$","")).apply();SecureStore secure=new SecureStore(this);secure.put("deepseek_key",deepseekKey.getText().toString());Toast.makeText(this,"已保存",Toast.LENGTH_SHORT).show();finish();}catch(Exception e){Toast.makeText(this,"无法安全保存："+e.getMessage(),Toast.LENGTH_LONG).show();}}
 }

@@ -253,3 +253,7 @@ App 只有收到 Termux 成功退出结果才显示成功；结果通过 Pending
 
 
 重要话题已接入：聊天回复后由私有服务异步整理，在首页菜单“重要话题”查看原话、修正或忘记。默认只记住、不追问；可选一个时间仅在首页关心一次，或明确选择系统通知。离线修改有持久同步队列，待同步时不代表服务端已生效。实现与边界见 [重要话题说明](docs/greta-important-topics.md)。
+
+### 可选 Decision Engine
+
+CPU 工具路由与参数提取接入见 [Decision Engine 部署与测试](docs/decision-engine.md)。默认关闭，可通过 `compose.decision.yaml` 启用 BGE 路由容器，手机继续使用现有配对服务地址。

@@ -18,6 +18,8 @@ from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, Header, HTTPE
 from pydantic import BaseModel, Field
 
 from . import topics
+from .decision import Decision, DecisionRequest, apply_policy, fallback, non_action, informational
+from jsonschema import Draft202012Validator
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -143,6 +145,8 @@ class ChatRequest(BaseModel):
     messages: list[Turn] = Field(min_length=1, max_length=30)
     timezone: str = Field(default="Asia/Shanghai", max_length=80)
     client_message_id: str | None = Field(default=None, min_length=8, max_length=100)
+    decision_enabled: bool = False
+    client_tools: list[Literal["open_sync", "open_print", "open_topics"]] = Field(default_factory=list, max_length=3)
     suppressed_topic_ids: list[str] = Field(default_factory=list, max_length=200)
 
 
@@ -229,6 +233,66 @@ TOOLS = [
 ]
 
 
+# UI preparation is safe; printing still requires the existing page's Print button.
+PRINT_TOOL = {"type": "function", "function": {
+    "name": "open_print", "description": "Open the Android print page. Preserve explicitly supplied text as a draft. Never submit a print job. Ask when the requested file or options cannot be represented.",
+    "parameters": {"type": "object", "properties": {"text": {"type": "string", "minLength": 1, "maxLength": 4000}}, "additionalProperties": False}}}
+EXECUTION_TOOLS = [*TOOLS, PRINT_TOOL]
+SCHEMAS = {t["function"]["name"]: t["function"]["parameters"] for t in EXECUTION_TOOLS}
+
+
+async def route_request(request: ChatRequest) -> Decision:
+    endpoint = os.getenv("DECISION_URL", "").rstrip("/")
+    if not request.decision_enabled or not endpoint:
+        return fallback("disabled")
+    # Only a single current utterance can bypass the context-aware conversation.
+    # Consecutive supplements and references keep the established LLM behavior.
+    if request.messages[-1].role != "user" or (len(request.messages) > 1 and request.messages[-2].role == "user"):
+        return fallback("conversation_context")
+    text = request.messages[-1].content
+    if len(text) > 2000:
+        return fallback("long_input")
+    if non_action(text):
+        return fallback("non_action" if informational(text) else "conversation_context")
+    available = [*request.client_tools, "create_reminder", "list_reminders"]
+    payload = DecisionRequest(text=text, available_tools=available)
+    try:
+        async with httpx.AsyncClient(timeout=2., trust_env=False) as client:
+            response = await client.post(endpoint + "/decide", json=payload.model_dump())
+            response.raise_for_status()
+            decision = Decision.model_validate(response.json())
+        if decision.type == "LLM_FALLBACK":
+            return decision
+        # Recompute policy locally; a sidecar response is never execution authority.
+        checked = apply_policy(payload, decision.tool or "", decision.score)
+        if checked.type != decision.type:
+            return fallback("invalid_router_response")
+        return checked
+    except (httpx.HTTPError, ValueError, TypeError):
+        return fallback("unavailable")
+
+
+async def routed_reply(request: ChatRequest) -> dict[str, Any]:
+    # Resume the saved plan instead of routing a request whose side effects may exist.
+    if request.client_message_id:
+        with connect() as db:
+            saved = db.execute("SELECT 1 FROM chat_checkpoint WHERE id=?", (request.client_message_id,)).fetchone()
+        if saved:
+            return await agent_reply(request)
+    decision = await route_request(request)
+    if decision.type == "DIRECT_TOOL":
+        if decision.tool in request.client_tools:
+            return {"content": "已准备打开对应功能。", "memory_changes": [], "tool_results": [],
+                    "client_action": {"name": decision.tool, "arguments": {}, "id": request.client_message_id},
+                    "decision": decision.model_dump()}
+        result = await run_tool(decision.tool, {})
+        return {"content": "当前没有待办提醒。" if not result["reminders"] else "已读取待办提醒。",
+                "memory_changes": [], "tool_results": [{"name": decision.tool, "summary":
+                    "\n".join(f"{item['title']} · {item['due_at']}" for item in result["reminders"]) or "暂无待办提醒", "result": result}],
+                "decision": decision.model_dump()}
+    return await agent_reply(request, decision)
+
+
 def system_prompt(user_timezone: str, include_topics: bool = True, excluded_topics=None) -> str:
     memories = active_memories()
     memory_text = "\n".join(f"- [{m['category']}] {m['fact']}" for m in memories) or "(none yet)"
@@ -283,6 +347,13 @@ def create_reminder(title: str, due_at: str, operation_id: str | None = None) ->
 
 
 async def run_tool(name: str, arguments: dict[str, Any], operation_id: str | None = None) -> dict[str, Any]:
+    schema = SCHEMAS.get(name)
+    if schema is None or name == "open_print":
+        return {"ok": False, "error": "Tool is not a server executor"}
+    errors = list(Draft202012Validator(schema).iter_errors(arguments))
+    if errors:
+        return {"ok": False, "error": "Invalid tool parameters: " + errors[0].message}
+
     if name in ("list_topics", "manage_topic"):
         return await topics.run_tool(name, arguments, operation_id)
     if name == "save_memory":
@@ -319,11 +390,16 @@ async def run_tool(name: str, arguments: dict[str, Any], operation_id: str | Non
     return {"ok": False, "error": "unknown tool"}
 
 
-async def agent_reply(request: ChatRequest) -> dict[str, Any]:
+async def agent_reply(request: ChatRequest, decision: Decision | None = None) -> dict[str, Any]:
     state: dict[str, Any] = {
         "messages": [{"role": "system", "content": system_prompt(request.timezone, excluded_topics=request.suppressed_topic_ids)}, *[turn.model_dump() for turn in request.messages]],
         "changes": [], "tool_results": [], "step": 0, "pending": [], "call_index": 0,
+        "decision": decision.model_dump() if decision else None,
+        "allowed_tools": ([decision.tool] if decision and decision.type == "TOOL_WITH_LLM" else
+                          [] if decision and decision.reason == "non_action" else [t["function"]["name"] for t in TOOLS]),
     }
+    if state.get("decision") and state["decision"]["type"] == "TOOL_WITH_LLM":
+        state["messages"][0]["content"] += "\nRoute candidate: " + state["decision"]["tool"] + ". Extract only explicitly provided parameters using the supplied tool schema; ask a follow-up if required values are missing or unsupported options are supplied. Do not invent values or claim success without a result."
     if request.client_message_id:
         with connect() as db:
             checkpoint = db.execute("SELECT state FROM chat_checkpoint WHERE id=?", (request.client_message_id,)).fetchone()
@@ -335,12 +411,15 @@ async def agent_reply(request: ChatRequest) -> dict[str, Any]:
             with connect() as db:
                 db.execute("INSERT OR REPLACE INTO chat_checkpoint(id,state) VALUES(?,?)", (request.client_message_id, json.dumps(state, ensure_ascii=False)))
 
+    checkpoint()
+    allowed = state.get("allowed_tools", [t["function"]["name"] for t in TOOLS])
+    available = [t for t in EXECUTION_TOOLS if t["function"]["name"] in allowed]
     while state["step"] < 4:
         if not state["pending"]:
-            assistant = await deepseek(state["messages"], TOOLS)
+            assistant = await deepseek(state["messages"], available)
             calls = assistant.get("tool_calls") or []
             if not calls:
-                return {"content": assistant.get("content") or "", "memory_changes": state["changes"], "tool_results": state["tool_results"]}
+                return {"content": assistant.get("content") or "", "memory_changes": state["changes"], "tool_results": state["tool_results"], "decision": state.get("decision")}
             state["messages"].append(assistant)
             state["pending"] = calls
             state["call_index"] = 0
@@ -353,8 +432,22 @@ async def agent_reply(request: ChatRequest) -> dict[str, Any]:
             try:
                 args = json.loads(call["function"]["arguments"])
                 operation = hashlib.sha256(f"{request.client_message_id}:{state['step']}:{index}:{name}".encode()).hexdigest() if request.client_message_id else None
+                if name not in allowed:
+                    raise ValueError("Tool is not allowed for this turn")
+                if name == "open_print":
+                    errors = list(Draft202012Validator(SCHEMAS[name]).iter_errors(args))
+                    if errors or not args.get("text"):
+                        raise ValueError("Preserve explicit print text; ask a follow-up for unsupported options")
+                    return {"content": "已准备打印草稿，请在打印页面确认。", "memory_changes": state["changes"],
+                            "tool_results": state["tool_results"], "decision": state.get("decision"),
+                            "client_action": {"name": name, "arguments": args, "id": request.client_message_id}}
                 result = await run_tool(name, args, operation)
                 success = result.get("ok") in (True, "true")
+                if success and state.get("decision") and state["decision"]["type"] == "TOOL_WITH_LLM":
+                    # One extraction produces at most one operation, including after retry.
+                    allowed = []
+                    available = []
+                    state["allowed_tools"] = []
                 if not success:
                     summary = f"操作未完成 · {result.get('error', '请重试')}"
                 elif name == "create_reminder":
@@ -383,7 +476,7 @@ async def agent_reply(request: ChatRequest) -> dict[str, Any]:
         state["step"] += 1
         state["pending"] = []
         checkpoint()
-    return {"content": "已完成的操作请查看结果，我暂时没能整理好回复。", "memory_changes": state["changes"], "tool_results": state["tool_results"]}
+    return {"content": "已完成的操作请查看结果，我暂时没能整理好回复。", "memory_changes": state["changes"], "tool_results": state["tool_results"], "decision": state.get("decision")}
 
 
 def put_inbox(title: str, body: str) -> str:
@@ -489,14 +582,14 @@ async def health() -> dict[str, str]:
 @app.post("/v1/chat", dependencies=[Depends(require_device)])
 async def chat(request: ChatRequest) -> dict[str, Any]:
     if not request.client_message_id:
-        return await agent_reply(request)
+        return await routed_reply(request)
     # A stable request key survives retries; never replay a successfully completed turn.
     async with chat_lock:
         with connect() as db:
             cached = db.execute("SELECT response FROM chat_response WHERE id=?", (request.client_message_id,)).fetchone()
         if cached:
             return json.loads(cached["response"])
-        response = await agent_reply(request)
+        response = await routed_reply(request)
         with connect() as db:
             db.execute("INSERT INTO chat_response(id,response,created_at) VALUES(?,?,?)", (request.client_message_id, json.dumps(response, ensure_ascii=False), utc_now()))
             topics.enqueue(db, request.client_message_id, request.messages, request.timezone)

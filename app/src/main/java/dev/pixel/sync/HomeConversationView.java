@@ -143,7 +143,7 @@ public final class HomeConversationView extends FrameLayout {
             store.setStatus(group,"sent");
             main.post(()->{if(closed)return;busy=false;inFlightGroup=null;
                 if(!reply.toolResults.isEmpty()){resultText=reply.toolResults;prefs.edit().putString("result",resultText).apply();}
-                if(version==generation){restore();react.run();}else{prefs.edit().putBoolean("superseded:reply:"+group,true).apply();render();}
+                if(version==generation){restore();react.run();if(active)DecisionActions.open(activity,reply.clientAction);}else{prefs.edit().putBoolean("superseded:reply:"+group,true).apply();render();}
                 if(pendingGroup!=null)dispatch();else syncInbox();
             });
         }catch(Exception e){store.setStatus(group,"failed");main.post(()->{if(closed)return;busy=false;inFlightGroup=null;

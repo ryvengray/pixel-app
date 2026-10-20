@@ -166,7 +166,7 @@ public final class ChatPanel extends FrameLayout {
                 AssistantApi.Reply reply=AssistantApi.chat(getContext(),messages,memories);
                 for(AssistantStore.Memory memory:reply.memories)store.upsertMemory(memory);
                 store.addMessage("assistant",reply.content);
-                main.post(()->{removeTypingRow();addMessageRow("assistant",reply.content);status.setText(reply.directFallback?"已通过本地密钥连接":"我在这里，继续说吧");busy=false;setSending(input.length()>0);scrollToLatest(true);if(onReply!=null)onReply.run();});
+                main.post(()->{removeTypingRow();addMessageRow("assistant",reply.content);status.setText(reply.directFallback?"已通过本地密钥连接":"我在这里，继续说吧");busy=false;setSending(input.length()>0);scrollToLatest(true);if(onReply!=null)onReply.run();if(getContext() instanceof android.app.Activity)DecisionActions.open((android.app.Activity)getContext(),reply.clientAction);});
             }catch(Exception e){main.post(()->{removeTypingRow();addMessageRow("assistant","刚才连接不太顺利，请稍后再试一次。");status.setText("暂时没有连上");busy=false;setSending(input.length()>0);scrollToLatest(true);});}
         });
     }

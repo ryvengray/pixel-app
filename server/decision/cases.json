@@ -1,0 +1,89 @@
+[
+  {
+    "text": "同步一下笔记",
+    "type": "DIRECT_TOOL",
+    "tool": "open_sync"
+  },
+  {
+    "text": "打开打印",
+    "type": "DIRECT_TOOL",
+    "tool": "open_print"
+  },
+  {
+    "text": "看一下我的待办",
+    "type": "DIRECT_TOOL",
+    "tool": "list_reminders"
+  },
+  {
+    "text": "打开重要话题",
+    "type": "DIRECT_TOOL",
+    "tool": "open_topics"
+  },
+  {
+    "text": "打印这段文字：午饭花了28元",
+    "type": "TOOL_WITH_LLM",
+    "tool": "open_print"
+  },
+  {
+    "text": "明天早上八点提醒我交水电费",
+    "type": "TOOL_WITH_LLM",
+    "tool": "create_reminder"
+  },
+  {
+    "text": "帮我设置提醒",
+    "type": "TOOL_WITH_LLM",
+    "tool": "create_reminder"
+  },
+  {
+    "text": "为什么天空是蓝色的",
+    "type": "LLM_FALLBACK"
+  },
+  {
+    "text": "如何同步笔记",
+    "type": "LLM_FALLBACK"
+  },
+  {
+    "text": "能同步笔记吗",
+    "type": "LLM_FALLBACK"
+  },
+  {
+    "text": "不要同步笔记",
+    "type": "LLM_FALLBACK"
+  },
+  {
+    "text": "打开打印然后同步笔记",
+    "type": "LLM_FALLBACK"
+  },
+  {
+    "text": "他说“打开打印”",
+    "type": "LLM_FALLBACK"
+  },
+  {
+    "text": "同步工作笔记",
+    "type": "LLM_FALLBACK"
+  },
+  {
+    "text": "假如我同步笔记",
+    "type": "LLM_FALLBACK"
+  },
+  {
+    "text": "你可以打印吗",
+    "type": "LLM_FALLBACK"
+  },
+  {
+    "text": "取消明天的提醒",
+    "type": "LLM_FALLBACK"
+  },
+  {
+    "text": "我的打印机坏了",
+    "type": "LLM_FALLBACK"
+  },
+  {
+    "text": "今天已经同步笔记了",
+    "type": "LLM_FALLBACK"
+  },
+  {
+    "text": "明天早上八点要吃药",
+    "type": "LLM_FALLBACK"
+  }
+]
