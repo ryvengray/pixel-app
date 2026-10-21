@@ -81,7 +81,7 @@ public class MainActivity extends Activity {
   WindowInsetsController controller=getWindow().getInsetsController();if(controller!=null){
    int appearance=WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS|WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;
    controller.setSystemBarsAppearance(dark?0:appearance,appearance);
-   controller.setSystemBarsBehavior(WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);controller.hide(WindowInsets.Type.systemBars());
+   controller.setSystemBarsBehavior(WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);controller.show(WindowInsets.Type.statusBars());controller.hide(WindowInsets.Type.navigationBars());
   }
  }
  private void showMenu(){
