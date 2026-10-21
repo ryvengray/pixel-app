@@ -53,17 +53,17 @@ final class HomeInteractionChecks {
                 expect(idle.getVisibility()==View.GONE,"idle hints leaked while editing");
                 expect(!send.isEnabled(),"empty send should be disabled");
             }));
-            check("realKeyboardAndComfortableInsets",()->{
+            check("realKeyboardAndCompactComposer",()->{
                 await(()->imeVisible(),"keyboard did not appear");
                 ui(()->{
                     expect(idle.getVisibility()==View.GONE,"idle hints overlap keyboard");
                     expect(input.hasFocus(),"editor lost focus");
                     float density=activity.getResources().getDisplayMetrics().density;
-                    expect(Math.abs(composer.getPaddingLeft()/density-16)<1,"unexpected text inset");
+                    expect(Math.abs(composer.getPaddingLeft()/density-8)<1,"unexpected text inset");
                     expect(input.getPaddingLeft()==0,"default EditText padding was not removed");
-                    expect(composer.getHeight()/density>=59,"composer is too short");
+                    expect(composer.getHeight()/density>=43,"composer touch target is too short");
                     expect(input.getIncludeFontPadding()==false,"extra font padding remains");
-                    expect(input.getMaxLines()==5,"input should cap at five lines");
+                    expect(input.getMaxLines()==2,"input should cap at two lines");
                 });
             });
             capture("home-editor.png");

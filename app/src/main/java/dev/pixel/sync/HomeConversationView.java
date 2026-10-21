@@ -27,6 +27,7 @@ public final class HomeConversationView extends FrameLayout {
     private final LinearLayout bottom, idle, editing, utterances;
     private final ScrollView conversation;
     private final EditText input;
+    private final ComposerUnderline composerUnderline;
     private VoiceInputOverlay voice;
     private Dialog detail;
     private boolean dark, busy, active, closed, touching, keyboard, syncing, composing, queued;
@@ -73,26 +74,27 @@ public final class HomeConversationView extends FrameLayout {
         result.setOnClickListener(v->showResults());result.setOnLongClickListener(v->{resultText="最近结果 · 点击查看";prefs.edit().putString("result",resultText).apply();render();return true;});
         LinearLayout.LayoutParams rp=new LinearLayout.LayoutParams(-1,-2);rp.bottomMargin=dp(8);bottom.addView(result,rp);
         idle=new LinearLayout(activity);idle.setTag("home_idle");idle.setGravity(Gravity.CENTER_VERTICAL);
-        write=label("写点什么…",14);write.setGravity(Gravity.CENTER);write.setMinHeight(dp(56));write.setOnClickListener(v->focusInput());
+        write=label("轻点输入…",14);write.setGravity(Gravity.CENTER_VERTICAL|Gravity.START);write.setPadding(dp(8),0,0,0);write.setMinHeight(dp(44));write.setOnClickListener(v->focusInput());
         idle.addView(write,new LinearLayout.LayoutParams(0,-2,1));
-        speak=label("按住说话",14);speak.setGravity(Gravity.CENTER);speak.setMinHeight(dp(56));
+        speak=label("按住说话",14);speak.setGravity(Gravity.CENTER);speak.setMinHeight(dp(44));
         speak.setOnTouchListener((v,event)->voiceTouch(event));
         speak.setOnClickListener(v->Toast.makeText(activity,"按住说话，松开发送文字",Toast.LENGTH_SHORT).show());
         speak.setOnLongClickListener(v->{startVoice();return true;});
-        idle.addView(speak,new LinearLayout.LayoutParams(0,-2,2));bottom.addView(idle);
-        editing=new LinearLayout(activity);editing.setTag("home_composer");editing.setGravity(Gravity.BOTTOM);editing.setBaselineAligned(false);editing.setPadding(dp(16),dp(8),dp(8),dp(8));editing.setMinimumHeight(dp(60));
+        idle.addView(speak,new LinearLayout.LayoutParams(dp(112),-2));bottom.addView(idle);
+        editing=new LinearLayout(activity);editing.setTag("home_composer");editing.setGravity(Gravity.BOTTOM);editing.setBaselineAligned(false);editing.setPadding(dp(8),0,0,0);editing.setMinimumHeight(dp(44));
         input=new EditText(activity);input.setTag("home_input");input.setTextSize(16);input.setHint("跟 Greta 说说…");input.setContentDescription("给 Greta 的消息");
-        input.setBackgroundColor(Color.TRANSPARENT);input.setIncludeFontPadding(false);input.setGravity(Gravity.TOP|Gravity.START);input.setPadding(0,dp(10),dp(12),dp(10));
-        input.setMaxLines(5);input.setMinLines(1);input.setMinHeight(dp(44));input.setLineSpacing(dp(3),1f);input.setHorizontallyScrolling(false);
+        input.setBackgroundColor(Color.TRANSPARENT);input.setIncludeFontPadding(false);input.setGravity(Gravity.CENTER_VERTICAL|Gravity.START);input.setPadding(0,dp(6),dp(10),dp(6));
+        input.setMaxLines(2);input.setMinLines(1);input.setMinHeight(dp(44));input.setLineSpacing(dp(3),1f);input.setHorizontallyScrolling(false);
         input.setInputType(android.text.InputType.TYPE_CLASS_TEXT|android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE|android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
         input.setImeOptions(EditorInfo.IME_ACTION_SEND|EditorInfo.IME_FLAG_NO_EXTRACT_UI);input.setText(prefs.getString("draft",""));composing=input.length()>0;
         input.addTextChangedListener(new TextWatcher(){public void beforeTextChanged(CharSequence s,int a,int c,int f){} public void afterTextChanged(Editable e){} public void onTextChanged(CharSequence s,int a,int b,int c){lastInteraction=System.currentTimeMillis();prefs.edit().putString("draft",s.toString()).apply();updateSend();}});
         input.setOnFocusChangeListener((v,focused)->{if(focused)composing=true;updateComposer();});
         input.setOnEditorActionListener((v,a,e)->{if(a==EditorInfo.IME_ACTION_SEND){submitInput();return true;}return false;});
         editing.addView(input,new LinearLayout.LayoutParams(0,-2,1));
-        send=label("发送",14);send.setTag("home_send");send.setGravity(Gravity.CENTER);send.setIncludeFontPadding(false);send.setContentDescription("发送消息");
-        send.setOnClickListener(v->submitInput());editing.addView(send,new LinearLayout.LayoutParams(dp(58),dp(44)));
-        bottom.addView(editing);updateComposer();
+        send=label("↑",23);send.setTag("home_send");send.setGravity(Gravity.CENTER);send.setIncludeFontPadding(false);send.setContentDescription("发送消息");
+        send.setOnClickListener(v->submitInput());editing.addView(send,new LinearLayout.LayoutParams(dp(44),dp(44)));
+        bottom.addView(editing);
+        composerUnderline=new ComposerUnderline(activity);composerUnderline.setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);bottom.addView(composerUnderline,new LinearLayout.LayoutParams(-1,dp(7)));updateComposer();
         resultText=prefs.getString("result","");restore();setTheme(false);
     }
     @Override protected void onMeasure(int width,int height){
@@ -109,10 +111,10 @@ public final class HomeConversationView extends FrameLayout {
         for(TextView v:new TextView[]{assistant,user,write,speak,send,result,input})v.setTextColor(fg);state.setTextColor(muted);input.setHintTextColor(muted);
         int bubble=Color.parseColor(dark?"#E62B4235":"#EBE0EBDD");assistant.setBackground(surface(bubble,22));((TextView)findViewWithTag("tail")).setTextColor(bubble);
         user.setBackground(surface(Color.parseColor(dark?"#DC365441":"#DBD3E3CE"),20));
-        idle.setBackground(surface(Color.parseColor(dark?"#E6263D30":"#E6DCE7D5"),28));
-        GradientDrawable field=surface(Color.parseColor(dark?"#F523382D":"#FAFFFFFF"),26);
-        field.setStroke(dp(1),Color.parseColor(dark?"#557C9A85":"#D8E4D9"));editing.setBackground(field);
-        send.setTextColor(Color.parseColor(dark?"#102019":"#FFFFFF"));send.setBackground(surface(Color.parseColor(dark?"#8BCB9A":"#327C4E"),18));
+        idle.setBackgroundColor(Color.TRANSPARENT);editing.setBackgroundColor(Color.TRANSPARENT);
+        bottom.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,new int[]{Color.TRANSPARENT,Color.parseColor(dark?"#C0101F27":"#E6F1F5EE")}));
+        write.setTextColor(muted);speak.setTextColor(muted);
+        send.setTextColor(Color.parseColor(dark?"#102019":"#FFFFFF"));send.setBackground(surface(Color.parseColor(dark?"#8BCB9A":"#327C4E"),22));
         result.setBackground(surface(Color.parseColor(dark?"#CC243B2E":"#CCDDE8D7"),16));render();
     }
     private void restore(){
@@ -133,7 +135,7 @@ public final class HomeConversationView extends FrameLayout {
         if(show&&!reducedMotion()){if(!main.hasCallbacks(thinkingTick))main.postDelayed(thinkingTick,550);}
         else main.removeCallbacks(thinkingTick);
     }
-    private void updateSend(){if(send!=null){boolean ready=!input.getText().toString().trim().isEmpty();send.setEnabled(ready);send.setAlpha(ready?1f:.38f);}}
+    private void updateSend(){if(send!=null){String draft=input.getText().toString();boolean ready=!draft.trim().isEmpty();send.setEnabled(ready);send.setAlpha(ready?1f:.28f);if(composerUnderline!=null)composerUnderline.update(dark,composing||keyboard,draft.codePointCount(0,draft.length()),!reducedMotion());}}
     private void updateComposer(){
         boolean show=composing||keyboard;
         editing.setVisibility(show?VISIBLE:GONE);idle.setVisibility(show?GONE:VISIBLE);updateSend();
