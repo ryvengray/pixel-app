@@ -38,12 +38,12 @@ void main(){
  float sheen=exp(-pow((screenUv.x-sheenX)/.105,2.))*.045;
  col+=vec3(.78,.91,1.)*sheen;
  // Stable random locations with independently pulsing brightness.
- vec2 grid=screenUv*vec2(18.,32.),cell=floor(grid),local=fract(grid);
+ vec2 grid=screenUv*vec2(18.,32.),cell=floor(grid),cellUv=fract(grid);
  float seed=hash21(cell);vec2 point=vec2(hash21(cell+vec2(19.1,7.7)),hash21(cell+vec2(3.4,51.8)));
- float radius=length((local-point)*vec2(1.,1.25));
+ float radius=length((cellUv-point)*vec2(1.,1.25));
  float pulse=pow(max(0.,sin(t*(1.1+seed*1.5)+seed*6.28318)),8.);
  float glint=(1.-smoothstep(.008,.075,radius))*smoothstep(.57,.82,seed)*pulse;
- float crossGlint=(1.-smoothstep(.0015,.006,abs(local.x-point.x)))*(1.-smoothstep(.0015,.006,abs(local.y-point.y)))*smoothstep(.72,.9,seed)*pulse*.18;
+ float crossGlint=(1.-smoothstep(.0015,.006,abs(cellUv.x-point.x)))*(1.-smoothstep(.0015,.006,abs(cellUv.y-point.y)))*smoothstep(.72,.9,seed)*pulse*.18;
  col=mix(col,vec3(.84,.96,1.),clamp(glint*.82+crossGlint,0.,.9));
  // Keep the background full-screen and transform only the pet. This avoids a
  // differently coloured SurfaceView rectangle when the pet moves to the menu.
