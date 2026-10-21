@@ -3,6 +3,7 @@ package dev.pixel.sync;
 import android.app.*;
 import android.content.*;
 import android.graphics.Color;
+import android.graphics.Rect;
 import android.graphics.drawable.GradientDrawable;
 import android.os.*;
 import android.text.*;
@@ -23,7 +24,7 @@ public final class HomeConversationView extends FrameLayout {
     private final ExecutorService background = Executors.newFixedThreadPool(2);
     private final Runnable react;
     private final java.util.function.Consumer<Boolean> thinking;
-    private final TextView assistant, user, state, result, write, speak, send;
+    private final TextView assistant, user, userCaption, assistantCaption, state, result, write, speak, send;
     private final LinearLayout bottom, idle, editing, utterances;
     private final ScrollView conversation;
     private final EditText input;
@@ -54,34 +55,35 @@ public final class HomeConversationView extends FrameLayout {
     public HomeConversationView(Activity activity, Runnable react,java.util.function.Consumer<Boolean> thinking) {
         super(activity); this.activity=activity;this.react=react;this.thinking=thinking;
         store=new AssistantStore(activity);prefs=activity.getSharedPreferences("home_conversation",0);
-        setClipChildren(false);
+        setClipChildren(false);setFocusableInTouchMode(true);
         conversation=new ScrollView(activity);conversation.setFillViewport(false);conversation.setVerticalScrollBarEnabled(false);conversation.setClipToPadding(false);
         utterances=new LinearLayout(activity);utterances.setOrientation(LinearLayout.VERTICAL);utterances.setPadding(0,0,0,dp(8));
         conversation.addView(utterances,new ScrollView.LayoutParams(-1,-2));
-        FrameLayout.LayoutParams cp=new FrameLayout.LayoutParams(-1,dp(240),Gravity.TOP);cp.setMargins(dp(24),dp(88),dp(24),0);addView(conversation,cp);
-        user=label("",15);user.setTag("home_user_message");user.setPadding(dp(16),dp(11),dp(16),dp(11));user.setMaxLines(3);user.setMaxWidth(dp(280));user.setEllipsize(TextUtils.TruncateAt.END);
+        FrameLayout.LayoutParams cp=new FrameLayout.LayoutParams(-1,dp(260),Gravity.TOP);cp.setMargins(dp(24),dp(118),dp(24),0);addView(conversation,cp);
+        userCaption=label("你",11);userCaption.setPadding(0,0,dp(12),dp(4));userCaption.setGravity(Gravity.END);
+        LinearLayout.LayoutParams ucp=new LinearLayout.LayoutParams(-2,-2);ucp.gravity=Gravity.END;utterances.addView(userCaption,ucp);
+        user=label("",15);user.setTag("home_user_message");user.setPadding(dp(16),dp(9),dp(17),dp(9));user.setGravity(Gravity.END);user.setLineSpacing(dp(4),1f);user.setMaxLines(3);user.setMaxWidth(dp(280));user.setEllipsize(TextUtils.TruncateAt.END);
         user.setContentDescription("我刚刚说的话，点击展开");user.setOnClickListener(v->showText("我",userText));
         LinearLayout.LayoutParams up=new LinearLayout.LayoutParams(-2,-2);up.gravity=Gravity.END;up.leftMargin=dp(40);up.bottomMargin=dp(12);utterances.addView(user,up);
-        assistant=label("",16);assistant.setTag("home_assistant_message");assistant.setPadding(dp(17),dp(12),dp(17),dp(12));assistant.setMaxLines(4);assistant.setEllipsize(TextUtils.TruncateAt.END);
+        assistantCaption=label("Greta",11);assistantCaption.setPadding(dp(19),0,0,dp(4));utterances.addView(assistantCaption);
+        assistant=label("",17);assistant.setTag("home_assistant_message");assistant.setPadding(dp(21),dp(15),dp(22),dp(17));assistant.setLineSpacing(dp(5),1f);assistant.setMaxLines(4);assistant.setEllipsize(TextUtils.TruncateAt.END);
         assistant.setMaxWidth(dp(290));assistant.setContentDescription("Greta 最新发言，点击展开");assistant.setOnClickListener(v->showText("Greta",assistantText));
         LinearLayout.LayoutParams ap=new LinearLayout.LayoutParams(-2,-2);ap.gravity=Gravity.START;ap.rightMargin=dp(20);utterances.addView(assistant,ap);
-        TextView tail=label("▾",20);tail.setTag("tail");tail.setIncludeFontPadding(false);
-        LinearLayout.LayoutParams tp=new LinearLayout.LayoutParams(dp(24),dp(14));tp.leftMargin=dp(28);tp.topMargin=-dp(4);utterances.addView(tail,tp);
         state=label("",13);state.setTag("home_reply_state");state.setPadding(dp(6),dp(4),dp(6),dp(8));state.setOnClickListener(v->retry());utterances.addView(state);
         bottom=new LinearLayout(activity);bottom.setOrientation(LinearLayout.VERTICAL);
-        FrameLayout.LayoutParams bp=new FrameLayout.LayoutParams(-1,-2,Gravity.BOTTOM);bp.setMargins(dp(16),0,dp(16),dp(10));addView(bottom,bp);
-        result=label("",13);result.setMaxLines(2);result.setEllipsize(TextUtils.TruncateAt.END);result.setPadding(dp(12),dp(9),dp(12),dp(9));
-        result.setOnClickListener(v->showResults());result.setOnLongClickListener(v->{resultText="最近结果 · 点击查看";prefs.edit().putString("result",resultText).apply();render();return true;});
-        LinearLayout.LayoutParams rp=new LinearLayout.LayoutParams(-1,-2);rp.bottomMargin=dp(8);bottom.addView(result,rp);
-        idle=new LinearLayout(activity);idle.setTag("home_idle");idle.setGravity(Gravity.CENTER_VERTICAL);
-        write=label("轻点输入…",14);write.setGravity(Gravity.CENTER_VERTICAL|Gravity.START);write.setPadding(dp(8),0,0,0);write.setMinHeight(dp(44));write.setOnClickListener(v->focusInput());
+        FrameLayout.LayoutParams bp=new FrameLayout.LayoutParams(-1,-2,Gravity.BOTTOM);bp.bottomMargin=dp(10);addView(bottom,bp);
+        result=label("",12);result.setTag("home_activity");result.setMaxLines(1);result.setPadding(dp(14),0,dp(14),0);result.setGravity(Gravity.CENTER);result.setMinHeight(dp(40));result.setContentDescription("操作状态与最近结果，点击查看详情");
+        result.setOnClickListener(v->showResults());
+        FrameLayout.LayoutParams rp=new FrameLayout.LayoutParams(-2,dp(40),Gravity.TOP|Gravity.RIGHT);rp.topMargin=dp(72);rp.rightMargin=dp(24);addView(result,rp);
+        idle=new LinearLayout(activity);idle.setTag("home_idle");idle.setGravity(Gravity.CENTER_VERTICAL);idle.setPadding(0,0,dp(16),0);
+        write=label("轻点输入…",14);write.setGravity(Gravity.CENTER_VERTICAL|Gravity.START);write.setPadding(dp(24),0,0,0);write.setMinHeight(dp(44));write.setOnClickListener(v->focusInput());
         idle.addView(write,new LinearLayout.LayoutParams(0,-2,1));
         speak=label("按住说话",14);speak.setGravity(Gravity.CENTER);speak.setMinHeight(dp(44));
         speak.setOnTouchListener((v,event)->voiceTouch(event));
         speak.setOnClickListener(v->Toast.makeText(activity,"按住说话，松开发送文字",Toast.LENGTH_SHORT).show());
         speak.setOnLongClickListener(v->{startVoice();return true;});
         idle.addView(speak,new LinearLayout.LayoutParams(dp(112),-2));bottom.addView(idle);
-        editing=new LinearLayout(activity);editing.setTag("home_composer");editing.setGravity(Gravity.BOTTOM);editing.setBaselineAligned(false);editing.setPadding(dp(8),0,0,0);editing.setMinimumHeight(dp(44));
+        editing=new LinearLayout(activity);editing.setTag("home_composer");editing.setGravity(Gravity.BOTTOM);editing.setBaselineAligned(false);editing.setPadding(dp(24),0,dp(20),0);editing.setMinimumHeight(dp(44));
         input=new EditText(activity);input.setTag("home_input");input.setTextSize(16);input.setHint("跟 Greta 说说…");input.setContentDescription("给 Greta 的消息");
         input.setBackgroundColor(Color.TRANSPARENT);input.setIncludeFontPadding(false);input.setGravity(Gravity.CENTER_VERTICAL|Gravity.START);input.setPadding(0,dp(6),dp(10),dp(6));
         input.setMaxLines(2);input.setMinLines(1);input.setMinHeight(dp(44));input.setLineSpacing(dp(3),1f);input.setHorizontallyScrolling(false);
@@ -100,7 +102,7 @@ public final class HomeConversationView extends FrameLayout {
     @Override protected void onMeasure(int width,int height){
         super.onMeasure(width,height);
         // Bound the conversation above the composer even on small screens/landscape.
-        int available=getMeasuredHeight()-getPaddingTop()-getPaddingBottom()-dp(88)-bottom.getMeasuredHeight()-dp(24);
+        int available=getMeasuredHeight()-getPaddingTop()-getPaddingBottom()-dp(118)-bottom.getMeasuredHeight()-dp(24);
         FrameLayout.LayoutParams p=(FrameLayout.LayoutParams)conversation.getLayoutParams();int limit=Math.max(0,Math.min(dp(250),available));
         if(p.height!=limit){p.height=limit;conversation.setLayoutParams(p);super.onMeasure(width,height);}
     }
@@ -109,11 +111,12 @@ public final class HomeConversationView extends FrameLayout {
     private GradientDrawable surface(int color,int radius){GradientDrawable d=new GradientDrawable();d.setColor(color);d.setCornerRadius(dp(radius));return d;}
     public void setTheme(boolean value){dark=value;int fg=Color.parseColor(dark?"#E5EDE3":"#263C31"),muted=Color.parseColor(dark?"#A5B9AA":"#59715F");
         for(TextView v:new TextView[]{assistant,user,write,speak,send,result,input})v.setTextColor(fg);state.setTextColor(muted);input.setHintTextColor(muted);
-        int bubble=Color.parseColor(dark?"#E62B4235":"#EBE0EBDD");assistant.setBackground(surface(bubble,22));((TextView)findViewWithTag("tail")).setTextColor(bubble);
-        user.setBackground(surface(Color.parseColor(dark?"#DC365441":"#DBD3E3CE"),20));
+        assistantCaption.setTextColor(muted);userCaption.setTextColor(muted);
+        assistant.setBackground(new ConversationSurface(true,dark,getResources().getDisplayMetrics().density));
+        user.setBackground(new ConversationSurface(false,dark,getResources().getDisplayMetrics().density));
         idle.setBackgroundColor(Color.TRANSPARENT);editing.setBackgroundColor(Color.TRANSPARENT);
-        bottom.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,new int[]{Color.TRANSPARENT,Color.parseColor(dark?"#C0101F27":"#E6F1F5EE")}));
-        write.setTextColor(muted);speak.setTextColor(muted);
+        bottom.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,new int[]{Color.TRANSPARENT,Color.parseColor(dark?"#B3101F27":"#CCF1F5EE"),Color.parseColor(dark?"#E6101F27":"#F5F1F5EE")}));
+        write.setTextColor(fg);speak.setTextColor(fg);
         send.setTextColor(Color.parseColor(dark?"#102019":"#FFFFFF"));send.setBackground(surface(Color.parseColor(dark?"#8BCB9A":"#327C4E"),22));
         result.setBackground(surface(Color.parseColor(dark?"#CC243B2E":"#CCDDE8D7"),16));render();
     }
@@ -147,15 +150,30 @@ public final class HomeConversationView extends FrameLayout {
     }
     private void render(){
         assistant.setText(assistantText);boolean showAssistant=!waiting()&&pendingGroup==null&&!assistantText.isEmpty();
-        assistant.setVisibility(showAssistant?VISIBLE:GONE);findViewWithTag("tail").setVisibility(showAssistant?VISIBLE:GONE);
-        user.setText(userText);user.setVisibility(userText.isEmpty()?GONE:VISIBLE);result.setText(resultText);result.setVisibility(resultText.isEmpty()?GONE:VISIBLE);
+        assistant.setVisibility(showAssistant?VISIBLE:GONE);assistantCaption.setVisibility(showAssistant?VISIBLE:GONE);
+        user.setText(userText);user.setVisibility(userText.isEmpty()?GONE:VISIBLE);userCaption.setVisibility(userText.isEmpty()?GONE:VISIBLE);
+        result.setText("动态 · 查看");result.setVisibility(resultText.isEmpty()?GONE:VISIBLE);
         if(waiting())state.setText(busy&&pendingGroup!=null?"收到补充，接着处理…":"Greta 正在想…");
         else state.setText(pendingGroup==null?"":failureText==null?"尚未发送 · 点击重试":failureText);
         state.setVisibility(state.length()==0?GONE:VISIBLE);updateComposer();updateFeedback();
     }
     public void focusInput(){
         lastInteraction=System.currentTimeMillis();composing=true;updateComposer();input.requestFocus();input.setSelection(input.length());
-        input.post(()->{if(!closed&&composing&&input.hasFocus())((InputMethodManager)activity.getSystemService(Context.INPUT_METHOD_SERVICE)).showSoftInput(input,InputMethodManager.SHOW_IMPLICIT);});
+        input.post(this::showInputKeyboard);
+    }
+    private void showInputKeyboard(){
+        if(closed||!composing||!input.hasFocus())return;
+        WindowInsetsController controller=input.getWindowInsetsController();
+        if(controller!=null)controller.show(WindowInsets.Type.ime());
+        else ((InputMethodManager)activity.getSystemService(Context.INPUT_METHOD_SERVICE)).showSoftInput(input,InputMethodManager.SHOW_IMPLICIT);
+    }
+    @Override public void onWindowFocusChanged(boolean focused){super.onWindowFocusChanged(focused);if(focused&&input!=null&&input.hasFocus()&&composing)input.post(this::showInputKeyboard);}
+    void dismissKeyboardOutside(float rawX,float rawY){
+        if(voice!=null||(!input.hasFocus()&&!keyboard))return;
+        Rect bounds=new Rect();if(editing.getGlobalVisibleRect(bounds)&&bounds.contains((int)rawX,(int)rawY))return;
+        composing=input.length()>0;input.clearFocus();requestFocus();
+        ((InputMethodManager)activity.getSystemService(Context.INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(input.getWindowToken(),0);
+        updateComposer();
     }
     public void onKeyboard(boolean shown){
         boolean was=keyboard;keyboard=shown;
@@ -163,7 +181,7 @@ public final class HomeConversationView extends FrameLayout {
         // Initial false insets can arrive between tapping Write and IME appearance.
         // Only an actual visible -> hidden transition may collapse an empty editor.
         else if(was&&input.length()==0){composing=false;input.clearFocus();}
-        user.setMaxLines(shown?2:3);assistant.setMaxLines(shown?3:4);result.setMaxLines(shown?1:2);updateComposer();
+        user.setMaxLines(shown?2:3);assistant.setMaxLines(shown?3:4);updateComposer();
     }
     private void submitInput(){
         String text=input.getText().toString().trim();if(text.isEmpty())return;
@@ -247,7 +265,8 @@ public final class HomeConversationView extends FrameLayout {
         lastInteraction=System.currentTimeMillis();
         LinearLayout list=new LinearLayout(activity);list.setOrientation(LinearLayout.VERTICAL);list.setPadding(dp(18),0,dp(18),0);
         TextView loading=label("正在读取提醒…",13);loading.setTextColor(Color.parseColor(dark?"#E5EDE3":"#263C31"));list.addView(loading);
-        List<AssistantStore.Message> records=store.recentMessages(200);for(int i=records.size()-1;i>=0;i--){AssistantStore.Message m=records.get(i);if(!m.role.equals("tool"))continue;TextView row=label(m.content,15);row.setTextColor(Color.parseColor(dark?"#E5EDE3":"#263C31"));row.setPadding(0,dp(12),0,dp(16));row.setTextIsSelectable(true);android.text.util.Linkify.addLinks(row,android.text.util.Linkify.WEB_URLS);list.addView(row);}
+        if(!resultText.isEmpty()){TextView latest=label(resultText,15);latest.setTextColor(Color.parseColor(dark?"#E5EDE3":"#263C31"));latest.setPadding(0,dp(12),0,dp(16));latest.setTextIsSelectable(true);android.text.util.Linkify.addLinks(latest,android.text.util.Linkify.WEB_URLS);list.addView(latest);}
+        List<AssistantStore.Message> records=store.recentMessages(200);for(int i=records.size()-1;i>=0;i--){AssistantStore.Message m=records.get(i);if(!m.role.equals("tool")||m.content.equals(resultText))continue;TextView row=label(m.content,15);row.setTextColor(Color.parseColor(dark?"#E5EDE3":"#263C31"));row.setPadding(0,dp(12),0,dp(16));row.setTextIsSelectable(true);android.text.util.Linkify.addLinks(row,android.text.util.Linkify.WEB_URLS);list.addView(row);}
         ScrollView scroll=new ScrollView(activity);scroll.addView(list);showDialog("工具与最近结果",scroll);
         background.execute(()->{try{JSONArray reminders=AssistantApi.reminders(activity);main.post(()->{if(closed)return;loading.setText(reminders.length()==0?"暂无待办提醒":"待办提醒");int at=1;
             for(int i=0;i<reminders.length();i++){JSONObject item=reminders.optJSONObject(i);if(item==null)continue;

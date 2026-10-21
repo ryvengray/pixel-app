@@ -10,6 +10,7 @@ import android.os.SystemClock;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowInsets;
+import android.view.MotionEvent;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.EditText;
 import android.widget.TextView;
@@ -41,7 +42,7 @@ final class HomeInteractionChecks {
         try{
             agent=new FakeAgent();agent.start();
             settings.edit().putString("server_url","http://127.0.0.1:"+agent.server.getLocalPort()).putBoolean("decision_enabled",false).commit();
-            prefs.edit().putString("draft","").putBoolean("proactive",false).commit();
+            prefs.edit().putString("draft","").putString("result","操作未完成，请检查请求").putBoolean("proactive",false).commit();
             new SecureStore(context).put("device_token","home-ui-test-token");
             activity=test.startActivitySync(new Intent(context,MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));test.waitForIdleSync();
             home=findType(activity.getWindow().getDecorView(),HomeConversationView.class);
@@ -59,7 +60,11 @@ final class HomeInteractionChecks {
                     expect(idle.getVisibility()==View.GONE,"idle hints overlap keyboard");
                     expect(input.hasFocus(),"editor lost focus");
                     float density=activity.getResources().getDisplayMetrics().density;
-                    expect(Math.abs(composer.getPaddingLeft()/density-8)<1,"unexpected text inset");
+                    expect(Math.abs(composer.getPaddingLeft()/density-24)<1,"unexpected text inset");
+                    expect(composer.getWidth()==home.getWidth(),"composer should span the page width");
+                    TextView activityChip=(TextView)home.findViewWithTag("home_activity");
+                    expect(activityChip.getParent()!=composer.getParent(),"operation status remains above the input");
+                    expect(!activityChip.getText().toString().contains("操作未完成"),"raw operation error remains on the home surface");
                     expect(input.getPaddingLeft()==0,"default EditText padding was not removed");
                     expect(composer.getHeight()/density>=43,"composer touch target is too short");
                     expect(input.getIncludeFontPadding()==false,"extra font padding remains");
@@ -81,6 +86,13 @@ final class HomeInteractionChecks {
                 });
             });
             capture("home-multiline.png");
+            check("outsideTapClosesKeyboardAndKeepsDraft",()->{
+                ui(()->home.focusInput());await(()->imeVisible(),"keyboard did not reopen for outside tap");
+                tapPet();await(()->!imeVisible(),"tapping the pet did not dismiss the keyboard");
+                ui(()->{expect(!input.hasFocus(),"outside tap retained input focus");expect(input.getText().toString().contains("第三行"),"outside tap discarded the draft");home.focusInput();input.setText("");});
+                await(()->imeVisible(),"keyboard did not reopen for empty draft");tapPet();
+                await(()->!imeVisible(),"outside tap did not dismiss the empty keyboard");await(()->idle.getVisibility()==View.VISIBLE,"empty input did not return to idle");
+            });
             FakeAgent service=agent;
             check("waitingPetAndMessageStayAboveComposer",()->{
                 ui(()->{home.focusInput();input.setText("home-ui-正常回复");send.performClick();});
@@ -137,10 +149,15 @@ final class HomeInteractionChecks {
         if(bitmap!=null)try(FileOutputStream out=new FileOutputStream(new File(test.getTargetContext().getCacheDir(),name))){bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG,100,out);bitmap.recycle();}
     }
     private boolean imeVisible(){WindowInsets insets=activity.getWindow().getDecorView().getRootWindowInsets();return insets!=null&&insets.isVisible(WindowInsets.Type.ime());}
+    private void tapPet(){
+        int[] location=new int[2];ui(()->{View target=activity.findViewById(android.R.id.content).findViewWithTag("home_pet_touch");target.getLocationOnScreen(location);location[0]+=target.getWidth()/2;location[1]+=target.getHeight()/2;});
+        long now=SystemClock.uptimeMillis();MotionEvent down=MotionEvent.obtain(now,now,MotionEvent.ACTION_DOWN,location[0],location[1],0),up=MotionEvent.obtain(now,now+40,MotionEvent.ACTION_UP,location[0],location[1],0);
+        try{test.sendPointerSync(down);test.sendPointerSync(up);}finally{down.recycle();up.recycle();}test.waitForIdleSync();
+    }
     private interface Check{void run()throws Exception;}
     private interface Condition{boolean get();}
     private void check(String name,Check work)throws Exception{
-        Bundle report=new Bundle();report.putString("class",getClass().getName());report.putString("test",name);report.putInt("numtests",7);report.putInt("current",passed+1);test.sendStatus(1,report);
+        Bundle report=new Bundle();report.putString("class",getClass().getName());report.putString("test",name);report.putInt("numtests",8);report.putInt("current",passed+1);test.sendStatus(1,report);
         try{work.run();passed++;test.sendStatus(0,report);}catch(Throwable error){report.putString("stack",android.util.Log.getStackTraceString(error));test.sendStatus(-2,report);throw error;}
     }
     private void await(Condition condition,String message){

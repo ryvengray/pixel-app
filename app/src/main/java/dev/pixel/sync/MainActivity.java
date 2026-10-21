@@ -46,7 +46,7 @@ public class MainActivity extends Activity {
   historyButton=new ImageButton(this);historyButton.setImageResource(R.drawable.ic_chat_history);historyButton.setPadding(dp(13),dp(13),dp(13),dp(13));
   historyButton.setContentDescription("查看聊天历史");historyButton.setTooltipText("聊天历史");historyButton.setElevation(dp(16));historyButton.setOnClickListener(v->home.showHistory());
   FrameLayout.LayoutParams historyPosition=new FrameLayout.LayoutParams(dp(48),dp(48),Gravity.TOP|Gravity.RIGHT);historyPosition.topMargin=dp(MENU_TOP_DP);historyPosition.rightMargin=dp(MENU_RIGHT_DP+MENU_WIDTH_DP+10);overlay.addView(historyButton,historyPosition);
-  petTouch=new TextView(this);petTouch.setContentDescription("玉绿色宠物，点击打个招呼，长按打开菜单");
+  petTouch=new TextView(this);petTouch.setTag("home_pet_touch");petTouch.setContentDescription("玉绿色宠物，点击打个招呼，长按打开菜单");
   petTouch.setElevation(dp(12));
   petTouch.setOnClickListener(v->scene.react());
   petTouch.setOnLongClickListener(v->{showMenu();return true;});
@@ -59,9 +59,12 @@ public class MainActivity extends Activity {
    @Override public WindowInsets onProgress(WindowInsets insets,java.util.List<WindowInsetsAnimation> running){applyInputInsets(insets,true);return insets;}
    @Override public void onEnd(WindowInsetsAnimation animation){if((animation.getTypeMask()&WindowInsets.Type.ime())!=0){imeAnimating=false;WindowInsets insets=root.getRootWindowInsets();if(insets!=null)applyInputInsets(insets,true);}}
   });
-  root.setOnTouchListener((v,event)->{if(event.getAction()==android.view.MotionEvent.ACTION_DOWN){View focus=getCurrentFocus();if(focus instanceof android.widget.EditText){android.view.inputmethod.InputMethodManager imm=(android.view.inputmethod.InputMethodManager)getSystemService(Activity.INPUT_METHOD_SERVICE);imm.hideSoftInputFromWindow(focus.getWindowToken(),0);focus.clearFocus();}}return false;});
   setContentView(root);applyColors();
   if(state==null)root.post(()->handleIncomingFile(getIntent()));
+ }
+ @Override public boolean dispatchTouchEvent(MotionEvent event){
+  if(home!=null&&event.getActionMasked()==MotionEvent.ACTION_DOWN)home.dismissKeyboardOutside(event.getRawX(),event.getRawY());
+  return super.dispatchTouchEvent(event);
  }
  private void applyInputInsets(WindowInsets insets,boolean moveComposer){
   android.graphics.Insets safe=insets.getInsets(WindowInsets.Type.systemBars()|WindowInsets.Type.displayCutout());
