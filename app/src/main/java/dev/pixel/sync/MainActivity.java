@@ -36,7 +36,7 @@ public class MainActivity extends Activity {
   int choice=preferences.getInt("theme",0);dark=choice==0?systemDark():choice==2;
   getWindow().setDecorFitsSystemWindows(false);getWindow().setStatusBarColor(Color.TRANSPARENT);getWindow().setNavigationBarColor(Color.TRANSPARENT);
   root=new FrameLayout(this);
-  root.setBackgroundColor(Color.parseColor(dark?"#102019":"#F0F5E9"));
+  root.setBackgroundColor(Color.parseColor(dark?"#070D1B":"#F0F5E9"));
   scene=new PetScene(this);scene.setTheme(dark);scene.setMoving(!preferences.getBoolean("reduceMotion",false));
   root.addView(scene,new FrameLayout.LayoutParams(-1,-1));overlay=new FrameLayout(this);root.addView(overlay,new FrameLayout.LayoutParams(-1,-1));
   title=text("Greta",23);title.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));
@@ -74,7 +74,7 @@ public class MainActivity extends Activity {
  private GradientDrawable surface(int color,int radius){GradientDrawable d=new GradientDrawable();d.setColor(color);d.setCornerRadius(dp(radius));return d;}
  private void applyColors(){
   foreground=Color.parseColor(dark?"#E5EDE3":"#263C31");secondary=Color.parseColor(dark?"#92A99A":"#708675");
-  root.setBackgroundColor(Color.parseColor(dark?"#102019":"#F0F5E9"));
+  root.setBackgroundColor(Color.parseColor(dark?"#070D1B":"#F0F5E9"));
   title.setTextColor(foreground);menuButton.setTextColor(foreground);
   historyButton.setImageTintList(android.content.res.ColorStateList.valueOf(foreground));historyButton.setBackground(surface(Color.parseColor(dark?"#263D33":"#DDE8DC"),24));
   menuButton.setBackground(surface(Color.parseColor(dark?"#263D33":"#DDE8DC"),24));scene.setTheme(dark);home.setTheme(dark);

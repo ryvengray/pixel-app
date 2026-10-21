@@ -1,5 +1,7 @@
 package dev.pixel.sync;
 import android.content.Context;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.opengl.GLES20;
 import android.opengl.GLSurfaceView;
 import android.os.SystemClock;
@@ -7,14 +9,17 @@ import android.util.Log;
 import android.animation.ValueAnimator;
 import java.nio.*;
 import java.nio.charset.StandardCharsets;
+import android.opengl.GLUtils;
 import javax.microedition.khronos.egl.EGLConfig;
 import javax.microedition.khronos.opengles.GL10;
 
 /** A procedural 3D volume with animated features in body coordinates. */
 public final class PetScene extends GLSurfaceView implements GLSurfaceView.Renderer {
  private final String fragment;
+ private final Context context;
  private final FloatBuffer vertices=ByteBuffer.allocateDirect(32).order(ByteOrder.nativeOrder()).asFloatBuffer();
- private int program,position,resolution,timeUniform,darkUniform,reactionUniform,motionUniform,compactUniform,compactCenterUniform,thinkingUniform,width,height;
+ private int program,position,resolution,timeUniform,darkUniform,reactionUniform,motionUniform,compactUniform,compactCenterUniform,thinkingUniform,backdropUniform,backdropSizeUniform,backdropTexture,width,height;
+ private volatile int backdropResource=R.drawable.home_mist_mountains;
  private final long start=SystemClock.uptimeMillis();
  private volatile long tapped=-10000;
  private volatile boolean dark,moving=true,thinking;
@@ -27,6 +32,7 @@ public final class PetScene extends GLSurfaceView implements GLSurfaceView.Rende
  private final Runnable frame=new Runnable(){public void run(){if(!active)return;requestRender();if(moving)postDelayed(this,33);}};
  public PetScene(Context context){
   super(context);
+  this.context=context;
   try(java.io.InputStream in=context.getAssets().open("pet.frag")){
    java.io.ByteArrayOutputStream out=new java.io.ByteArrayOutputStream();byte[] b=new byte[4096];int n;
    while((n=in.read(b))!=-1)out.write(b,0,n);fragment=new String(out.toByteArray(),StandardCharsets.UTF_8);
@@ -35,7 +41,7 @@ public final class PetScene extends GLSurfaceView implements GLSurfaceView.Rende
   setEGLContextClientVersion(2);setEGLConfigChooser(8,8,8,0,0,0);setPreserveEGLContextOnPause(true);
   setRenderer(this);setRenderMode(RENDERMODE_WHEN_DIRTY);setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);
  }
- public void setTheme(boolean value){dark=value;requestRender();}
+ public void setTheme(boolean value){dark=value;backdropResource=value?R.drawable.home_starfield:R.drawable.home_mist_mountains;queueEvent(this::loadBackdrop);requestRender();}
  public void setMoving(boolean value){moving=value;if(active){removeCallbacks(frame);post(frame);}}
  public boolean isMoving(){return moving;}
  public void setThinking(boolean value){thinking=value;requestRender();}
@@ -64,6 +70,7 @@ public final class PetScene extends GLSurfaceView implements GLSurfaceView.Rende
   if(ok[0]==0){Log.e("GrayScene",GLES20.glGetShaderInfoLog(s));GLES20.glDeleteShader(s);return 0;}return s;
  }
  public void onSurfaceCreated(GL10 gl,EGLConfig config){
+  backdropTexture=0;loadBackdrop();
   int v=compile(GLES20.GL_VERTEX_SHADER,"attribute vec2 position;void main(){gl_Position=vec4(position,0.,1.);}");
   int f=compile(GLES20.GL_FRAGMENT_SHADER,fragment);program=GLES20.glCreateProgram();
   GLES20.glAttachShader(program,v);GLES20.glAttachShader(program,f);GLES20.glLinkProgram(program);
@@ -73,15 +80,24 @@ public final class PetScene extends GLSurfaceView implements GLSurfaceView.Rende
   timeUniform=GLES20.glGetUniformLocation(program,"time");darkUniform=GLES20.glGetUniformLocation(program,"dark");
   reactionUniform=GLES20.glGetUniformLocation(program,"reaction");motionUniform=GLES20.glGetUniformLocation(program,"motion");
   compactUniform=GLES20.glGetUniformLocation(program,"compact");compactCenterUniform=GLES20.glGetUniformLocation(program,"compactCenter");thinkingUniform=GLES20.glGetUniformLocation(program,"thinking");
+  backdropUniform=GLES20.glGetUniformLocation(program,"backdrop");backdropSizeUniform=GLES20.glGetUniformLocation(program,"backdropSize");
+ }
+ private int backdropWidth=1,backdropHeight=1;
+ private void loadBackdrop(){
+  Bitmap bitmap=BitmapFactory.decodeResource(context.getResources(),backdropResource);if(bitmap==null)return;
+  if(backdropTexture==0){int[] ids=new int[1];GLES20.glGenTextures(1,ids,0);backdropTexture=ids[0];}
+  GLES20.glBindTexture(GLES20.GL_TEXTURE_2D,backdropTexture);GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D,GLES20.GL_TEXTURE_MIN_FILTER,GLES20.GL_LINEAR);GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D,GLES20.GL_TEXTURE_MAG_FILTER,GLES20.GL_LINEAR);GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D,GLES20.GL_TEXTURE_WRAP_S,GLES20.GL_CLAMP_TO_EDGE);GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D,GLES20.GL_TEXTURE_WRAP_T,GLES20.GL_CLAMP_TO_EDGE);GLUtils.texImage2D(GLES20.GL_TEXTURE_2D,0,bitmap,0);backdropWidth=bitmap.getWidth();backdropHeight=bitmap.getHeight();bitmap.recycle();GLES20.glBindTexture(GLES20.GL_TEXTURE_2D,0);
  }
  public void onSurfaceChanged(GL10 gl,int w,int h){width=w;height=h;GLES20.glViewport(0,0,w,h);}
  public void onDrawFrame(GL10 gl){
-  if(program==0){GLES20.glClearColor(.1f,.2f,.14f,1);GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);return;}
+  if(program==0){GLES20.glClearColor(0,0,0,0);GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);return;}
+  GLES20.glClearColor(.1f,.2f,.14f,1);GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
   long now=SystemClock.uptimeMillis();float elapsed=(now-tapped)/1000f;
   float dt=lastFrame==0?1f:Math.min(1f,(now-lastFrame)/220f);lastFrame=now;
   thinkingBlend+=( (thinking?1f:0f)-thinkingBlend)*(moving?dt:1f);
   float bounce=elapsed<1.8f&&moving?(float)(Math.pow(Math.sin(elapsed*Math.PI/.6),2)*Math.exp(-elapsed*2)):0;
   GLES20.glUseProgram(program);GLES20.glUniform2f(resolution,width,height);GLES20.glUniform1f(timeUniform,(now-start)/1000f);
+  GLES20.glActiveTexture(GLES20.GL_TEXTURE0);GLES20.glBindTexture(GLES20.GL_TEXTURE_2D,backdropTexture);GLES20.glUniform1i(backdropUniform,0);GLES20.glUniform2f(backdropSizeUniform,backdropWidth,backdropHeight);
   GLES20.glUniform1f(darkUniform,dark?1:0);GLES20.glUniform1f(reactionUniform,bounce);GLES20.glUniform1f(motionUniform,moving?1:0);
   GLES20.glUniform1f(thinkingUniform,thinkingBlend);
   GLES20.glUniform1f(compactUniform,compact);GLES20.glUniform2f(compactCenterUniform,compactCenterX,compactCenterY);

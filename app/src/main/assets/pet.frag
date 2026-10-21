@@ -2,6 +2,8 @@ precision highp float;
 uniform vec2 resolution;
 uniform float time, dark, reaction, motion, compact, thinking;
 uniform vec2 compactCenter;
+uniform sampler2D backdrop;
+uniform vec2 backdropSize;
 mat2 rot(float a){float c=cos(a),s=sin(a);return mat2(c,-s,s,c);}
 float triangle(vec2 p){
  float r=.64,k=1.7320508;
@@ -25,12 +27,24 @@ float shape(vec3 p){
  return (r-(.88+.12*triangular))*.65;
 }
 vec3 normal(vec3 p){vec2 e=vec2(.002,0.);return normalize(vec3(shape(p+e.xyy)-shape(p-e.xyy),shape(p+e.yxy)-shape(p-e.yxy),shape(p+e.yyx)-shape(p-e.yyx)));}
+float hash21(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
 void main(){
  vec2 uv=(2.*gl_FragCoord.xy-resolution)/resolution.x;float t=time*motion;
- vec3 col=mix(vec3(.94,.96,.91),vec3(.034,.065,.057),dark);
- vec2 g=uv-vec2(.45*sin(t*.11),.5*cos(t*.09));
- col+=mix(vec3(-.04,.018,-.03),vec3(.035,.07,.045),dark)*exp(-1.4*dot(g,g));
- col+=mix(vec3(.014,.012,.006),vec3(.009,.014,.01),dark)*(.5+.5*sin(uv.x*2.+uv.y*1.4+t*.13));
+ vec2 bgUv=gl_FragCoord.xy/resolution;float screenAspect=resolution.x/resolution.y,imageAspect=backdropSize.x/backdropSize.y;
+ if(screenAspect>imageAspect)bgUv.y=(bgUv.y-.5)*imageAspect/screenAspect+.5;else bgUv.x=(bgUv.x-.5)*screenAspect/imageAspect+.5;
+ bgUv.y=1.-bgUv.y;vec3 col=texture2D(backdrop,bgUv).rgb;
+ // A slow, broad reflection gives the background a glass-like sheen.
+ vec2 screenUv=gl_FragCoord.xy/resolution;float sheenX=.5+.22*sin(screenUv.y*2.2+t*.13);
+ float sheen=exp(-pow((screenUv.x-sheenX)/.105,2.))*.045;
+ col+=vec3(.78,.91,1.)*sheen;
+ // Stable random locations with independently pulsing brightness.
+ vec2 grid=screenUv*vec2(18.,32.),cell=floor(grid),local=fract(grid);
+ float seed=hash21(cell);vec2 point=vec2(hash21(cell+vec2(19.1,7.7)),hash21(cell+vec2(3.4,51.8)));
+ float radius=length((local-point)*vec2(1.,1.25));
+ float pulse=pow(max(0.,sin(t*(1.1+seed*1.5)+seed*6.28318)),8.);
+ float glint=(1.-smoothstep(.008,.075,radius))*smoothstep(.57,.82,seed)*pulse;
+ float crossGlint=(1.-smoothstep(.0015,.006,abs(local.x-point.x)))*(1.-smoothstep(.0015,.006,abs(local.y-point.y)))*smoothstep(.72,.9,seed)*pulse*.18;
+ col=mix(col,vec3(.84,.96,1.),clamp(glint*.82+crossGlint,0.,.9));
  // Keep the background full-screen and transform only the pet. This avoids a
  // differently coloured SurfaceView rectangle when the pet moves to the menu.
  vec2 baseCenter=vec2(0.,.32/1.75);
