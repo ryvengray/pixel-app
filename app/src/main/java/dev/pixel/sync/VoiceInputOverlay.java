@@ -3,6 +3,7 @@ package dev.pixel.sync;
 import android.app.Activity;
 import android.content.Intent;
 import android.graphics.*;
+import android.graphics.drawable.GradientDrawable;
 import android.os.*;
 import android.speech.*;
 import android.view.*;
