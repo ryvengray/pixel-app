@@ -18,12 +18,14 @@ public final class VoiceInputOverlay extends FrameLayout implements RecognitionL
     private final TextView transcript,status,cancel,edit,stop;
     private SpeechRecognizer recognizer;
     private String partial="";
+    private String committed="";
+    private final Waveform waveform;
     private boolean ready,released,finished;
     private int target; // 0 send, 1 cancel, 2 edit
     private final int oldStatus,oldNavigation,oldAppearance;
     private final long started=SystemClock.elapsedRealtime();
-    private final Runnable timeout=()->finish(partial,true,"识别未完成，文字已保留，请检查后发送");
-    private final Runnable ticker=new Runnable(){public void run(){if(finished||released)return;long seconds=(SystemClock.elapsedRealtime()-started)/1000;status.setText(ready?"正在听 · "+String.format(java.util.Locale.ROOT,"%02d:%02d",seconds/60,seconds%60):"正在准备…");if(seconds>=60){target=2;releaseLocked();return;}main.postDelayed(this,1000);}};
+    private final Runnable timeout=()->finish((committed+" "+partial).trim(),true,"识别未完成，文字已保留，请检查后发送");
+    private final Runnable ticker=new Runnable(){public void run(){if(finished||released)return;long seconds=(SystemClock.elapsedRealtime()-started)/1000;status.setText(ready?"正在听 · "+String.format(java.util.Locale.ROOT,"%02d:%02d",seconds/60,seconds%60):"正在准备…");main.postDelayed(this,1000);}};
     private int dp(float n){return Math.round(n*getResources().getDisplayMetrics().density);}
     public VoiceInputOverlay(Activity activity,Listener listener){
         super(activity);this.activity=activity;this.listener=listener;
@@ -32,6 +34,7 @@ public final class VoiceInputOverlay extends FrameLayout implements RecognitionL
         transcript=text("",23);transcript.setPadding(dp(30),dp(26),dp(30),dp(26));transcript.setGravity(Gravity.CENTER_VERTICAL);transcript.setTextIsSelectable(false);
         ScrollView scroll=new ScrollView(activity);scroll.addView(transcript);FrameLayout.LayoutParams textParams=new FrameLayout.LayoutParams(-1,-1);textParams.topMargin=dp(90);textParams.bottomMargin=dp(250);addView(scroll,textParams);
         status=text("正在准备…",14);status.setGravity(Gravity.CENTER);FrameLayout.LayoutParams sp=new FrameLayout.LayoutParams(-1,dp(44),Gravity.BOTTOM);sp.bottomMargin=dp(230);addView(status,sp);
+        waveform=new Waveform(activity);FrameLayout.LayoutParams wp=new FrameLayout.LayoutParams(dp(180),dp(64),Gravity.BOTTOM|Gravity.CENTER_HORIZONTAL);wp.bottomMargin=dp(278);addView(waveform,wp);
         View arc=new View(activity){private final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);private final Path path=new Path();protected void onDraw(Canvas canvas){super.onDraw(canvas);paint.setColor(Color.rgb(75,80,76));paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(dp(2));path.reset();path.moveTo(dp(45),dp(8));path.cubicTo(getWidth()*.25f,dp(170),getWidth()*.75f,dp(170),getWidth()-dp(45),dp(8));canvas.drawPath(path,paint);}};
         FrameLayout.LayoutParams arcParams=new FrameLayout.LayoutParams(-1,dp(180),Gravity.BOTTOM);arcParams.bottomMargin=dp(36);addView(arc,arcParams);
         cancel=text("取消",17);cancel.setGravity(Gravity.CENTER);cancel.setContentDescription("取消录音，不发送");cancel.setOnClickListener(v->finish("",false,null));
@@ -70,11 +73,22 @@ public final class VoiceInputOverlay extends FrameLayout implements RecognitionL
     }
     private String recognized(Bundle bundle){ArrayList<String> items=bundle==null?null:bundle.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);return items==null||items.isEmpty()?"":items.get(0);}
     public void onReadyForSpeech(Bundle b){if(finished||released)return;ready=true;status.setText("正在听");performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);}
-    public void onPartialResults(Bundle b){if(finished)return;String text=recognized(b);if(!text.isEmpty()){partial=text;transcript.setText(text);}}
-    public void onResults(Bundle b){if(finished)return;String text=recognized(b);if(text.isEmpty()){finish(partial,true,partial.isEmpty()?"没听清，再试一次":"仅识别到部分文字，请检查后发送");return;}
-        // Some services end on silence before the finger is released. Keep a draft, never auto-send early.
-        finish(text,!released||target==2,null);
+    public void onPartialResults(Bundle b){if(finished)return;String text=recognized(b);if(!text.isEmpty()){partial=text;showTranscript();}}
+    private void showTranscript(){String all=(committed+" "+partial).trim();transcript.setText(all);}
+    private void listenAgain(){if(finished||released||recognizer==null)return;try{Intent intent=new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL,RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE,"zh-CN");intent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS,true);intent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS,1);recognizer.startListening(intent);}catch(Exception ignored){main.postDelayed(this::listenAgain,250);}}
+    public void onResults(Bundle b){if(finished)return;String text=recognized(b);if(!text.isEmpty()){if(!committed.isEmpty())committed+=" ";committed+=text;partial="";showTranscript();}
+        if(released){finish((committed+" "+partial).trim(),target==2,null);return;}
+        // Android recognizers commonly close a phrase after a pause. Re-arm while the user still holds.
+        main.postDelayed(this::listenAgain,180);
     }
-    public void onError(int error){if(finished)return;String message=error==SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS?"需要麦克风权限":error==SpeechRecognizer.ERROR_NO_MATCH||error==SpeechRecognizer.ERROR_SPEECH_TIMEOUT?"没听清，再试一次":"语音识别中断，请重试或编辑已有文字";finish(partial,true,message);}
-    public void onBeginningOfSpeech(){} public void onRmsChanged(float n){} public void onBufferReceived(byte[] b){} public void onEndOfSpeech(){} public void onEvent(int n,Bundle b){}
+    public void onError(int error){if(finished)return;if(!released&&(error==SpeechRecognizer.ERROR_NO_MATCH||error==SpeechRecognizer.ERROR_SPEECH_TIMEOUT)){main.postDelayed(this::listenAgain,180);return;}String message=error==SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS?"需要麦克风权限":error==SpeechRecognizer.ERROR_NO_MATCH||error==SpeechRecognizer.ERROR_SPEECH_TIMEOUT?"没听清，再试一次":"语音识别中断，请重试或编辑已有文字";finish((committed+" "+partial).trim(),true,message);}
+    public void onBeginningOfSpeech(){} public void onRmsChanged(float n){waveform.setLevel(n);} public void onBufferReceived(byte[] b){} public void onEndOfSpeech(){} public void onEvent(int n,Bundle b){}
+
+    private static final class Waveform extends View {
+        private final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);private float level;
+        Waveform(Activity a){super(a);paint.setColor(Color.rgb(133,218,155));paint.setStrokeWidth(dp(a,3));paint.setStrokeCap(Paint.Cap.ROUND);}
+        private static int dp(Activity a,float n){return Math.round(n*a.getResources().getDisplayMetrics().density);}
+        void setLevel(float value){level=Math.max(0,Math.min(1,(value+2)/12f));invalidate();}
+        @Override protected void onDraw(Canvas c){super.onDraw(c);float mid=getHeight()/2f;int count=19;float gap=getWidth()/(float)count;for(int i=0;i<count;i++){float wave=(float)Math.abs(Math.sin((SystemClock.uptimeMillis()/120.0)+i*.68));float h=dp((Activity)getContext(),5+level*32*wave);c.drawLine((i+.5f)*gap,mid-h/2,(i+.5f)*gap,mid+h/2,paint);}if(isAttachedToWindow())postInvalidateDelayed(70);}
+    }
 }
