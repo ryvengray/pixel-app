@@ -76,14 +76,14 @@ public final class HomeConversationView extends FrameLayout {
         petLeft=new FrameLayout(activity);petLeft.setTag("home_pet_left_slot");petStage.addView(petLeft,new FrameLayout.LayoutParams(0,-1,Gravity.LEFT));
         petRight=new FrameLayout(activity);petRight.setTag("home_pet_right_slot");petStage.addView(petRight,new FrameLayout.LayoutParams(0,-1,Gravity.RIGHT));
         bottom=new LinearLayout(activity);bottom.setOrientation(LinearLayout.VERTICAL);
-        FrameLayout.LayoutParams bp=new FrameLayout.LayoutParams(-1,-2,Gravity.BOTTOM);bp.bottomMargin=dp(10);addView(bottom,bp);
+        FrameLayout.LayoutParams bp=new FrameLayout.LayoutParams(-1,-2,Gravity.BOTTOM);addView(bottom,bp);
         result=label("",12);result.setTag("home_activity");result.setMaxLines(1);result.setPadding(dp(14),0,dp(14),0);result.setGravity(Gravity.CENTER);result.setMinHeight(dp(40));result.setContentDescription("操作状态与最近结果，点击查看详情");
         result.setOnClickListener(v->showResults());
         FrameLayout.LayoutParams rp=new FrameLayout.LayoutParams(-2,dp(40),Gravity.TOP|Gravity.RIGHT);rp.topMargin=dp(72);rp.rightMargin=dp(24);addView(result,rp);
         idle=new LinearLayout(activity);idle.setTag("home_idle");idle.setGravity(Gravity.CENTER_VERTICAL);idle.setPadding(0,0,dp(16),0);
-        write=label("轻点输入…",14);write.setGravity(Gravity.CENTER_VERTICAL|Gravity.START);write.setPadding(dp(24),0,0,0);write.setMinHeight(dp(44));write.setOnClickListener(v->focusInput());
+        write=label("轻点输入…",16);write.setGravity(Gravity.CENTER_VERTICAL|Gravity.START);write.setPadding(dp(24),0,0,0);write.setIncludeFontPadding(false);write.setLetterSpacing(.02f);write.setMinHeight(dp(48));write.setOnClickListener(v->focusInput());
         idle.addView(write,new LinearLayout.LayoutParams(0,-2,1));
-        speak=label("按住说话",14);speak.setGravity(Gravity.CENTER);speak.setMinHeight(dp(44));
+        speak=label("按住说话",15);speak.setGravity(Gravity.CENTER);speak.setIncludeFontPadding(false);speak.setLetterSpacing(.02f);speak.setMinHeight(dp(48));
         speak.setOnTouchListener((v,event)->voiceTouch(event));
         speak.setOnClickListener(v->Toast.makeText(activity,"按住说话，松开发送文字",Toast.LENGTH_SHORT).show());
         speak.setOnLongClickListener(v->{startVoice();return true;});
@@ -101,13 +101,13 @@ public final class HomeConversationView extends FrameLayout {
         send=label("↑",23);send.setTag("home_send");send.setGravity(Gravity.CENTER);send.setIncludeFontPadding(false);send.setContentDescription("发送消息");
         send.setOnClickListener(v->submitInput());editing.addView(send,new LinearLayout.LayoutParams(dp(44),dp(44)));
         bottom.addView(editing);
-        composerUnderline=new ComposerUnderline(activity);composerUnderline.setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);bottom.addView(composerUnderline,new LinearLayout.LayoutParams(-1,dp(7)));updateComposer();
+        composerUnderline=new ComposerUnderline(activity);composerUnderline.setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);bottom.addView(composerUnderline,new LinearLayout.LayoutParams(-1,dp(2)));updateComposer();
         resultText=prefs.getString("result","");restore();setTheme(false);
     }
     @Override protected void onMeasure(int width,int height){
         super.onMeasure(width,height);
         // Share the usable space between two non-overlapping zones, including IME frames.
-        int available=Math.max(0,getMeasuredHeight()-getPaddingTop()-getPaddingBottom()-dp(118)-bottom.getMeasuredHeight()-dp(10));
+        int available=Math.max(0,getMeasuredHeight()-getPaddingTop()-getPaddingBottom()-dp(118)-bottom.getMeasuredHeight());
         int gap=Math.min(dp(20),available/6),content=available-2*gap;
         int messages=Math.min(dp(320),Math.round(content*.44f)),stage=content-messages;
         FrameLayout.LayoutParams cp=(FrameLayout.LayoutParams)conversation.getLayoutParams(),pp=(FrameLayout.LayoutParams)petStage.getLayoutParams();
@@ -284,7 +284,7 @@ public final class HomeConversationView extends FrameLayout {
         });}catch(Exception ignored){main.post(()->syncing=false);}});
     }
     private void showText(String title,String text){if(text.isEmpty())return;lastInteraction=System.currentTimeMillis();TextView body=label(text,16);body.setTextIsSelectable(true);android.text.util.Linkify.addLinks(body,android.text.util.Linkify.WEB_URLS);body.setPadding(dp(22),dp(18),dp(22),dp(18));body.setTextColor(Color.parseColor(dark?"#E5EDE3":"#263C31"));ScrollView scroll=new ScrollView(activity);scroll.addView(body);showDialog(title,scroll);}
-    private void showDialog(String title,View body){Context themed=new android.view.ContextThemeWrapper(activity,dark?android.R.style.Theme_Material_Dialog_Alert:android.R.style.Theme_Material_Light_Dialog_Alert);detail=new AlertDialog.Builder(themed).setTitle(title).setView(body).setPositiveButton("收起",null).create();detail.show();}
+    private void showDialog(String title,View body){Context themed=new android.view.ContextThemeWrapper(activity,dark?android.R.style.Theme_Material_Dialog_Alert:android.R.style.Theme_Material_Light_Dialog_Alert);detail=new AlertDialog.Builder(themed).setTitle(title).setView(body).setPositiveButton("收起",null).create();detail.show();AppTypography.apply(detail.getWindow().getDecorView());}
     public void showHistory(){lastInteraction=System.currentTimeMillis();Intent intent=new Intent(activity,HistoryActivity.class);intent.putExtra("dark",dark);activity.startActivity(intent);}
     public void showResults(){
         lastInteraction=System.currentTimeMillis();

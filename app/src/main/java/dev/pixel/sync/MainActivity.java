@@ -117,11 +117,30 @@ public class MainActivity extends Activity {
   LinearLayout themes=new LinearLayout(this);themes.setPadding(0,0,0,dp(8));String[] labels={"跟随系统","浅色","深色"};
   for(int i=0;i<labels.length;i++){final int choice=i;TextView theme=text((preferences.getInt("theme",0)==i?"✓  ":"")+labels[i],13);theme.setGravity(Gravity.CENTER);theme.setTextColor(foreground);theme.setBackground(surface(Color.parseColor(preferences.getInt("theme",0)==i?(dark?"#375B44":"#D3E8D2"):(dark?"#294536":"#E3ECDC")),13));
    theme.setOnClickListener(v->{preferences.edit().putInt("theme",choice).apply();dark=choice==0?systemDark():choice==2;menu.dismiss();applyColors();showMenu();});LinearLayout.LayoutParams tp=new LinearLayout.LayoutParams(0,dp(44),1);tp.rightMargin=i<2?dp(7):0;themes.addView(theme,tp);}sheet.addView(themes);
+  TextView fontLabel=text("字体",13);fontLabel.setTextColor(secondary);fontLabel.setPadding(dp(4),dp(8),0,dp(8));sheet.addView(fontLabel);
+  LinearLayout fonts=new LinearLayout(this);fonts.setPadding(0,0,0,dp(8));
+  String[] fontNames={"清晰 · 默认","书卷 · 衬线"};
+  for(int i=0;i<fontNames.length;i++){
+   final int choice=i;LinearLayout option=new LinearLayout(this);option.setOrientation(LinearLayout.VERTICAL);option.setPadding(dp(12),dp(12),dp(12),dp(12));option.setGravity(Gravity.CENTER_VERTICAL);option.setContentDescription(fontNames[i]);option.setFocusable(true);
+   TextView name=text(fontNames[i],14);name.setTextColor(foreground);option.addView(name);
+   TextView preview=text("今天，也有小美好",14);preview.setTag("font_preview");preview.setTypeface(Typeface.create(i==0?"sans-serif":"serif",Typeface.NORMAL));preview.setTextColor(secondary);preview.setPadding(0,dp(7),0,0);option.addView(preview);
+   option.setOnClickListener(v->{preferences.edit().putInt("font",choice).apply();AppTypography.apply(root);AppTypography.apply(sheet);updateFontChoices(fonts);});
+   LinearLayout.LayoutParams fp=new LinearLayout.LayoutParams(0,-2,1);fp.rightMargin=i==0?dp(8):0;fonts.addView(option,fp);
+  }
+  updateFontChoices(fonts);sheet.addView(fonts);
   Switch reduce=new Switch(this);reduce.setText("减少动态效果");reduce.setTextSize(14);reduce.setTextColor(foreground);reduce.setPadding(dp(8),dp(9),dp(8),dp(9));reduce.setChecked(!scene.isMoving());
   reduce.setOnCheckedChangeListener((v,checked)->{preferences.edit().putBoolean("reduceMotion",checked).apply();scene.setMoving(!checked);});sheet.addView(reduce);
 
   ScrollView scroll=new ScrollView(this);scroll.setFillViewport(false);scroll.setVerticalScrollBarEnabled(false);scroll.addView(sheet);menu.setContentView(scroll);Window window=menu.getWindow();if(window!=null){window.setBackgroundDrawableResource(android.R.color.transparent);window.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);window.setDimAmount(.25f);window.setGravity(Gravity.BOTTOM);}
-  menu.setOnDismissListener(d->applyColors());menu.show();if(window!=null){window.setLayout(-1,-2);sheet.post(()->{int max=(int)(getResources().getDisplayMetrics().heightPixels*.84f);if(sheet.getHeight()>max)window.setLayout(-1,max);});}
+  menu.setOnDismissListener(d->applyColors());AppTypography.apply(sheet);menu.show();if(window!=null){window.setLayout(-1,-2);sheet.post(()->{int max=(int)(getResources().getDisplayMetrics().heightPixels*.84f);if(sheet.getHeight()>max)window.setLayout(-1,max);});}
+ }
+ private void updateFontChoices(LinearLayout options){
+  for(int i=0;i<options.getChildCount();i++){
+   View option=options.getChildAt(i);boolean selected=AppTypography.choice(this)==i;
+   GradientDrawable background=surface(Color.parseColor(selected?(dark?"#375B44":"#D3E8D2"):(dark?"#294536":"#E3ECDC")),13);
+   if(selected)background.setStroke(dp(1),Color.parseColor(dark?"#8BCB9A":"#327C4E"));
+   option.setBackground(background);option.setSelected(selected);option.setStateDescription(selected?"已选择":"未选择");
+  }
  }
  private void handleIncomingFile(Intent intent){
   if(intent==null)return;String action=intent.getAction();Uri uri=null;
@@ -153,7 +172,7 @@ public class MainActivity extends Activity {
   TextView printTitle=text("▣   打印",16);printTitle.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));printTitle.setTextColor(foreground);printAction.addView(printTitle);TextView printHelp=text("选择打印机、纸张和颜色",12);printHelp.setTextColor(secondary);printHelp.setPadding(dp(26),dp(3),0,0);printAction.addView(printHelp);
   printAction.setOnClickListener(v->{Intent next=new Intent(this,PrintActivity.class).setData(uri).putExtra(PrintActivity.EXTRA_FILE_NAME,fileName).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION|grantFlags);next.setClipData(ClipData.newRawUri("PDF",uri));fileActionDialog.dismiss();startActivity(next);});card.addView(printAction,new LinearLayout.LayoutParams(-1,-2));
   TextView cancel=text("取消",14);cancel.setTextColor(secondary);cancel.setGravity(Gravity.CENTER);cancel.setPadding(0,dp(18),0,dp(3));cancel.setOnClickListener(v->fileActionDialog.dismiss());card.addView(cancel,new LinearLayout.LayoutParams(-1,-2));
-  fileActionDialog.setContentView(card);Window window=fileActionDialog.getWindow();if(window!=null){window.setBackgroundDrawableResource(android.R.color.transparent);window.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);window.setDimAmount(.3f);window.setGravity(Gravity.CENTER);}fileActionDialog.show();if(window!=null)window.setLayout(getResources().getDisplayMetrics().widthPixels-dp(40),-2);
+  AppTypography.apply(card);fileActionDialog.setContentView(card);Window window=fileActionDialog.getWindow();if(window!=null){window.setBackgroundDrawableResource(android.R.color.transparent);window.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);window.setDimAmount(.3f);window.setGravity(Gravity.CENTER);}fileActionDialog.show();if(window!=null)window.setLayout(getResources().getDisplayMetrics().widthPixels-dp(40),-2);
  }
  private void menuSection(LinearLayout sheet,String title){TextView label=text(title,11);label.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));label.setTextColor(secondary);label.setPadding(dp(4),dp(13),0,dp(8));sheet.addView(label);}
  private View menuAction(String label,String detail,Runnable action){LinearLayout card=new LinearLayout(this);card.setOrientation(LinearLayout.VERTICAL);card.setPadding(dp(15),dp(10),dp(15),dp(10));card.setBackground(new android.graphics.drawable.RippleDrawable(android.content.res.ColorStateList.valueOf(Color.parseColor(dark?"#406651":"#CADBC7")),surface(Color.parseColor(dark?"#294536":"#E3ECDC"),15),null));TextView name=text(label,15);name.setTextColor(foreground);name.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));card.addView(name);TextView sub=text(detail,12);sub.setTextColor(secondary);sub.setPadding(dp(27),dp(2),0,0);card.addView(sub);LinearLayout.LayoutParams cp=new LinearLayout.LayoutParams(-1,-2);cp.bottomMargin=dp(6);card.setLayoutParams(cp);card.setOnClickListener(v->action.run());return card;}
