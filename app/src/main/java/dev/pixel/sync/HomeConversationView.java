@@ -27,6 +27,8 @@ public final class HomeConversationView extends FrameLayout {
     private final TextView assistant, user, userCaption, assistantCaption, state, result, write, speak, send;
     private final LinearLayout bottom, idle, editing, utterances;
     private final ScrollView conversation;
+    private final FrameLayout petStage,petLeft,petRight;
+    private View petView;
     private final EditText input;
     private final ComposerUnderline composerUnderline;
     private VoiceInputOverlay voice;
@@ -56,7 +58,7 @@ public final class HomeConversationView extends FrameLayout {
         super(activity); this.activity=activity;this.react=react;this.thinking=thinking;
         store=new AssistantStore(activity);prefs=activity.getSharedPreferences("home_conversation",0);
         setClipChildren(false);setFocusableInTouchMode(true);
-        conversation=new ScrollView(activity);conversation.setFillViewport(false);conversation.setVerticalScrollBarEnabled(false);conversation.setClipToPadding(false);
+        conversation=new ScrollView(activity);conversation.setTag("home_conversation_area");conversation.setFillViewport(false);conversation.setVerticalScrollBarEnabled(false);conversation.setClipToPadding(false);
         utterances=new LinearLayout(activity);utterances.setOrientation(LinearLayout.VERTICAL);utterances.setPadding(0,0,0,dp(8));
         conversation.addView(utterances,new ScrollView.LayoutParams(-1,-2));
         FrameLayout.LayoutParams cp=new FrameLayout.LayoutParams(-1,dp(260),Gravity.TOP);cp.setMargins(dp(24),dp(118),dp(24),0);addView(conversation,cp);
@@ -70,6 +72,9 @@ public final class HomeConversationView extends FrameLayout {
         assistant.setMaxWidth(dp(290));assistant.setContentDescription("Greta 最新发言，点击展开");assistant.setOnClickListener(v->showText("Greta",assistantText));
         LinearLayout.LayoutParams ap=new LinearLayout.LayoutParams(-2,-2);ap.gravity=Gravity.START;ap.rightMargin=dp(20);utterances.addView(assistant,ap);
         state=label("",13);state.setTag("home_reply_state");state.setPadding(dp(6),dp(4),dp(6),dp(8));state.setOnClickListener(v->retry());utterances.addView(state);
+        petStage=new FrameLayout(activity);petStage.setTag("home_pet_stage");addView(petStage,new FrameLayout.LayoutParams(-1,0,Gravity.TOP));
+        petLeft=new FrameLayout(activity);petLeft.setTag("home_pet_left_slot");petStage.addView(petLeft,new FrameLayout.LayoutParams(0,-1,Gravity.LEFT));
+        petRight=new FrameLayout(activity);petRight.setTag("home_pet_right_slot");petStage.addView(petRight,new FrameLayout.LayoutParams(0,-1,Gravity.RIGHT));
         bottom=new LinearLayout(activity);bottom.setOrientation(LinearLayout.VERTICAL);
         FrameLayout.LayoutParams bp=new FrameLayout.LayoutParams(-1,-2,Gravity.BOTTOM);bp.bottomMargin=dp(10);addView(bottom,bp);
         result=label("",12);result.setTag("home_activity");result.setMaxLines(1);result.setPadding(dp(14),0,dp(14),0);result.setGravity(Gravity.CENTER);result.setMinHeight(dp(40));result.setContentDescription("操作状态与最近结果，点击查看详情");
@@ -101,10 +106,30 @@ public final class HomeConversationView extends FrameLayout {
     }
     @Override protected void onMeasure(int width,int height){
         super.onMeasure(width,height);
-        // Bound the conversation above the composer even on small screens/landscape.
-        int available=getMeasuredHeight()-getPaddingTop()-getPaddingBottom()-dp(118)-bottom.getMeasuredHeight()-dp(24);
-        FrameLayout.LayoutParams p=(FrameLayout.LayoutParams)conversation.getLayoutParams();int limit=Math.max(0,Math.min(dp(250),available));
-        if(p.height!=limit){p.height=limit;conversation.setLayoutParams(p);super.onMeasure(width,height);}
+        // Share the usable space between two non-overlapping zones, including IME frames.
+        int available=Math.max(0,getMeasuredHeight()-getPaddingTop()-getPaddingBottom()-dp(118)-bottom.getMeasuredHeight()-dp(10));
+        int gap=Math.min(dp(20),available/6),content=available-2*gap;
+        int messages=Math.min(dp(320),Math.round(content*.44f)),stage=content-messages;
+        FrameLayout.LayoutParams cp=(FrameLayout.LayoutParams)conversation.getLayoutParams(),pp=(FrameLayout.LayoutParams)petStage.getLayoutParams();
+        boolean changed=false;
+        if(cp.height!=messages){cp.height=messages;conversation.setLayoutParams(cp);changed=true;}
+        int stageTop=dp(118)+messages+gap;
+        if(pp.height!=stage||pp.topMargin!=stageTop){pp.height=stage;pp.topMargin=stageTop;petStage.setLayoutParams(pp);changed=true;}
+        if(petView!=null){
+            int stageWidth=Math.max(0,getMeasuredWidth()-getPaddingLeft()-getPaddingRight());
+            int size=Math.max(0,Math.min(dp(210),Math.min(Math.round(stageWidth*.46f),Math.round(stage*.76f))));
+            FrameLayout.LayoutParams anchor=(FrameLayout.LayoutParams)petView.getLayoutParams();
+            if(anchor.width!=size||anchor.height!=size){anchor.width=size;anchor.height=size;petView.setLayoutParams(anchor);changed=true;}
+            int visible=stage>=dp(48)?VISIBLE:INVISIBLE;if(petView.getVisibility()!=visible)petView.setVisibility(visible);
+            int sideWidth=Math.max(0,(stageWidth-size)/2-dp(12));
+            for(FrameLayout slot:new FrameLayout[]{petLeft,petRight}){FrameLayout.LayoutParams side=(FrameLayout.LayoutParams)slot.getLayoutParams();if(side.width!=sideWidth){side.width=sideWidth;slot.setLayoutParams(side);changed=true;}}
+        }
+        if(changed)super.onMeasure(width,height);
+    }
+    void mountPet(View pet,Runnable placementChanged){
+        petView=pet;petStage.addView(pet,new FrameLayout.LayoutParams(0,0,Gravity.CENTER));
+        petStage.addOnLayoutChangeListener((v,l,t,r,b,ol,ot,or,ob)->placementChanged.run());
+        pet.addOnLayoutChangeListener((v,l,t,r,b,ol,ot,or,ob)->placementChanged.run());requestLayout();
     }
     private int dp(float n){return Math.round(n*getResources().getDisplayMetrics().density);}
     private TextView label(String text,int size){TextView v=new TextView(activity);v.setText(text);v.setTextSize(size);return v;}

@@ -19,7 +19,8 @@ public final class PetScene extends GLSurfaceView implements GLSurfaceView.Rende
  private final String fragment;
  private final Context context;
  private final FloatBuffer vertices=ByteBuffer.allocateDirect(32).order(ByteOrder.nativeOrder()).asFloatBuffer();
- private int program,position,resolution,timeUniform,darkUniform,reactionUniform,motionUniform,compactUniform,compactCenterUniform,thinkingUniform,backdropUniform,backdropSizeUniform,backdropTexture,width,height;
+ private int program,position,resolution,timeUniform,darkUniform,reactionUniform,motionUniform,compactUniform,compactCenterUniform,thinkingUniform,backdropUniform,backdropSizeUniform,placementUniform,backdropTexture,width,height;
+ private volatile float[] placement={.5f,.5f,1f,0f};
  private volatile int backdropResource=R.drawable.home_mist_mountains;
  private int loadedBackdropResource;
  private final long start=SystemClock.uptimeMillis();
@@ -49,6 +50,7 @@ public final class PetScene extends GLSurfaceView implements GLSurfaceView.Rende
  public void setThinking(boolean value){thinking=value;requestRender();}
  public boolean isThinking(){return thinking;}
  public void react(){tapped=SystemClock.uptimeMillis();requestRender();}
+ public void setPlacement(float x,float y,float scale){placement=new float[]{x,y,Math.max(0,scale),1f};requestRender();}
  public void setCompactTarget(float xFraction,float yFraction){compactCenterX=xFraction;compactCenterY=yFraction;requestRender();}
  public void setCompact(boolean value,boolean animate){
   float target=value?1f:0f;
@@ -83,6 +85,7 @@ public final class PetScene extends GLSurfaceView implements GLSurfaceView.Rende
   reactionUniform=GLES20.glGetUniformLocation(program,"reaction");motionUniform=GLES20.glGetUniformLocation(program,"motion");
   compactUniform=GLES20.glGetUniformLocation(program,"compact");compactCenterUniform=GLES20.glGetUniformLocation(program,"compactCenter");thinkingUniform=GLES20.glGetUniformLocation(program,"thinking");
   backdropUniform=GLES20.glGetUniformLocation(program,"backdrop");backdropSizeUniform=GLES20.glGetUniformLocation(program,"backdropSize");
+  placementUniform=GLES20.glGetUniformLocation(program,"placement");
  }
  private int backdropWidth=1,backdropHeight=1;
  private void loadBackdrop(){
@@ -103,6 +106,7 @@ public final class PetScene extends GLSurfaceView implements GLSurfaceView.Rende
   GLES20.glUniform1f(darkUniform,dark?1:0);GLES20.glUniform1f(reactionUniform,bounce);GLES20.glUniform1f(motionUniform,moving?1:0);
   GLES20.glUniform1f(thinkingUniform,thinkingBlend);
   GLES20.glUniform1f(compactUniform,compact);GLES20.glUniform2f(compactCenterUniform,compactCenterX,compactCenterY);
+  float[] layout=placement;GLES20.glUniform4f(placementUniform,layout[0],layout[1],layout[2],layout[3]);
   vertices.position(0);GLES20.glVertexAttribPointer(position,2,GLES20.GL_FLOAT,false,0,vertices);
   GLES20.glEnableVertexAttribArray(position);GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP,0,4);
  }

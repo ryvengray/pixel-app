@@ -39,6 +39,18 @@ public final class VaultExport {
         Uri folder=child(c,root,"Greta 生活记录",DocumentsContract.Document.MIME_TYPE_DIR);
         for(LifeRecords.Record record:records.all(true)){
             if(record.exported>=record.revision)continue;
+            if(!record.deleted&&!record.images.isEmpty()){
+                Uri images=child(c,folder,"图片",DocumentsContract.Document.MIME_TYPE_DIR);
+                for(LifeImages.Image image:record.images){
+                    File source=LifeImages.file(c,false,image.fileName);if(!LifeImages.hash(source).equals(image.hash))throw new IOException("手机中的图片校验失败");
+                    Uri target=child(c,images,image.fileName,image.mime);String existing="";boolean empty;
+                    InputStream stream=c.getContentResolver().openInputStream(target);if(stream==null)throw new IOException("无法读取 Obsidian 图片");
+                    try(PushbackInputStream in=new PushbackInputStream(stream,1)){int first=in.read();empty=first==-1;if(!empty){in.unread(first);existing=LifeImages.hash(in);}}
+                    if(!empty&&!existing.equals(image.hash))throw new IOException("Obsidian 中的图片已被修改，请先保留改动："+image.fileName);
+                    if(empty)try(InputStream in=new FileInputStream(source);OutputStream out=c.getContentResolver().openOutputStream(target,"wt")){if(out==null)throw new IOException("无法导出图片");LifeImages.copy(in,out);}
+                    try(InputStream in=c.getContentResolver().openInputStream(target)){if(in==null||!LifeImages.hash(in).equals(image.hash))throw new IOException("图片写入校验失败");}
+                }
+            }
             // Stable path survives date edits; one app-owned file per record avoids daily-note races.
             String filename=hash(record.id).substring(0,32)+".md";
             Uri file=child(c,folder,filename,"text/markdown");String desired=LifeRecords.markdown(record),old=read(c,file),newHash=hash(desired);

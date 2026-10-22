@@ -50,9 +50,10 @@ public class MainActivity extends Activity {
   petTouch.setElevation(dp(12));
   petTouch.setOnClickListener(v->scene.react());
   petTouch.setOnLongClickListener(v->{showMenu();return true;});
-  FrameLayout.LayoutParams pp=new FrameLayout.LayoutParams(dp(290),dp(300),Gravity.CENTER);pp.bottomMargin=dp(30);overlay.addView(petTouch,pp);
   home=new HomeConversationView(this,()->scene.react(),waiting->{scene.setThinking(waiting);petTouch.setContentDescription(waiting?"Greta 正在想，稍等一下":"玉绿色宠物，点击打个招呼，长按打开菜单");});home.setElevation(dp(14));
   overlay.addView(home,new FrameLayout.LayoutParams(-1,-1));
+  home.mountPet(petTouch,this::updatePetPlacement);
+  scene.addOnLayoutChangeListener((v,l,t,r,b,ol,ot,or,ob)->updatePetPlacement());
   root.setOnApplyWindowInsetsListener((v,insets)->{applyInputInsets(insets,!imeAnimating);return insets;});
   root.setWindowInsetsAnimationCallback(new WindowInsetsAnimation.Callback(WindowInsetsAnimation.Callback.DISPATCH_MODE_CONTINUE_ON_SUBTREE){
    @Override public void onPrepare(WindowInsetsAnimation animation){if((animation.getTypeMask()&WindowInsets.Type.ime())!=0)imeAnimating=true;}
@@ -65,6 +66,13 @@ public class MainActivity extends Activity {
  @Override public boolean dispatchTouchEvent(MotionEvent event){
   if(home!=null&&event.getActionMasked()==MotionEvent.ACTION_DOWN)home.dismissKeyboardOutside(event.getRawX(),event.getRawY());
   return super.dispatchTouchEvent(event);
+ }
+ private void updatePetPlacement(){
+  if(scene.getWidth()==0||scene.getHeight()==0)return;
+  if(petTouch.getVisibility()!=View.VISIBLE||petTouch.getWidth()==0){scene.setPlacement(.5f,.75f,0);return;}
+  int[] anchor=new int[2],canvas=new int[2];petTouch.getLocationOnScreen(anchor);scene.getLocationOnScreen(canvas);
+  float x=(anchor[0]-canvas[0]+petTouch.getWidth()*.5f)/scene.getWidth(),y=(anchor[1]-canvas[1]+petTouch.getHeight()*.5f)/scene.getHeight();
+  scene.setPlacement(x,y,petTouch.getWidth()/(scene.getWidth()*.62f));
  }
  private void applyInputInsets(WindowInsets insets,boolean moveComposer){
   android.graphics.Insets safe=insets.getInsets(WindowInsets.Type.systemBars()|WindowInsets.Type.displayCutout());
@@ -125,6 +133,11 @@ public class MainActivity extends Activity {
   if(uri==null)return;
   int grantFlags=intent.getFlags()&(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
   if((intent.getFlags()&Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)!=0){try{getContentResolver().takePersistableUriPermission(uri,Intent.FLAG_GRANT_READ_URI_PERMISSION);}catch(Exception ignored){}}
+  String mime=intent.getType();if(mime==null)try{mime=getContentResolver().getType(uri);}catch(Exception ignored){}
+  if(mime!=null&&mime.startsWith("image/")){
+   Intent next=new Intent(this,ImageRecordActivity.class).setDataAndType(uri,mime).putExtra(PrintActivity.EXTRA_FILE_NAME,fileName(uri)).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+   next.setClipData(ClipData.newRawUri("图片",uri));CharSequence caption=intent.getCharSequenceExtra(Intent.EXTRA_TEXT);if(caption!=null)next.putExtra(Intent.EXTRA_TEXT,caption.toString());startActivity(next);return;
+  }
   showFileAction(uri,fileName(uri),grantFlags);
  }
  private String fileName(Uri uri){

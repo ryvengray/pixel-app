@@ -5,6 +5,7 @@ import android.app.Instrumentation;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.graphics.Rect;
 import android.os.Bundle;
 import android.os.SystemClock;
 import android.view.View;
@@ -45,6 +46,7 @@ final class HomeInteractionChecks {
             prefs.edit().putString("draft","").putString("result","操作未完成，请检查请求").putBoolean("proactive",false).commit();
             new SecureStore(context).put("device_token","home-ui-test-token");
             activity=test.startActivitySync(new Intent(context,MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));test.waitForIdleSync();
+            await(()->activity.hasWindowFocus(),"activity did not receive window focus");
             home=findType(activity.getWindow().getDecorView(),HomeConversationView.class);
             pet=findType(activity.getWindow().getDecorView(),PetScene.class);
             input=(EditText)home.findViewWithTag("home_input");composer=home.findViewWithTag("home_composer");idle=home.findViewWithTag("home_idle");send=home.findViewWithTag("home_send");user=home.findViewWithTag("home_user_message");
@@ -69,6 +71,7 @@ final class HomeInteractionChecks {
                     expect(composer.getHeight()/density>=43,"composer touch target is too short");
                     expect(input.getIncludeFontPadding()==false,"extra font padding remains");
                     expect(input.getMaxLines()==2,"input should cap at two lines");
+                    expectSeparatedZones();
                 });
             });
             capture("home-editor.png");
@@ -132,6 +135,7 @@ final class HomeInteractionChecks {
                 ui(()->expect(composer.getVisibility()==View.GONE,"empty editor remained visible"));
             });
             capture("home-idle.png");
+            check("idleMessagesRemainAbovePetWithFreeSides",()->ui(this::expectSeparatedZones));
             result.putString("stream","\nHome interaction tests passed: "+passed+"\n");
         }catch(Throwable error){code=Activity.RESULT_CANCELED;result.putString("stream",android.util.Log.getStackTraceString(error));}
         finally{
@@ -149,6 +153,19 @@ final class HomeInteractionChecks {
         if(bitmap!=null)try(FileOutputStream out=new FileOutputStream(new File(test.getTargetContext().getCacheDir(),name))){bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG,100,out);bitmap.recycle();}
     }
     private boolean imeVisible(){WindowInsets insets=activity.getWindow().getDecorView().getRootWindowInsets();return insets!=null&&insets.isVisible(WindowInsets.Type.ime());}
+    private Rect screenBounds(View view){int[] at=new int[2];view.getLocationOnScreen(at);return new Rect(at[0],at[1],at[0]+view.getWidth(),at[1]+view.getHeight());}
+    private void expectSeparatedZones(){
+        View conversation=home.findViewWithTag("home_conversation_area"),stage=home.findViewWithTag("home_pet_stage"),anchor=home.findViewWithTag("home_pet_touch");
+        Rect messages=screenBounds(conversation),petArea=screenBounds(stage),petAt=screenBounds(anchor),inputAt=screenBounds(composer.getVisibility()==View.VISIBLE?composer:idle);
+        expect(messages.bottom<petArea.top,"messages overlap the pet stage");
+        expect(petArea.bottom<inputAt.top,"pet stage overlaps the input");
+        expect(anchor.getVisibility()==View.VISIBLE&&petArea.contains(petAt),"pet anchor does not fit in the lower stage");
+        float density=activity.getResources().getDisplayMetrics().density;
+        for(String tag:new String[]{"home_pet_left_slot","home_pet_right_slot"}){
+            View slot=home.findViewWithTag(tag);expect(slot.getWidth()/density>=48,"pet side does not reserve usable space");
+            expect(!Rect.intersects(screenBounds(slot),petAt),"side content overlaps the pet anchor");
+        }
+    }
     private void tapPet(){
         int[] location=new int[2];ui(()->{View target=activity.findViewById(android.R.id.content).findViewWithTag("home_pet_touch");target.getLocationOnScreen(location);location[0]+=target.getWidth()/2;location[1]+=target.getHeight()/2;});
         long now=SystemClock.uptimeMillis();MotionEvent down=MotionEvent.obtain(now,now,MotionEvent.ACTION_DOWN,location[0],location[1],0),up=MotionEvent.obtain(now,now+40,MotionEvent.ACTION_UP,location[0],location[1],0);
@@ -157,7 +174,7 @@ final class HomeInteractionChecks {
     private interface Check{void run()throws Exception;}
     private interface Condition{boolean get();}
     private void check(String name,Check work)throws Exception{
-        Bundle report=new Bundle();report.putString("class",getClass().getName());report.putString("test",name);report.putInt("numtests",8);report.putInt("current",passed+1);test.sendStatus(1,report);
+        Bundle report=new Bundle();report.putString("class",getClass().getName());report.putString("test",name);report.putInt("numtests",9);report.putInt("current",passed+1);test.sendStatus(1,report);
         try{work.run();passed++;test.sendStatus(0,report);}catch(Throwable error){report.putString("stack",android.util.Log.getStackTraceString(error));test.sendStatus(-2,report);throw error;}
     }
     private void await(Condition condition,String message){

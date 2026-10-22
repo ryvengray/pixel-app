@@ -18,8 +18,9 @@ public final class RecordsActivity extends ToolActivity {
     private final Map<String,TextView> rowStates=new HashMap<>();
     private LinearLayout list;private TextView state;private LifeRecords records;private boolean dark;
     private final Handler handler=new Handler(Looper.getMainLooper());
+    private final java.util.concurrent.ExecutorService imageWorker=java.util.concurrent.Executors.newSingleThreadExecutor();
     private final Runnable refresh=new Runnable(){public void run(){renderState();for(LifeRecords.Record r:records.all(false)){TextView label=rowStates.get(r.id);if(label!=null)label.setText(r.state()+" · 点击修改，长按删除");}handler.postDelayed(this,1000);}};
-    private int fg,muted,accent;
+    private int fg,muted,accent;private boolean preparingPrint;
     private int dp(int n){return Math.round(n*getResources().getDisplayMetrics().density);}
     private TextView text(String value,int size){TextView v=new TextView(this);v.setText(value);v.setTextSize(size);v.setTextColor(fg);v.setPadding(0,dp(7),0,dp(7));return v;}
     private Button button(String value,Runnable action){Button v=new Button(this);v.setText(value);v.setAllCaps(false);v.setTextColor(accent);v.setTextSize(15);v.setMinHeight(dp(48));v.setPadding(dp(12),dp(8),dp(12),dp(8));v.setBackground(shape(Color.parseColor(dark?"#244631":"#DFEFDE")));v.setOnClickListener(w->action.run());return v;}
@@ -43,7 +44,7 @@ public final class RecordsActivity extends ToolActivity {
         if(rows.isEmpty())list.addView(text("试着对 Greta 说：\n记一下我今天加了油 400 块\n\n也可以只记日记，不填金额。",16));
         for(LifeRecords.Record r:rows){
             LinearLayout card=new LinearLayout(this);card.setOrientation(1);card.setPadding(dp(16),dp(12),dp(16),dp(10));card.setBackground(shape(Color.parseColor(dark?"#1C3326":"#FFFFFF")));
-            TextView day=text(r.day,13);day.setTextColor(muted);card.addView(day);card.addView(text(r.payload.optString("content"),17));String summary=LifeRecords.summary(r.payload);if(!summary.isEmpty()){TextView money=text(summary,14);money.setTextColor(accent);card.addView(money);}
+            TextView day=text(r.day,13);day.setTextColor(muted);card.addView(day);imagePreview(card,r);card.addView(text(r.payload.optString("content"),17));String summary=LifeRecords.summary(r.payload);if(!summary.isEmpty()){TextView money=text(summary,14);money.setTextColor(accent);card.addView(money);}
             TextView status=text(r.state()+" · 点击修改，长按删除",12);status.setTextColor(muted);card.addView(status);rowStates.put(r.id,status);
             card.setOnClickListener(v->edit(r));card.setOnLongClickListener(v->{new AlertDialog.Builder(this).setTitle("删除这条记录？").setMessage("手机保留撤销机会，Obsidian 中会标记为已删除。").setNegativeButton("保留",null).setPositiveButton("删除",(d,w)->{try{records.update(r.id,r.payload,true);LifeSync.schedule(this);render();new AlertDialog.Builder(this).setMessage("记录已删除").setPositiveButton("撤销",(dd,ww)->{try{records.update(r.id,r.payload,false);LifeSync.schedule(this);render();}catch(Exception e){error(e);}}).setNegativeButton("关闭",null).show();}catch(Exception e){error(e);}}).show();return true;});
             LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,-2);lp.topMargin=dp(12);list.addView(card,lp);
@@ -76,6 +77,9 @@ public final class RecordsActivity extends ToolActivity {
     private void edit(LifeRecords.Record record){
         LinearLayout body=new LinearLayout(this);body.setPadding(dp(16),dp(8),dp(16),dp(12));body.setOrientation(1);ScrollView scroll=new ScrollView(this);scroll.addView(body);
         EditText day=field(body,"日期，例如 2026-10-20",record==null?LocalDate.now().toString():record.day,false);
+        if(record!=null&&!record.images.isEmpty()){
+            imagePreview(body,record);LifeImages.Image photo=record.images.get(0);body.addView(button("打印这张图片",()->printImage(photo)));
+        }
         EditText content=field(body,"今天发生了什么…",record==null?"":record.payload.optString("content"),true);
         List<MoneyRow> rows=new ArrayList<>();LinearLayout money=new LinearLayout(this);money.setOrientation(1);body.addView(money);
         JSONArray existing=record==null?new JSONArray():record.payload.optJSONArray("items");if(existing!=null)for(int i=0;i<existing.length();i++)addMoney(money,rows,existing.optJSONObject(i));
@@ -89,6 +93,13 @@ public final class RecordsActivity extends ToolActivity {
         }catch(Exception e){error(e);}}));dialog.show();
     }
     private static final class MoneyRow {EditText category,amount;Spinner kind,currency;}
+    private void printImage(LifeImages.Image image){
+        if(preparingPrint)return;preparingPrint=true;Toast.makeText(this,"正在准备打印图片…",Toast.LENGTH_SHORT).show();imageWorker.execute(()->{try{Uri uri=LifeImages.preparePrint(this,false,image);handler.post(()->{preparingPrint=false;if(isDestroyed())return;Intent next=new Intent(this,PrintActivity.class).setDataAndType(uri,getContentResolver().getType(uri)).putExtra(PrintActivity.EXTRA_FILE_NAME,image.name).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);next.setClipData(ClipData.newRawUri("图片",uri));startActivity(next);});}catch(Exception e){handler.post(()->{preparingPrint=false;if(!isDestroyed())error(e);});}});
+    }
+    private void imagePreview(LinearLayout parent,LifeRecords.Record record){
+        if(record.images.isEmpty())return;LifeImages.Image photo=record.images.get(0);ImageView image=new ImageView(this);image.setScaleType(ImageView.ScaleType.FIT_CENTER);image.setContentDescription("生活记录中的图片");parent.addView(image,new LinearLayout.LayoutParams(-1,dp(180)));
+        imageWorker.execute(()->{try{android.graphics.Bitmap bitmap=LifeImages.preview(LifeImages.file(this,false,photo.fileName),360);handler.post(()->{if(isDestroyed()||!image.isAttachedToWindow()){bitmap.recycle();return;}image.setImageBitmap(bitmap);});}catch(Exception e){handler.post(()->{if(!isDestroyed())image.setContentDescription("图片暂时无法读取");});}});
+    }
     private void addMoney(LinearLayout parent,List<MoneyRow> rows,JSONObject value){
         MoneyRow row=new MoneyRow();LinearLayout box=new LinearLayout(this);box.setOrientation(1);box.setPadding(0,dp(10),0,dp(10));parent.addView(box);
         row.category=field(box,"用途，例如 加油",value==null?"":value.optString("category"),false);row.amount=field(box,"金额",value==null?"":value.optString("amount"),false);row.amount.setInputType(8194);
@@ -99,5 +110,5 @@ public final class RecordsActivity extends ToolActivity {
     private void error(Exception e){Toast.makeText(this,e.getMessage()==null?"操作未完成，请重试":e.getMessage(),Toast.LENGTH_LONG).show();}
     @Override public void onResume(){super.onResume();render();LifeSync.schedule(this);handler.post(refresh);}
     @Override public void onPause(){handler.removeCallbacks(refresh);super.onPause();}
-    @Override public void onDestroy(){handler.removeCallbacks(refresh);records.close();super.onDestroy();}
+    @Override public void onDestroy(){handler.removeCallbacks(refresh);imageWorker.shutdown();records.close();super.onDestroy();}
 }

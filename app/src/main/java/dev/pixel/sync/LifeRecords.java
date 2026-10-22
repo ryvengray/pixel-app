@@ -11,12 +11,15 @@ import java.util.*;
 /** Authoritative phone records. Money uses decimal strings validated as integer minor units. */
 public final class LifeRecords implements AutoCloseable {
     private final AssistantStore store;
-    public LifeRecords(Context context){store=new AssistantStore(context);}
-    LifeRecords(Context context,String database){store=new AssistantStore(context,database);}
-    static void create(SQLiteDatabase db){db.execSQL("CREATE TABLE IF NOT EXISTS life_record(id TEXT PRIMARY KEY,day TEXT NOT NULL,timezone TEXT NOT NULL,payload TEXT NOT NULL,original TEXT NOT NULL,created INTEGER NOT NULL,revision INTEGER NOT NULL DEFAULT 1,deleted INTEGER NOT NULL DEFAULT 0,exported INTEGER NOT NULL DEFAULT 0,synced INTEGER NOT NULL DEFAULT 0,sync_target INTEGER NOT NULL DEFAULT 0,export_hash TEXT NOT NULL DEFAULT '')");}
+    private final Context context;
+    public LifeRecords(Context context){this(context,"greta.db");}
+    LifeRecords(Context context,String database){this.context=context.getApplicationContext();store=new AssistantStore(context,database);}
+    static void create(SQLiteDatabase db){db.execSQL("CREATE TABLE IF NOT EXISTS life_record(id TEXT PRIMARY KEY,day TEXT NOT NULL,timezone TEXT NOT NULL,payload TEXT NOT NULL,original TEXT NOT NULL,created INTEGER NOT NULL,revision INTEGER NOT NULL DEFAULT 1,deleted INTEGER NOT NULL DEFAULT 0,exported INTEGER NOT NULL DEFAULT 0,synced INTEGER NOT NULL DEFAULT 0,sync_target INTEGER NOT NULL DEFAULT 0,export_hash TEXT NOT NULL DEFAULT '')");createImages(db);}
+    static void createImages(SQLiteDatabase db){db.execSQL("CREATE TABLE IF NOT EXISTS life_record_image(record_id TEXT NOT NULL,image_id TEXT NOT NULL UNIQUE,name TEXT NOT NULL,mime TEXT NOT NULL,sha256 TEXT NOT NULL,PRIMARY KEY(record_id,image_id))");}
     public static final class Record {
         public String id,day,timezone,original,hash;public JSONObject payload;
         public long created;public int revision,exported,synced;public boolean deleted;
+        public final List<LifeImages.Image> images=new ArrayList<>();
         public String state(){return deleted?"已删除":exported<revision?"待导出":synced<revision?"待同步":"已同步";}
     }
     public static boolean valid(JSONObject args){
@@ -52,11 +55,21 @@ public final class LifeRecords implements AutoCloseable {
             db.execSQL("UPDATE life_record SET revision=revision+1 WHERE id=?",new Object[]{id});db.setTransactionSuccessful();
         }finally{db.endTransaction();}
     }
+    synchronized void saveWithImage(String id,JSONObject payload,String original,LifeImages.Image image)throws Exception{
+        if(id==null||id.isEmpty()||id.length()>100||!valid(payload))throw new IllegalArgumentException("请检查记录内容和日期");
+        if(find(id)!=null)return;
+        LifeImages.retain(context,image);SQLiteDatabase db=store.getWritableDatabase();db.beginTransaction();
+        try{
+            if(find(id)!=null){db.setTransactionSuccessful();return;}
+            save(id,payload,original);ContentValues values=new ContentValues();values.put("record_id",id);values.put("image_id",image.fileName);values.put("name",image.name);values.put("mime",image.mime);values.put("sha256",image.hash);db.insertOrThrow("life_record_image",null,values);db.setTransactionSuccessful();
+        }finally{db.endTransaction();}
+    }
     public Record find(String id){
         try(Cursor c=store.getReadableDatabase().rawQuery("SELECT id,day,timezone,payload,original,created,revision,deleted,exported,synced,export_hash FROM life_record WHERE id=?",new String[]{id})){return c.moveToFirst()?readRecord(c):null;}
     }
-    private static Record readRecord(Cursor c){
-        Record r=new Record();r.id=c.getString(0);r.day=c.getString(1);r.timezone=c.getString(2);try{r.payload=new JSONObject(c.getString(3));}catch(JSONException e){throw new IllegalStateException(e);}r.original=c.getString(4);r.created=c.getLong(5);r.revision=c.getInt(6);r.deleted=c.getInt(7)!=0;r.exported=c.getInt(8);r.synced=c.getInt(9);r.hash=c.getString(10);return r;
+    private Record readRecord(Cursor c){
+        Record r=new Record();r.id=c.getString(0);r.day=c.getString(1);r.timezone=c.getString(2);try{r.payload=new JSONObject(c.getString(3));}catch(JSONException e){throw new IllegalStateException(e);}r.original=c.getString(4);r.created=c.getLong(5);r.revision=c.getInt(6);r.deleted=c.getInt(7)!=0;r.exported=c.getInt(8);r.synced=c.getInt(9);r.hash=c.getString(10);
+        try(Cursor images=store.getReadableDatabase().rawQuery("SELECT image_id,name,mime,sha256 FROM life_record_image WHERE record_id=? ORDER BY image_id",new String[]{r.id})){while(images.moveToNext())r.images.add(new LifeImages.Image(images.getString(0),images.getString(1),images.getString(2),images.getString(3)));}return r;
     }
     public List<Record> all(boolean deleted){
         List<Record> rows=new ArrayList<>();try(Cursor c=store.getReadableDatabase().rawQuery("SELECT id,day,timezone,payload,original,created,revision,deleted,exported,synced,export_hash FROM life_record"+(deleted?"":" WHERE deleted=0")+" ORDER BY day DESC,created DESC",null)){
@@ -75,6 +88,7 @@ public final class LifeRecords implements AutoCloseable {
     public static String markdown(Record r){
         String text="# "+r.day+"\n\n"+(r.deleted?"> 此记录已在 Greta 中删除。\n\n":r.payload.optString("content")+"\n\n");
         if(!r.deleted){JSONArray items=r.payload.optJSONArray("items");if(items!=null)for(int i=0;i<items.length();i++){JSONObject item=items.optJSONObject(i);text+="- "+(item.optString("kind").equals("income")?"收入":"支出")+" · "+item.optString("category").replace("\n"," ")+" · "+item.optString("amount")+" "+item.optString("currency")+"\n";}}
+        if(!r.deleted)for(LifeImages.Image image:r.images)text+="\n![](图片/"+image.fileName+")\n";
         return text+"\n<!-- Greta record "+r.id.replace("--","")+" revision "+r.revision+"; timezone "+r.timezone+" -->\n";
     }
     @Override public void close(){store.close();}

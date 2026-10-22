@@ -11,7 +11,7 @@ public final class AssistantStore extends SQLiteOpenHelper {
     public static final class Memory { public final String id,category,fact,source,updatedAt; public final double confidence; public final int revision; public final boolean deleted;
         Memory(String id,String c,String f,double confidence,String source,int revision,boolean deleted,String updatedAt){this.id=id;category=c;fact=f;this.confidence=confidence;this.source=source;this.revision=revision;this.deleted=deleted;this.updatedAt=updatedAt;} }
     public AssistantStore(Context context) { this(context,"greta.db"); }
-    AssistantStore(Context context,String name){super(context,name,null,4);}
+    AssistantStore(Context context,String name){super(context,name,null,5);}
     @Override public void onCreate(SQLiteDatabase db) {
         db.execSQL("CREATE TABLE message(id INTEGER PRIMARY KEY AUTOINCREMENT, role TEXT NOT NULL, content TEXT NOT NULL, created_at INTEGER NOT NULL, group_id TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'sent', external_id TEXT UNIQUE)");
         db.execSQL("CREATE TABLE memory(id TEXT PRIMARY KEY, category TEXT NOT NULL, fact TEXT NOT NULL, confidence REAL NOT NULL, source TEXT, revision INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL)");
@@ -31,6 +31,7 @@ public final class AssistantStore extends SQLiteOpenHelper {
         }
         if(oldVersion<3)createTopics(db);
         if(oldVersion<4)LifeRecords.create(db);
+        if(oldVersion<5)LifeRecords.createImages(db);
     }
     public void addMessage(String role,String content){ addMessage(role,content,UUID.randomUUID().toString(),"sent",null,System.currentTimeMillis()); }
     public long addMessage(String role,String content,String group,String status,String external,long timestamp){

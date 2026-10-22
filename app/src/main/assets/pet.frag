@@ -4,6 +4,7 @@ uniform float time, dark, reaction, motion, compact, thinking;
 uniform vec2 compactCenter;
 uniform sampler2D backdrop;
 uniform vec2 backdropSize;
+uniform vec4 placement;
 mat2 rot(float a){float c=cos(a),s=sin(a);return mat2(c,-s,s,c);}
 float triangle(vec2 p){
  float r=.64,k=1.7320508;
@@ -48,9 +49,12 @@ void main(){
  // Keep the background full-screen and transform only the pet. This avoids a
  // differently coloured SurfaceView rectangle when the pet moves to the menu.
  vec2 baseCenter=vec2(0.,.32/1.75);
+ if(placement.w>.5&&placement.z<.001&&compact<.001){gl_FragColor=vec4(col,1.);return;}
+ vec2 stageCenter=vec2(2.*placement.x-1.,(1.-2.*placement.y)*resolution.y/resolution.x);
+ vec2 normalCenter=mix(baseCenter,stageCenter,placement.w);
  vec2 targetCenter=vec2(2.*compactCenter.x-1.,(1.-2.*compactCenter.y)*resolution.y/resolution.x);
- float petScale=mix(1.,.18,compact);
- vec2 petUv=(uv-mix(baseCenter,targetCenter,compact))/petScale+baseCenter;
+ float petScale=max(.001,mix(mix(1.,placement.z,placement.w),.18,compact));
+ vec2 petUv=(uv-mix(normalCenter,targetCenter,compact))/petScale+baseCenter;
  vec3 ro=vec3(petUv*1.75,4.);ro.y-=.32;vec3 rd=vec3(0.,0.,-1.);
  float shadow=exp(-pow(ro.x/.78,2.)-pow((ro.y+.93)/.14,2.));
  col*=1.-shadow*mix(.15,.28,dark)*(1.-reaction*.35);
