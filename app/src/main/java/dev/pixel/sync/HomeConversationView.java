@@ -315,7 +315,10 @@ public final class HomeConversationView extends FrameLayout {
         voice=new VoiceInputOverlay(activity,new VoiceInputOverlay.Listener(){
             public void completed(String text,boolean edit){voice=null;resetVoicePress();if(edit){input.setText(text);if(active)focusInput();}else submit(text);}
             public void dismissed(){voice=null;resetVoicePress();}
-        });voice.start();
+        });
+        if(touching)voice.setHoldOrigin(touchStartX,touchStartY);
+        else{int[] location=new int[2];speak.getLocationOnScreen(location);voice.setHoldOrigin(location[0]+speak.getWidth()/2f,location[1]+speak.getHeight()/2f);}
+        voice.start();
     }
     public void shutdown(){pause();closed=true;main.removeCallbacksAndMessages(null);if(detail!=null)detail.dismiss();background.shutdownNow();network.execute(store::close);network.shutdown();}
 }

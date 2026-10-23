@@ -21,6 +21,9 @@ public final class VoiceInputOverlay extends FrameLayout implements RecognitionL
     private String partial="";
     private String committed="";
     private final Waveform waveform;
+    private final View fan;
+    private float holdRawX=Float.NaN,holdRawY=Float.NaN,originX,originY,fanRadius;
+    private float cancelX,cancelY,editX,editY;
     private boolean ready,released,finished,listening,onDevice,fallbackUsed;
     private int generation,recoveries;
     private final Runnable restart=this::listenAgain;
@@ -45,17 +48,56 @@ public final class VoiceInputOverlay extends FrameLayout implements RecognitionL
         ScrollView scroll=new ScrollView(activity);scroll.setClipToPadding(false);scroll.addView(transcript);FrameLayout.LayoutParams textParams=new FrameLayout.LayoutParams(-1,-1);textParams.leftMargin=dp(22);textParams.rightMargin=dp(22);textParams.topMargin=dp(142);textParams.bottomMargin=dp(370);addView(scroll,textParams);
         status=text("正在连接语音服务…",14);status.setGravity(Gravity.CENTER);status.setTextColor(Color.rgb(190,211,209));FrameLayout.LayoutParams sp=new FrameLayout.LayoutParams(-1,dp(36),Gravity.BOTTOM);sp.bottomMargin=dp(316);addView(status,sp);
         waveform=new Waveform(activity);FrameLayout.LayoutParams wp=new FrameLayout.LayoutParams(dp(220),dp(58),Gravity.BOTTOM|Gravity.CENTER_HORIZONTAL);wp.bottomMargin=dp(352);addView(waveform,wp);
-        View arc=new View(activity){private final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);private final Path path=new Path();protected void onDraw(Canvas canvas){super.onDraw(canvas);paint.setColor(Color.rgb(75,80,76));paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(dp(2));path.reset();path.moveTo(dp(45),dp(8));path.cubicTo(getWidth()*.25f,dp(170),getWidth()*.75f,dp(170),getWidth()-dp(45),dp(8));canvas.drawPath(path,paint);}};
-        FrameLayout.LayoutParams arcParams=new FrameLayout.LayoutParams(-1,dp(180),Gravity.BOTTOM);arcParams.bottomMargin=dp(36);addView(arc,arcParams);
+        fan=new View(activity){
+            private final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);
+            private final Path path=new Path();
+            @Override protected void onDraw(Canvas canvas){
+                if(fanRadius<=0)return;
+                RectF circle=new RectF(originX-fanRadius,originY-fanRadius,originX+fanRadius,originY+fanRadius);
+                path.reset();path.moveTo(originX,originY);path.arcTo(circle,200,50,false);path.close();
+                paint.setStyle(Paint.Style.FILL);paint.setColor(0x123C9275);canvas.drawPath(path,paint);
+                paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(dp(1));paint.setColor(0x557FA99E);
+                canvas.drawArc(circle,200,50,false,paint);
+                paint.setColor(target==1?0xAAFF9EAA:target==2?0xAAACE9C2:0x447FA99E);
+                canvas.drawCircle(originX,originY,dp(27),paint);
+                if(target!=0)canvas.drawLine(originX,originY,target==1?cancelX:editX,target==1?cancelY:editY,paint);
+            }
+        };
+        fan.setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);addView(fan,new FrameLayout.LayoutParams(-1,-1));
         cancel=text("取消录音",15);cancel.setGravity(Gravity.CENTER);cancel.setContentDescription("取消录音，不发送");cancel.setOnClickListener(v->finish("",false,null));
-        FrameLayout.LayoutParams cp=new FrameLayout.LayoutParams(dp(120),dp(54),Gravity.BOTTOM|Gravity.LEFT);cp.leftMargin=dp(20);cp.bottomMargin=dp(164);addView(cancel,cp);
+        FrameLayout.LayoutParams cp=new FrameLayout.LayoutParams(dp(96),dp(52),Gravity.BOTTOM|Gravity.LEFT);cp.leftMargin=dp(20);cp.bottomMargin=dp(164);addView(cancel,cp);
         edit=text("编辑文字",15);edit.setGravity(Gravity.CENTER);edit.setContentDescription("停止录音并编辑文字");edit.setOnClickListener(v->{target=2;releaseLocked();});
-        FrameLayout.LayoutParams ep=new FrameLayout.LayoutParams(dp(120),dp(54),Gravity.BOTTOM|Gravity.RIGHT);ep.rightMargin=dp(20);ep.bottomMargin=dp(164);addView(edit,ep);
+        FrameLayout.LayoutParams ep=new FrameLayout.LayoutParams(dp(96),dp(52),Gravity.BOTTOM|Gravity.RIGHT);ep.rightMargin=dp(20);ep.bottomMargin=dp(164);addView(edit,ep);
         stop=text("松开发送",15);stop.setTag("voice_release");stop.setTypeface(android.graphics.Typeface.create("sans-serif-medium",android.graphics.Typeface.NORMAL));stop.setGravity(Gravity.CENTER);stop.setIncludeFontPadding(false);stop.setTextColor(Color.rgb(199,242,215));
         GradientDrawable releaseBackground=new GradientDrawable();releaseBackground.setColor(0x22378B67);releaseBackground.setCornerRadius(dp(22));releaseBackground.setStroke(dp(1),0x507BB78B);stop.setBackground(releaseBackground);
         stop.setContentDescription("停止录音，转写完成后发送文字");stop.setOnClickListener(v->{target=0;releaseLocked();});
-        FrameLayout.LayoutParams bp=new FrameLayout.LayoutParams(dp(144),dp(44),Gravity.BOTTOM|Gravity.CENTER_HORIZONTAL);bp.bottomMargin=dp(80);addView(stop,bp);
+        FrameLayout.LayoutParams bp=new FrameLayout.LayoutParams(dp(112),dp(44),Gravity.BOTTOM|Gravity.RIGHT);bp.bottomMargin=dp(16);addView(stop,bp);styleTarget(cancel,false,1);styleTarget(edit,false,2);
         setOnApplyWindowInsetsListener((v,insets)->{android.graphics.Insets safe=insets.getInsets(WindowInsets.Type.systemBars()|WindowInsets.Type.displayCutout());setPadding(safe.left,safe.top,safe.right,safe.bottom);return insets;});
+    }
+    public void setHoldOrigin(float rawX,float rawY){holdRawX=rawX;holdRawY=rawY;requestLayout();}
+    @Override protected void onLayout(boolean changed,int left,int top,int right,int bottom){
+        super.onLayout(changed,left,top,right,bottom);
+        int[] location=new int[2];getLocationOnScreen(location);
+        originX=Float.isNaN(holdRawX)?getWidth()-getPaddingRight()-dp(72):holdRawX-location[0];
+        originY=Float.isNaN(holdRawY)?getHeight()-getPaddingBottom()-dp(30):holdRawY-location[1];
+        // Both targets share one radius around the original finger position.
+        fanRadius=Math.max(dp(80),Math.min(dp(152),Math.min((originX-getPaddingLeft()-dp(58))/.94f,(originY-getPaddingTop()-dp(120))/.94f)));
+        cancelX=originX-(float)Math.cos(Math.toRadians(20))*fanRadius;
+        cancelY=originY-(float)Math.sin(Math.toRadians(20))*fanRadius;
+        editX=originX-(float)Math.sin(Math.toRadians(20))*fanRadius;
+        editY=originY-(float)Math.cos(Math.toRadians(20))*fanRadius;
+        place(cancel,cancelX,cancelY);place(edit,editX,editY);
+        float stopX=Math.max(getPaddingLeft()+stop.getMeasuredWidth()/2f+dp(8),Math.min(originX,getWidth()-getPaddingRight()-stop.getMeasuredWidth()/2f-dp(8)));
+        float stopY=Math.min(originY,getHeight()-getPaddingBottom()-stop.getMeasuredHeight()/2f);
+        place(stop,stopX,stopY);fan.invalidate();
+    }
+    private void place(View view,float x,float y){int left=Math.round(x-view.getMeasuredWidth()/2f),top=Math.round(y-view.getMeasuredHeight()/2f);view.layout(left,top,left+view.getMeasuredWidth(),top+view.getMeasuredHeight());}
+    private void styleTarget(TextView view,boolean active,int action){
+        int color=action==1?0xFFFF9EAA:0xFFACE9C2;
+        GradientDrawable background=new GradientDrawable();background.setCornerRadius(dp(26));
+        background.setColor(active?(action==1?0xAA65333F:0xAA285844):0xCC20353E);
+        background.setStroke(dp(1),active?color:0x557FA99E);view.setBackground(background);
+        view.setTextColor(active?color:0xFFE8EFE9);
     }
     private TextView text(String value,int size){TextView v=new TextView(activity);v.setText(value);v.setTextSize(size);v.setSoundEffectsEnabled(false);v.setTextColor(Color.rgb(232,239,233));return v;}
     public void start(){
@@ -116,9 +158,13 @@ public final class VoiceInputOverlay extends FrameLayout implements RecognitionL
         public void onEvent(int n,Bundle b){if(current())VoiceInputOverlay.this.onEvent(n,b);}
     }
     public void move(float rawX,float rawY){if(finished||released)return;int[] location=new int[2];getLocationOnScreen(location);float x=rawX-location[0],y=rawY-location[1];
-        int next=0;float boundary=getHeight()-getPaddingBottom()-dp(150);if(y<boundary){if(x<getWidth()*.43f)next=1;else if(x>getWidth()*.57f)next=2;}
-        if(next!=target){target=next;performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK);}
-        cancel.setTextColor(target==1?Color.rgb(255,140,140):Color.WHITE);edit.setTextColor(target==2?Color.rgb(164,224,174):Color.WHITE);stop.setText(target==1?"松开取消":target==2?"松开编辑":"松开发送");
+        float cancelDistance=(float)Math.hypot(x-cancelX,y-cancelY),editDistance=(float)Math.hypot(x-editX,y-editY);
+        int next=0;
+        if(target==1&&cancelDistance<dp(62))next=1;
+        else if(target==2&&editDistance<dp(62))next=2;
+        else if(Math.min(cancelDistance,editDistance)<dp(52))next=cancelDistance<editDistance?1:2;
+        if(next!=target){target=next;performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK);styleTarget(cancel,target==1,1);styleTarget(edit,target==2,2);fan.invalidate();}
+        stop.setText(target==1?"松开取消":target==2?"松开编辑":"松开发送");
     }
     public void release(float x,float y){if(released||finished)return;move(x,y);releaseLocked();}
     private void releaseLocked(){if(released||finished)return;released=true;
