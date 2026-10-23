@@ -28,6 +28,7 @@ public final class VoiceInputOverlay extends FrameLayout implements RecognitionL
     private final boolean dark;
     private final int ink,muted,accent;
     private float holdRawX=Float.NaN,holdRawY=Float.NaN,originX,originY,fanRadius;
+    private float cancelAngle=215,editAngle=270;
     private float cancelX,cancelY,editX,editY,fingerX,fingerY;
     private boolean fingerMoved;
     private String releaseMessage="";
@@ -63,21 +64,22 @@ public final class VoiceInputOverlay extends FrameLayout implements RecognitionL
         FrameLayout.LayoutParams sp=new FrameLayout.LayoutParams(dp(156),dp(36),Gravity.TOP|Gravity.RIGHT);sp.topMargin=dp(24);sp.rightMargin=dp(28);addView(status,sp);
         transcript=text("说说你的想法…",27);transcript.setTextColor(muted);transcript.setGravity(Gravity.TOP|Gravity.START);transcript.setTextIsSelectable(false);transcript.setLineSpacing(dp(9),1f);transcript.setIncludeFontPadding(false);transcript.setPadding(0,dp(10),0,dp(20));
         transcriptScroll=new ScrollView(activity);transcriptScroll.setVerticalScrollBarEnabled(false);transcriptScroll.setOverScrollMode(OVER_SCROLL_NEVER);transcriptScroll.addView(transcript);
-        FrameLayout.LayoutParams textParams=new FrameLayout.LayoutParams(-1,-1);textParams.leftMargin=dp(28);textParams.rightMargin=dp(28);textParams.topMargin=dp(116);textParams.bottomMargin=dp(316);addView(transcriptScroll,textParams);
+        FrameLayout.LayoutParams textParams=new FrameLayout.LayoutParams(-1,-1);textParams.leftMargin=dp(28);textParams.rightMargin=dp(28);textParams.topMargin=dp(116);textParams.bottomMargin=dp(356);addView(transcriptScroll,textParams);
         waveform=new Waveform(activity,accent);FrameLayout.LayoutParams wp=new FrameLayout.LayoutParams(dp(112),dp(24),Gravity.TOP|Gravity.LEFT);wp.leftMargin=dp(28);wp.topMargin=dp(76);addView(waveform,wp);
 
         fan=new View(activity){
             private final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);
             @Override protected void onDraw(Canvas canvas){
-                if(fanRadius<=0)return;
                 RectF circle=new RectF(originX-fanRadius,originY-fanRadius,originX+fanRadius,originY+fanRadius);
                 int cancelColor=dark?0xFFFFA7B1:0xFFA9475B;
                 drawHalo(canvas,paint,cancelX,cancelY-dp(7),cancelColor,cancelProgress);
                 drawHalo(canvas,paint,editX,editY-dp(7),accent,editProgress);
                 int base=dark?0x267EA3B6:0x303B697D;
                 paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(Math.max(1,dp(1)*.65f));paint.setColor(Color.WHITE);
-                paint.setShader(new SweepGradient(originX,originY,new int[]{base,blend(base,alpha(cancelColor,.8f),cancelProgress),blend(base,alpha(accent,.8f),editProgress),base},new float[]{0,200/360f,250/360f,1}));
-                canvas.drawArc(circle,200,50,false,paint);paint.setShader(null);
+                if(fanRadius>0){
+                    paint.setShader(new SweepGradient(originX,originY,new int[]{base,blend(base,alpha(cancelColor,.8f),cancelProgress),blend(base,alpha(accent,.8f),editProgress),base},new float[]{0,cancelAngle/360f,editAngle/360f,1}));
+                    canvas.drawArc(circle,cancelAngle,editAngle-cancelAngle,false,paint);paint.setShader(null);
+                }
                 float strength=Math.max(cancelProgress,editProgress);
                 int tint=blend(accent,cancelColor,cancelProgress/Math.max(.001f,cancelProgress+editProgress));
                 paint.setColor(blend(dark?0x557FAAB7:0x55457285,tint,strength));
@@ -118,12 +120,7 @@ public final class VoiceInputOverlay extends FrameLayout implements RecognitionL
         int[] location=new int[2];getLocationOnScreen(location);
         originX=Float.isNaN(holdRawX)?getWidth()-getPaddingRight()-dp(72):holdRawX-location[0];
         originY=Float.isNaN(holdRawY)?getHeight()-getPaddingBottom()-dp(30):holdRawY-location[1];
-        // Both targets share one radius around the original finger position.
-        fanRadius=Math.max(dp(80),Math.min(dp(184),Math.min((originX-getPaddingLeft()-dp(72))/.94f,(originY-getPaddingTop()-dp(120))/.94f)));
-        cancelX=originX-(float)Math.cos(Math.toRadians(20))*fanRadius;
-        cancelY=originY-(float)Math.sin(Math.toRadians(20))*fanRadius;
-        editX=originX-(float)Math.sin(Math.toRadians(20))*fanRadius;
-        editY=originY-(float)Math.cos(Math.toRadians(20))*fanRadius;
+        layoutFanTargets();
         place(cancel,cancelX,cancelY);place(edit,editX,editY);
         float stopX=Math.max(getPaddingLeft()+stop.getMeasuredWidth()/2f+dp(8),Math.min(originX,getWidth()-getPaddingRight()-stop.getMeasuredWidth()/2f-dp(8)));
         float stopY=Math.min(originY,getHeight()-getPaddingBottom()-stop.getMeasuredHeight()/2f);
@@ -131,11 +128,40 @@ public final class VoiceInputOverlay extends FrameLayout implements RecognitionL
         if(!fingerMoved){fingerX=originX;fingerY=originY;}
         layoutReleaseHint();fan.invalidate();
     }
+    private void layoutFanTargets(){
+        // Reserve the full 62dp selected ring, its 10dp feather and a 12dp edge gap.
+        float inset=dp(84),left=getPaddingLeft()+inset,right=getWidth()-getPaddingRight()-inset;
+        float top=getPaddingTop()+inset,bottom=getHeight()-getPaddingBottom()-inset;
+        // Anchor edit to the right safe edge, then choose an upper-left cancel
+        // position on the SAME circle. Solve both centers before placing either.
+        for(float radius=dp(184);radius>=dp(80);radius-=Math.max(1,dp(2))){
+            float dx=right-originX;if(Math.abs(dx)>radius)continue;
+            float ey=originY-(float)Math.sqrt(radius*radius-dx*dx);
+            if(ey<top||ey>bottom)continue;
+            float ea=(float)Math.toDegrees(Math.atan2(ey-originY,dx))+360;
+            float bestAngle=0,bestCost=Float.MAX_VALUE,bestX=0,bestY=0;
+            for(float ca=190;ca<=235;ca+=.5f){
+                float cx=originX+(float)Math.cos(Math.toRadians(ca))*radius;
+                float cy=originY+(float)Math.sin(Math.toRadians(ca))*radius;
+                if(cx<left||cx>right||cy<top||cy>bottom||ca>=ea)continue;
+                if(Math.hypot(cx-right,cy-ey)<dp(132))continue;
+                float cost=Math.abs(ca-215);
+                if(cost<bestCost){bestCost=cost;bestAngle=ca;bestX=cx;bestY=cy;}
+            }
+            if(bestCost<Float.MAX_VALUE){
+                fanRadius=radius;cancelX=bestX;cancelY=bestY;editX=right;editY=ey;cancelAngle=bestAngle;editAngle=ea;return;
+            }
+        }
+        // Extremely constrained windows cannot fit two full rings; keep controls
+        // inside their safe area rather than drawing them beyond the display.
+        cancelX=Math.max(left,Math.min(originX-dp(130),right));cancelY=Math.max(top,Math.min(originY-dp(110),bottom));
+        editX=right;editY=Math.max(top,Math.min(originY-dp(184),bottom));fanRadius=0;
+    }
     private void place(View view,float x,float y){int left=Math.round(x-view.getMeasuredWidth()/2f),top=Math.round(y-view.getMeasuredHeight()/2f);view.layout(left,top,left+view.getMeasuredWidth(),top+view.getMeasuredHeight());}
     private void layoutReleaseHint(){
         float half=releaseHint.getMeasuredWidth()/2f;
         float x=Math.max(getPaddingLeft()+half+dp(16),Math.min(fingerX,getWidth()-getPaddingRight()-half-dp(16)));
-        float y=Math.max(getPaddingTop()+dp(152),Math.min(fingerY-dp(86),editY-dp(76)));
+        float y=Math.max(getPaddingTop()+dp(152),Math.min(fingerY-dp(86),Math.min(cancelY,editY)-dp(116)));
         place(releaseHint,x,y);
     }
     private void updateReleaseHint(int near){

@@ -18,3 +18,6 @@ fi
 
 printf 'Restarting: %s\n' "${services[*]}"
 "${compose[@]}" restart "${services[@]}"
+
+printf '\nFollowing logs (Ctrl+C to stop): %s\n' "${services[*]}"
+"${compose[@]}" logs --follow --tail=100 "${services[@]}"
