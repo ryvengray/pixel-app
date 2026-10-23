@@ -122,5 +122,440 @@
         "additionalProperties": false
       }
     }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "open_calendar",
+      "description": "Open the local calendar only when requested. Optional date positions the calendar; show_cycle toggles the 大姨妈 overlay only, not notifications.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "date": {
+            "type": "string",
+            "format": "date"
+          },
+          "item": {
+            "type": "string"
+          },
+          "show_cycle": {
+            "type": "boolean"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "query_calendar",
+      "description": "Read actual special dates on the PHONE and computed upcoming occurrences. Use for questions as well as identifying an exact record before edits; include_archived includes all originals for finding past records. No menstrual facts are returned.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "from": {
+            "type": "string",
+            "format": "date"
+          },
+          "to": {
+            "type": "string",
+            "format": "date"
+          },
+          "query": {
+            "type": "string"
+          },
+          "include_archived": {
+            "type": "boolean"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "save_special_date",
+      "description": "Create or patch a special date only on an explicit request to save/change it. Query first for updates; id AND expected_revision are required for updates. date is the original Gregorian equivalent; for lunar input supply lunar_month/day/leap and a Gregorian date in the intended year. Do not invent birth years. Every mutation returns actual commit status and operation_id for undo. Default reminders are 1 day ahead at 09:00 local time. Omitted patch fields retain previous values. For a yearless birthday, supply month/day without date and year_known=false; the local executor stores a conversion anchor with unknown year and never calculates age. Lunar month/day also require lunar_month/lunar_day. Do not describe the anchor year as a birth year. Saving a reminder rule is not proof of notification permission or future delivery. When the result reports notification permission missing, tell the user to enable notifications in the calendar UI.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Obtain exact id from a query; omit only for creation."
+          },
+          "expected_revision": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483647
+          },
+          "title": {
+            "type": "string"
+          },
+          "date": {
+            "type": "string",
+            "format": "date"
+          },
+          "calendar": {
+            "type": "string",
+            "enum": [
+              "solar",
+              "lunar"
+            ]
+          },
+          "lunar_month": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 12
+          },
+          "lunar_day": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 30
+          },
+          "lunar_leap": {
+            "type": "boolean"
+          },
+          "yearly": {
+            "type": "boolean"
+          },
+          "count_up": {
+            "type": "boolean"
+          },
+          "milestone": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100000
+          },
+          "leap_day": {
+            "type": "string",
+            "enum": [
+              "feb28",
+              "march1"
+            ]
+          },
+          "missing_day": {
+            "type": "string",
+            "enum": [
+              "last_day",
+              "skip",
+              "regular"
+            ]
+          },
+          "remind": {
+            "type": "boolean"
+          },
+          "remind_days": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 365
+          },
+          "remind_time": {
+            "type": "string",
+            "description": "HH:mm"
+          },
+          "timezone": {
+            "type": "string",
+            "description": "IANA timezone"
+          },
+          "note": {
+            "type": "string"
+          },
+          "month": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 12
+          },
+          "day": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 31
+          },
+          "year_known": {
+            "type": "boolean"
+          },
+          "follow_timezone": {
+            "type": "boolean",
+            "description": "Default true: remind at local device time while travelling. Set false with an explicit IANA timezone to keep a fixed zone."
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "delete_special_date",
+      "description": "Delete one exact important date, with reversible operation_id. Query exact id and revision first. Never bulk delete.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Obtain exact id from a query; omit only for creation."
+          },
+          "expected_revision": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483647
+          }
+        },
+        "required": [
+          "id",
+          "expected_revision"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "delete_cycle_record",
+      "description": "Delete one exact actual 大姨妈 record and recompute predictions; requires explicit request and respects cycle AI privacy setting. Query exact id and revision first. Never bulk delete.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Obtain exact id from a query; omit only for creation."
+          },
+          "expected_revision": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483647
+          }
+        },
+        "required": [
+          "id",
+          "expected_revision"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "get_cycle_summary",
+      "description": "Read actual 大姨妈 records and separate date-only predictions from the PHONE, only when relevant to a user query. Query before modifying records/settings to obtain id/revision. Predictions are estimates, NOT safe days, diagnosis or contraception. Do not store this data in general memory.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "from": {
+            "type": "string",
+            "format": "date"
+          },
+          "to": {
+            "type": "string",
+            "format": "date"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "save_cycle_record",
+      "description": "Save actual 大姨妈 start/end ONLY when explicitly stated or corrected. Never convert predictions or symptoms into facts. Query id and revision before patching. Omit end while still in progress. Never automatically mark the period ended.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Obtain exact id from a query; omit only for creation."
+          },
+          "expected_revision": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483647
+          },
+          "start": {
+            "type": "string",
+            "format": "date"
+          },
+          "end": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "note": {
+            "type": "string"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "update_cycle_settings",
+      "description": "Configure 大姨妈 predictions/reminders at explicit request. Query settings first for expected_revision. Enabling requires configured cycle_days and duration; never silently assume 28 days. Disabled AI access can only be restored manually in the UI. Saving a reminder rule is not proof of notification permission or future delivery. When the result reports notification permission missing, tell the user to enable notifications in the calendar UI.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "expected_revision": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 2147483647
+          },
+          "cycle_days": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 365
+          },
+          "duration": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 60
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "adaptive": {
+            "type": "boolean"
+          },
+          "remind": {
+            "type": "boolean"
+          },
+          "remind_days": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 30
+          },
+          "remind_time": {
+            "type": "string",
+            "description": "HH:mm"
+          },
+          "timezone": {
+            "type": "string"
+          },
+          "ai_access": {
+            "type": "boolean"
+          },
+          "follow_timezone": {
+            "type": "boolean",
+            "description": "Default true: remind at local device time while travelling. Set false with an explicit IANA timezone to keep a fixed zone."
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "update_calendar_preferences",
+      "description": "Update local calendar display preferences only when requested. Hiding the 大姨妈 overlay does not disable reminders. expected_revision is returned by query_calendar preferences.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "expected_revision": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 2147483647
+          },
+          "show_cycle": {
+            "type": "boolean"
+          },
+          "private_notifications": {
+            "type": "boolean"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "undo_calendar_operation",
+      "description": "Undo one prior calendar mutation by exact operation_id only when requested. Will fail if that record has been modified since. Do not guess an operation id. When no id is present in this conversation, query_calendar or get_cycle_summary returns recent_operations; identify the specific requested operation before undo.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "operation_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation_id"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "list_calendar_widgets",
+      "description": "List existing Greta calendar widgets on the phone, including exact widget_id, revision, type, chosen date, theme, 大姨妈 visibility and past configuration operations. Query before changing a widget; ask which one if ambiguous. This does not add a widget to the launcher.",
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "configure_calendar_widget",
+      "description": "Only at explicit request: configure one existing widget. First list widgets to obtain its id/revision and query calendar to obtain event_id. theme: 0 system, 1 light, 2 dark. show_cycle changes only this widget display, not reminders or app overlay. To undo, use restore_operation_id from the widget operation list and current expected_revision. Adding or moving a widget requires the system launcher UI, never claim automatic placement.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "widget_id": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "expected_revision": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "theme": {
+            "type": "integer",
+            "enum": [
+              0,
+              1,
+              2
+            ]
+          },
+          "event_id": {
+            "type": "string"
+          },
+          "show_cycle": {
+            "type": "boolean"
+          },
+          "restore_operation_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "widget_id",
+          "expected_revision"
+        ],
+        "additionalProperties": false
+      }
+    }
   }
 ]

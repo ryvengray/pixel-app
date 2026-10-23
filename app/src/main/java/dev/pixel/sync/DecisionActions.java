@@ -44,9 +44,11 @@ public final class DecisionActions {
             case "open_print":target=PrintActivity.class;break;
             case "open_topics":target=TopicsActivity.class;break;
             case "open_records":target=RecordsActivity.class;break;
+            case "open_calendar":target=CalendarActivity.class;break;
             default:return null;
         }
         Intent intent=new Intent(activity,target);
+        if(name.equals("open_calendar")&&args!=null){if(args.has("date"))intent.putExtra("date",args.optString("date"));if(args.has("item"))intent.putExtra("item",args.optString("item"));if(args.has("show_cycle"))intent.putExtra("show_cycle",args.optBoolean("show_cycle"));}
         int theme=activity.getSharedPreferences("home",0).getInt("theme",0);
         boolean dark=theme==2||(theme==0&&(activity.getResources().getConfiguration().uiMode&Configuration.UI_MODE_NIGHT_MASK)==Configuration.UI_MODE_NIGHT_YES);
         intent.putExtra("dark",dark);

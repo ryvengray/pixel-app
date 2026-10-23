@@ -24,7 +24,7 @@ public final class HomeConversationView extends FrameLayout {
     private final ExecutorService background = Executors.newFixedThreadPool(2);
     private final Runnable react;
     private final java.util.function.Consumer<Boolean> thinking;
-    private final TextView assistant, user, userCaption, assistantCaption, state, result, write, speak, send;
+    private final TextView assistant, user, userCaption, assistantCaption, state, write, speak, send;
     private final LinearLayout bottom, idle, editing, utterances;
     private final ScrollView conversation;
     private final FrameLayout petStage,petLeft,petRight;
@@ -61,7 +61,7 @@ public final class HomeConversationView extends FrameLayout {
         conversation=new ScrollView(activity);conversation.setTag("home_conversation_area");conversation.setFillViewport(false);conversation.setVerticalScrollBarEnabled(false);conversation.setClipToPadding(false);
         utterances=new LinearLayout(activity);utterances.setOrientation(LinearLayout.VERTICAL);utterances.setPadding(0,0,0,dp(8));
         conversation.addView(utterances,new ScrollView.LayoutParams(-1,-2));
-        FrameLayout.LayoutParams cp=new FrameLayout.LayoutParams(-1,dp(260),Gravity.TOP);cp.setMargins(dp(24),dp(118),dp(24),0);addView(conversation,cp);
+        FrameLayout.LayoutParams cp=new FrameLayout.LayoutParams(-1,dp(260),Gravity.TOP);cp.setMargins(dp(24),dp(84),dp(24),0);addView(conversation,cp);
         userCaption=label("你",11);userCaption.setPadding(0,0,dp(12),dp(4));userCaption.setGravity(Gravity.END);
         LinearLayout.LayoutParams ucp=new LinearLayout.LayoutParams(-2,-2);ucp.gravity=Gravity.END;utterances.addView(userCaption,ucp);
         user=label("",15);user.setTag("home_user_message");user.setPadding(dp(16),dp(9),dp(17),dp(9));user.setGravity(Gravity.END);user.setLineSpacing(dp(4),1f);user.setMaxLines(3);user.setMaxWidth(dp(280));user.setEllipsize(TextUtils.TruncateAt.END);
@@ -77,21 +77,18 @@ public final class HomeConversationView extends FrameLayout {
         petRight=new FrameLayout(activity);petRight.setTag("home_pet_right_slot");petStage.addView(petRight,new FrameLayout.LayoutParams(0,-1,Gravity.RIGHT));
         bottom=new LinearLayout(activity);bottom.setOrientation(LinearLayout.VERTICAL);
         FrameLayout.LayoutParams bp=new FrameLayout.LayoutParams(-1,-2,Gravity.BOTTOM);addView(bottom,bp);
-        result=label("",12);result.setTag("home_activity");result.setMaxLines(1);result.setPadding(dp(14),0,dp(14),0);result.setGravity(Gravity.CENTER);result.setMinHeight(dp(40));result.setContentDescription("操作状态与最近结果，点击查看详情");
-        result.setOnClickListener(v->showResults());
-        FrameLayout.LayoutParams rp=new FrameLayout.LayoutParams(-2,dp(40),Gravity.TOP|Gravity.RIGHT);rp.topMargin=dp(72);rp.rightMargin=dp(24);addView(result,rp);
         idle=new LinearLayout(activity);idle.setTag("home_idle");idle.setGravity(Gravity.CENTER_VERTICAL);idle.setPadding(0,0,dp(16),0);
-        write=label("轻点输入…",16);write.setGravity(Gravity.CENTER_VERTICAL|Gravity.START);write.setPadding(dp(24),0,0,0);write.setIncludeFontPadding(false);write.setLetterSpacing(.02f);write.setMinHeight(dp(48));write.setOnClickListener(v->focusInput());
+        write=label("轻点输入…",16);write.setGravity(Gravity.CENTER_VERTICAL|Gravity.START);write.setPadding(dp(24),0,0,0);write.setIncludeFontPadding(false);write.setLetterSpacing(.02f);write.setMinHeight(dp(60));write.setOnClickListener(v->focusInput());
         idle.addView(write,new LinearLayout.LayoutParams(0,-2,1));
-        speak=label("按住说话",15);speak.setGravity(Gravity.CENTER);speak.setIncludeFontPadding(false);speak.setLetterSpacing(.02f);speak.setMinHeight(dp(48));
+        speak=label("按住说话",15);speak.setGravity(Gravity.CENTER);speak.setIncludeFontPadding(false);speak.setLetterSpacing(.02f);speak.setMinHeight(dp(60));speak.setSoundEffectsEnabled(false);
         speak.setOnTouchListener((v,event)->voiceTouch(event));
         speak.setOnClickListener(v->Toast.makeText(activity,"按住说话，松开发送文字",Toast.LENGTH_SHORT).show());
         speak.setOnLongClickListener(v->{startVoice();return true;});
         idle.addView(speak,new LinearLayout.LayoutParams(dp(112),-2));bottom.addView(idle);
-        editing=new LinearLayout(activity);editing.setTag("home_composer");editing.setGravity(Gravity.BOTTOM);editing.setBaselineAligned(false);editing.setPadding(dp(24),0,dp(20),0);editing.setMinimumHeight(dp(44));
+        editing=new LinearLayout(activity);editing.setTag("home_composer");editing.setGravity(Gravity.CENTER_VERTICAL);editing.setBaselineAligned(false);editing.setPadding(dp(24),0,dp(20),0);editing.setMinimumHeight(dp(60));
         input=new EditText(activity);input.setTag("home_input");input.setTextSize(16);input.setHint("跟 Greta 说说…");input.setContentDescription("给 Greta 的消息");
-        input.setBackgroundColor(Color.TRANSPARENT);input.setIncludeFontPadding(false);input.setGravity(Gravity.CENTER_VERTICAL|Gravity.START);input.setPadding(0,dp(6),dp(10),dp(6));
-        input.setMaxLines(2);input.setMinLines(1);input.setMinHeight(dp(44));input.setLineSpacing(dp(3),1f);input.setHorizontallyScrolling(false);
+        input.setBackgroundColor(Color.TRANSPARENT);input.setIncludeFontPadding(false);input.setGravity(Gravity.CENTER_VERTICAL|Gravity.START);input.setPadding(0,dp(10),dp(10),dp(10));
+        input.setMaxLines(2);input.setMinLines(1);input.setMinHeight(dp(60));input.setLineSpacing(dp(3),1f);input.setHorizontallyScrolling(false);
         input.setInputType(android.text.InputType.TYPE_CLASS_TEXT|android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE|android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
         input.setImeOptions(EditorInfo.IME_ACTION_SEND|EditorInfo.IME_FLAG_NO_EXTRACT_UI);input.setText(prefs.getString("draft",""));composing=input.length()>0;
         input.addTextChangedListener(new TextWatcher(){public void beforeTextChanged(CharSequence s,int a,int c,int f){} public void afterTextChanged(Editable e){} public void onTextChanged(CharSequence s,int a,int b,int c){lastInteraction=System.currentTimeMillis();prefs.edit().putString("draft",s.toString()).apply();updateSend();}});
@@ -107,13 +104,13 @@ public final class HomeConversationView extends FrameLayout {
     @Override protected void onMeasure(int width,int height){
         super.onMeasure(width,height);
         // Share the usable space between two non-overlapping zones, including IME frames.
-        int available=Math.max(0,getMeasuredHeight()-getPaddingTop()-getPaddingBottom()-dp(118)-bottom.getMeasuredHeight());
+        int available=Math.max(0,getMeasuredHeight()-getPaddingTop()-getPaddingBottom()-dp(84)-bottom.getMeasuredHeight());
         int gap=Math.min(dp(20),available/6),content=available-2*gap;
         int messages=Math.min(dp(320),Math.round(content*.44f)),stage=content-messages;
         FrameLayout.LayoutParams cp=(FrameLayout.LayoutParams)conversation.getLayoutParams(),pp=(FrameLayout.LayoutParams)petStage.getLayoutParams();
         boolean changed=false;
         if(cp.height!=messages){cp.height=messages;conversation.setLayoutParams(cp);changed=true;}
-        int stageTop=dp(118)+messages+gap;
+        int stageTop=dp(84)+messages+gap;
         if(pp.height!=stage||pp.topMargin!=stageTop){pp.height=stage;pp.topMargin=stageTop;petStage.setLayoutParams(pp);changed=true;}
         if(petView!=null){
             int stageWidth=Math.max(0,getMeasuredWidth()-getPaddingLeft()-getPaddingRight());
@@ -135,7 +132,7 @@ public final class HomeConversationView extends FrameLayout {
     private TextView label(String text,int size){TextView v=new TextView(activity);v.setText(text);v.setTextSize(size);return v;}
     private GradientDrawable surface(int color,int radius){GradientDrawable d=new GradientDrawable();d.setColor(color);d.setCornerRadius(dp(radius));return d;}
     public void setTheme(boolean value){dark=value;int fg=Color.parseColor(dark?"#E5EDE3":"#263C31"),muted=Color.parseColor(dark?"#A5B9AA":"#59715F");
-        for(TextView v:new TextView[]{assistant,user,write,speak,send,result,input})v.setTextColor(fg);state.setTextColor(muted);input.setHintTextColor(muted);
+        for(TextView v:new TextView[]{assistant,user,write,speak,send,input})v.setTextColor(fg);state.setTextColor(muted);input.setHintTextColor(muted);
         assistantCaption.setTextColor(muted);userCaption.setTextColor(muted);
         assistant.setBackground(new ConversationSurface(true,dark,getResources().getDisplayMetrics().density));
         user.setBackground(new ConversationSurface(false,dark,getResources().getDisplayMetrics().density));
@@ -143,7 +140,7 @@ public final class HomeConversationView extends FrameLayout {
         bottom.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,new int[]{Color.TRANSPARENT,Color.parseColor(dark?"#B3101F27":"#CCF1F5EE"),Color.parseColor(dark?"#E6101F27":"#F5F1F5EE")}));
         write.setTextColor(fg);speak.setTextColor(fg);
         send.setTextColor(Color.parseColor(dark?"#102019":"#FFFFFF"));send.setBackground(surface(Color.parseColor(dark?"#8BCB9A":"#327C4E"),22));
-        result.setBackground(surface(Color.parseColor(dark?"#CC243B2E":"#CCDDE8D7"),16));render();
+        render();
     }
     private void restore(){
         List<AssistantStore.Message> messages=store.recentMessages(300);messages.sort((a,b)->a.createdAt==b.createdAt?Long.compare(a.id,b.id):Long.compare(a.createdAt,b.createdAt));String ag=null,ug=null;assistantText="";userText="";
@@ -177,7 +174,6 @@ public final class HomeConversationView extends FrameLayout {
         assistant.setText(assistantText);boolean showAssistant=!waiting()&&pendingGroup==null&&!assistantText.isEmpty();
         assistant.setVisibility(showAssistant?VISIBLE:GONE);assistantCaption.setVisibility(showAssistant?VISIBLE:GONE);
         user.setText(userText);user.setVisibility(userText.isEmpty()?GONE:VISIBLE);userCaption.setVisibility(userText.isEmpty()?GONE:VISIBLE);
-        result.setText("动态 · 查看");result.setVisibility(resultText.isEmpty()?GONE:VISIBLE);
         if(waiting())state.setText(busy&&pendingGroup!=null?"收到补充，接着处理…":"Greta 正在想…");
         else state.setText(pendingGroup==null?"":failureText==null?"尚未发送 · 点击重试":failureText);
         state.setVisibility(state.length()==0?GONE:VISIBLE);updateComposer();updateFeedback();

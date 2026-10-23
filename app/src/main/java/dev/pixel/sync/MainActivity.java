@@ -110,6 +110,7 @@ public class MainActivity extends Activity {
   Switch proactive=new Switch(this);proactive.setText("偶尔主动聊两句");proactive.setTextColor(foreground);proactive.setChecked(getSharedPreferences("home_conversation",0).getBoolean("proactive",true));proactive.setOnCheckedChangeListener((v,checked)->getSharedPreferences("home_conversation",0).edit().putBoolean("proactive",checked).apply());sheet.addView(proactive);
   sheet.addView(menuAction("◷   提醒与最近结果","查看工具结果、完成或延后提醒",()->{menu.dismiss();home.showResults();}));
   menuSection(sheet,"工具");
+  sheet.addView(menuAction("◷   日历","重要日期、农历和大姨妈记录",()->{menu.dismiss();startActivity(DecisionActions.intent(this,"open_calendar",new org.json.JSONObject()));}));
   sheet.addView(menuAction("▤   生活记录","日记与记账，自动保存到手机",()->{menu.dismiss();startActivity(DecisionActions.intent(this,"open_records",new org.json.JSONObject()));}));
   sheet.addView(menuAction("↻   Obsidian 同步","同步你的笔记库",()->{menu.dismiss();startActivity(DecisionActions.intent(this,"open_sync",new org.json.JSONObject()));}));
   sheet.addView(menuAction("▣   打印文件","选择文件或文字并设置打印",()->{menu.dismiss();startActivity(DecisionActions.intent(this,"open_print",new org.json.JSONObject()));}));

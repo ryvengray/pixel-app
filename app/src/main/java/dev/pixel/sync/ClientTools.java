@@ -18,6 +18,7 @@ public final class ClientTools {
         }
     }
     public static boolean valid(String name,JSONObject args){
+        if(CalendarTools.isTool(name))return CalendarTools.valid(name,args);
         if(name.equals("create_life_record"))return LifeRecords.valid(args);
         if(args==null||!(name.equals("open_sync")||name.equals("open_print")||name.equals("open_topics")||name.equals("open_records")))return false;
         for(Iterator<String> keys=args.keys();keys.hasNext();){

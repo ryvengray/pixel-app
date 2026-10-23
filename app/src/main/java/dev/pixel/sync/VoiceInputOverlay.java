@@ -51,11 +51,13 @@ public final class VoiceInputOverlay extends FrameLayout implements RecognitionL
         FrameLayout.LayoutParams cp=new FrameLayout.LayoutParams(dp(120),dp(54),Gravity.BOTTOM|Gravity.LEFT);cp.leftMargin=dp(20);cp.bottomMargin=dp(164);addView(cancel,cp);
         edit=text("编辑文字",15);edit.setGravity(Gravity.CENTER);edit.setContentDescription("停止录音并编辑文字");edit.setOnClickListener(v->{target=2;releaseLocked();});
         FrameLayout.LayoutParams ep=new FrameLayout.LayoutParams(dp(120),dp(54),Gravity.BOTTOM|Gravity.RIGHT);ep.rightMargin=dp(20);ep.bottomMargin=dp(164);addView(edit,ep);
-        stop=text("松开发送",17);stop.setTypeface(android.graphics.Typeface.create("sans-serif-medium",android.graphics.Typeface.NORMAL));stop.setGravity(Gravity.CENTER);stop.setTextColor(Color.rgb(11,35,26));stop.setBackground(new GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT,new int[]{Color.rgb(137,221,165),Color.rgb(94,191,142)}));stop.setContentDescription("停止录音，转写完成后发送文字");stop.setOnClickListener(v->{target=0;releaseLocked();});
-        FrameLayout.LayoutParams bp=new FrameLayout.LayoutParams(-1,dp(64),Gravity.BOTTOM);bp.bottomMargin=dp(80);bp.leftMargin=dp(26);bp.rightMargin=dp(26);addView(stop,bp);
+        stop=text("松开发送",15);stop.setTag("voice_release");stop.setTypeface(android.graphics.Typeface.create("sans-serif-medium",android.graphics.Typeface.NORMAL));stop.setGravity(Gravity.CENTER);stop.setIncludeFontPadding(false);stop.setTextColor(Color.rgb(199,242,215));
+        GradientDrawable releaseBackground=new GradientDrawable();releaseBackground.setColor(0x22378B67);releaseBackground.setCornerRadius(dp(22));releaseBackground.setStroke(dp(1),0x507BB78B);stop.setBackground(releaseBackground);
+        stop.setContentDescription("停止录音，转写完成后发送文字");stop.setOnClickListener(v->{target=0;releaseLocked();});
+        FrameLayout.LayoutParams bp=new FrameLayout.LayoutParams(dp(144),dp(44),Gravity.BOTTOM|Gravity.CENTER_HORIZONTAL);bp.bottomMargin=dp(80);addView(stop,bp);
         setOnApplyWindowInsetsListener((v,insets)->{android.graphics.Insets safe=insets.getInsets(WindowInsets.Type.systemBars()|WindowInsets.Type.displayCutout());setPadding(safe.left,safe.top,safe.right,safe.bottom);return insets;});
     }
-    private TextView text(String value,int size){TextView v=new TextView(activity);v.setText(value);v.setTextSize(size);v.setTextColor(Color.rgb(232,239,233));return v;}
+    private TextView text(String value,int size){TextView v=new TextView(activity);v.setText(value);v.setTextSize(size);v.setSoundEffectsEnabled(false);v.setTextColor(Color.rgb(232,239,233));return v;}
     public void start(){
         if(!SpeechRecognizer.isRecognitionAvailable(activity)){finish("",false,"这台设备暂时没有可用的语音识别服务，请先打字");return;}
         ((android.view.inputmethod.InputMethodManager)activity.getSystemService(Activity.INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(activity.getWindow().getDecorView().getWindowToken(),0);

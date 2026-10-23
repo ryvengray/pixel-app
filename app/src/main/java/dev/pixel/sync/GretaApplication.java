@@ -10,6 +10,7 @@ import java.util.IdentityHashMap;
 public final class GretaApplication extends Application {
     @Override public void onCreate(){
         super.onCreate();
+        CalendarUpdates.changed(this);
         registerActivityLifecycleCallbacks(new ActivityLifecycleCallbacks(){
             private final IdentityHashMap<Activity,ViewTreeObserver.OnGlobalLayoutListener> listeners=new IdentityHashMap<>();
             @Override public void onActivityPostCreated(Activity activity,Bundle state){

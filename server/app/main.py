@@ -146,7 +146,9 @@ class ChatRequest(BaseModel):
     timezone: str = Field(default="Asia/Shanghai", max_length=80)
     client_message_id: str | None = Field(default=None, min_length=8, max_length=100)
     decision_enabled: bool = False
-    client_tools: list[Literal["open_sync", "open_print", "open_topics", "create_life_record", "open_records"]] = Field(default_factory=list, max_length=5)
+    client_tools: list[Literal["open_sync", "open_print", "open_topics", "create_life_record", "open_records", "open_calendar", "query_calendar", "save_special_date", "delete_special_date", "get_cycle_summary", "save_cycle_record", "delete_cycle_record", "update_cycle_settings", "update_calendar_preferences", "undo_calendar_operation", "list_calendar_widgets", "configure_calendar_widget"]] = Field(default_factory=list, max_length=25)
+    client_tool_result: dict[str, Any] | None = None
+    original_message_id: str | None = Field(default=None, exclude=True)
     suppressed_topic_ids: list[str] = Field(default_factory=list, max_length=200)
 
 
@@ -236,6 +238,8 @@ TOOLS = [
 # UI preparation is safe; printing still requires the existing page's Print button.
 CLIENT_TOOLS = json.loads((Path(__file__).parent / "client_assets" / "tools.json").read_text(encoding="utf-8"))
 CLIENT_TOOL_NAMES = {tool["function"]["name"] for tool in CLIENT_TOOLS}
+CALENDAR_TOOL_NAMES = {"open_calendar", "query_calendar", "save_special_date", "delete_special_date", "get_cycle_summary", "save_cycle_record", "delete_cycle_record", "update_cycle_settings", "update_calendar_preferences", "undo_calendar_operation", "list_calendar_widgets", "configure_calendar_widget"}
+LOCAL_CALENDAR_TOOLS = CALENDAR_TOOL_NAMES - {"open_calendar"}
 EXECUTION_TOOLS = [*TOOLS, *CLIENT_TOOLS]
 SCHEMAS = {t["function"]["name"]: t["function"]["parameters"] for t in EXECUTION_TOOLS}
 
@@ -249,6 +253,8 @@ async def route_request(request: ChatRequest) -> Decision:
     if request.messages[-1].role != "user" or (len(request.messages) > 1 and request.messages[-2].role == "user"):
         return fallback("conversation_context")
     text = request.messages[-1].content
+    if any(name in CALENDAR_TOOL_NAMES for name in request.client_tools) and any(word in turn.content for turn in request.messages[-6:] for word in ("日历", "农历", "生日", "纪念日", "大姨妈", "月经", "经期", "排卵", "倒数")):
+        return fallback("calendar_context")
     if len(text) > 2000:
         return fallback("long_input")
     if non_action(text):
@@ -282,7 +288,7 @@ async def routed_reply(request: ChatRequest) -> dict[str, Any]:
     if decision.type == "DIRECT_TOOL":
         if decision.tool in request.client_tools:
             return {"content": "已准备打开对应功能。", "memory_changes": [], "tool_results": [],
-                    "client_action": {"name": decision.tool, "arguments": {}, "id": request.client_message_id},
+                    "client_action": {"name": decision.tool, "arguments": {}, "id": request.original_message_id or request.client_message_id},
                     "decision": decision.model_dump()}
         result = await run_tool(decision.tool, {})
         return {"content": "当前没有待办提醒。" if not result["reminders"] else "已读取待办提醒。",
@@ -301,7 +307,7 @@ def system_prompt(user_timezone: str, include_topics: bool = True, excluded_topi
         current = utc_now()
     return f"""You are Greta, a warm concise personal assistant. The user time zone is {user_timezone}. Current date and time: {current}.
 The user talks to you through a pet's speech bubble on the home screen. Keep replies natural and concise; put tool results in tools rather than repeating long output. Consecutive user messages can be supplements or corrections; consider them together before taking action.
-Only claim an action succeeded when its tool result confirms success. Never claim an unavailable tool ran.
+Only claim an action succeeded when its tool result confirms success. Never claim an unavailable tool ran. Calendar tools run on the phone and return real results. Query records before editing to obtain exact ids and expected_revision. Treat 大姨妈 predictions separately from actual records; never claim safe days, diagnose, or store these facts in general memory. Use 大姨妈 in user-facing wording, not 经期. Never call calendar mutations for hypothetical questions; only explicit user changes. For birthdays given only as month/day, use year_known=false with month/day; do not invent a birth year or age.
 Use memories only when relevant; they may be outdated and the user's correction wins. Do not mention hidden memory unless useful.
 For a stable, explicit preference or fact, call save_memory. Do not infer personality from one event and do not save sensitive information. Upcoming events and temporary worries belong to time-bounded topics, not stable memory. Topic extraction happens asynchronously after the reply; do not claim a new topic is already saved or a follow-up scheduled unless a successful tool result confirms it.
 For a requested reminder with an unambiguous date/time, call create_reminder. If the time is unclear, ask a short follow-up.
@@ -395,7 +401,7 @@ async def agent_reply(request: ChatRequest, decision: Decision | None = None) ->
         "changes": [], "tool_results": [], "step": 0, "pending": [], "call_index": 0,
         "decision": decision.model_dump() if decision else None,
         "allowed_tools": ([decision.tool] if decision and decision.type == "TOOL_WITH_LLM" else
-                          [] if decision and decision.reason == "non_action" else
+                          [name for name in request.client_tools if name in CALENDAR_TOOL_NAMES] if decision and decision.reason == "non_action" else
                           [t["function"]["name"] for t in TOOLS] +
                           [name for name in request.client_tools if name in CLIENT_TOOL_NAMES]),
     }
@@ -412,15 +418,33 @@ async def agent_reply(request: ChatRequest, decision: Decision | None = None) ->
             with connect() as db:
                 db.execute("INSERT OR REPLACE INTO chat_checkpoint(id,state) VALUES(?,?)", (request.client_message_id, json.dumps(state, ensure_ascii=False)))
 
+    waiting = state.get("waiting_client")
+    if waiting:
+        incoming = request.client_tool_result
+        if not incoming:
+            return {"content": "等待手机日历工具。", "memory_changes": [], "tool_results": [], "pending_client": True, "client_action": waiting["action"]}
+        if incoming.get("operation_id") in state.get("accepted_client_operations", []):
+            return {"content": "等待手机日历工具。", "memory_changes": [], "tool_results": [], "pending_client": True, "client_action": waiting["action"]}
+        if incoming.get("operation_id") != waiting["operation_id"] or incoming.get("name") != waiting["name"] or not isinstance(incoming.get("result"), dict):
+            raise HTTPException(409, "Calendar tool result does not match the pending call")
+        result = incoming["result"]
+        if len(json.dumps(result, ensure_ascii=False)) > 300000:
+            raise HTTPException(413, "Calendar tool result too large")
+        state["messages"].append({"role": "tool", "tool_call_id": waiting["call_id"], "content": json.dumps(result, ensure_ascii=False)})
+        state["tool_results"].append({"name": waiting["name"], "summary": result.get("summary", "日历操作已完成" if result.get("ok") else result.get("error", "日历操作未完成"))})
+        state["call_index"] = waiting["index"] + 1
+        state["used_calendar"] = True
+        state.setdefault("accepted_client_operations", []).append(waiting["operation_id"])
+        del state["waiting_client"]
     checkpoint()
     allowed = state.get("allowed_tools", [t["function"]["name"] for t in TOOLS])
     available = [t for t in EXECUTION_TOOLS if t["function"]["name"] in allowed]
-    while state["step"] < 4:
+    while state["step"] < 8:
         if not state["pending"]:
             assistant = await deepseek(state["messages"], available)
             calls = assistant.get("tool_calls") or []
             if not calls:
-                return {"content": assistant.get("content") or "", "memory_changes": state["changes"], "tool_results": state["tool_results"], "decision": state.get("decision")}
+                return {"content": assistant.get("content") or "", "memory_changes": state["changes"], "tool_results": state["tool_results"], "decision": state.get("decision"), "used_calendar": state.get("used_calendar", False)}
             state["messages"].append(assistant)
             state["pending"] = calls
             state["call_index"] = 0
@@ -436,7 +460,17 @@ async def agent_reply(request: ChatRequest, decision: Decision | None = None) ->
                 if name not in allowed:
                     raise ValueError("Tool is not allowed for this turn")
                 if name in CLIENT_TOOL_NAMES:
-                    if name not in request.client_tools or non_action(request.messages[-1].content) or len(calls) != 1:
+                    if name in LOCAL_CALENDAR_TOOLS:
+                        if name not in request.client_tools or not request.client_message_id:
+                            raise ValueError("Local calendar capability missing")
+                        errors = list(Draft202012Validator(SCHEMAS[name], format_checker=FormatChecker()).iter_errors(args))
+                        if errors:
+                            raise ValueError("Invalid calendar parameters")
+                        action = {"name": name, "arguments": args, "id": request.original_message_id or request.client_message_id, "operation_id": operation}
+                        state["waiting_client"] = {"action": action, "name": name, "operation_id": operation, "call_id": call["id"], "index": index}
+                        checkpoint()
+                        return {"content": "等待手机日历工具。", "memory_changes": [], "tool_results": [], "pending_client": True, "client_action": action}
+                    if name not in request.client_tools or (non_action(request.messages[-1].content) and name != "open_calendar") or len(calls) != 1:
                         raise ValueError("Local tools require an explicit user command and client capability")
                     if name == "create_life_record" and not record_intent(request.messages[-1].content):
                         raise ValueError("Saving a life record requires an explicit request to record it")
@@ -447,7 +481,9 @@ async def agent_reply(request: ChatRequest, decision: Decision | None = None) ->
                         raise ValueError("Invalid local tool parameters; preserve explicit text and clarify unsupported options")
                     return {"content": "等待手机保存记录。" if name == "create_life_record" else "已准备打开本地工具，请在工具中确认操作。", "memory_changes": state["changes"],
                             "tool_results": state["tool_results"], "decision": state.get("decision"),
-                            "client_action": {"name": name, "arguments": args, "id": request.client_message_id}}
+                            "client_action": {"name": name, "arguments": args, "id": request.original_message_id or request.client_message_id}}
+                if name == "save_memory" and (state.get("used_calendar") or any(word in turn.content for turn in request.messages[-6:] for word in ("大姨妈", "月经", "排卵", "经期"))):
+                    raise ValueError("Calendar health facts must not be stored in general memory")
                 result = await run_tool(name, args, operation)
                 success = result.get("ok") in (True, "true")
                 if success and state.get("decision") and state["decision"]["type"] == "TOOL_WITH_LLM":
@@ -483,7 +519,7 @@ async def agent_reply(request: ChatRequest, decision: Decision | None = None) ->
         state["step"] += 1
         state["pending"] = []
         checkpoint()
-    return {"content": "已完成的操作请查看结果，我暂时没能整理好回复。", "memory_changes": state["changes"], "tool_results": state["tool_results"], "decision": state.get("decision")}
+    return {"content": "已完成的操作请查看结果，我暂时没能整理好回复。", "memory_changes": state["changes"], "tool_results": state["tool_results"], "decision": state.get("decision"), "used_calendar": state.get("used_calendar", False)}
 
 
 def put_inbox(title: str, body: str) -> str:
@@ -586,20 +622,31 @@ async def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.post("/v1/chat", dependencies=[Depends(require_device)])
-async def chat(request: ChatRequest) -> dict[str, Any]:
+@app.post("/v1/chat")
+async def chat(request: ChatRequest, device=Depends(require_device)) -> dict[str, Any]:
+    request.original_message_id = request.client_message_id
     if not request.client_message_id:
         return await routed_reply(request)
+    # Namespace checkpoints and cached results by the authenticated device.
+    request.client_message_id = hashlib.sha256((str(device["id"]) + ":" + request.client_message_id).encode()).hexdigest()
     # A stable request key survives retries; never replay a successfully completed turn.
     async with chat_lock:
         with connect() as db:
             cached = db.execute("SELECT response FROM chat_response WHERE id=?", (request.client_message_id,)).fetchone()
         if cached:
             return json.loads(cached["response"])
+        if request.client_tool_result:
+            with connect() as db:
+                checkpoint = db.execute("SELECT 1 FROM chat_checkpoint WHERE id=?", (request.client_message_id,)).fetchone()
+            if not checkpoint:
+                raise HTTPException(409, "No pending calendar request")
         response = await routed_reply(request)
+        if response.get("pending_client"):
+            return response
         with connect() as db:
             db.execute("INSERT INTO chat_response(id,response,created_at) VALUES(?,?,?)", (request.client_message_id, json.dumps(response, ensure_ascii=False), utc_now()))
-            topics.enqueue(db, request.client_message_id, request.messages, request.timezone)
+            if not response.get("used_calendar") and not any(word in request.messages[-1].content for word in ("大姨妈", "经期", "月经", "排卵")):
+                topics.enqueue(db, request.client_message_id, request.messages, request.timezone)
             db.execute("DELETE FROM chat_checkpoint WHERE id=?", (request.client_message_id,))
         return response
 
