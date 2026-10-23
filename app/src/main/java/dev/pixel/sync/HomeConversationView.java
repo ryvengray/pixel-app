@@ -307,7 +307,7 @@ public final class HomeConversationView extends FrameLayout {
     private boolean voiceTouch(android.view.MotionEvent event){
         if(event.getActionMasked()==MotionEvent.ACTION_DOWN){touching=true;voiceAttempted=false;speak.getParent().requestDisallowInterceptTouchEvent(true);speak.setScaleX(.94f);speak.setScaleY(.94f);speak.setAlpha(.72f);touchStartX=event.getRawX();touchStartY=event.getRawY();lastInteraction=System.currentTimeMillis();main.postDelayed(beginVoice,500);return true;}
         if(event.getActionMasked()==MotionEvent.ACTION_MOVE){float dx=event.getRawX()-touchStartX,dy=event.getRawY()-touchStartY;if(voice==null&&Math.abs(dy)>dp(20))touching=false;if(voice!=null)voice.move(event.getRawX(),event.getRawY());return true;}
-        if(event.getActionMasked()==MotionEvent.ACTION_UP){main.removeCallbacks(beginVoice);touching=false;resetVoicePress();if(voice!=null)voice.release(event.getRawX(),event.getRawY());else if(!voiceAttempted)speak.performClick();return true;}
+        if(event.getActionMasked()==MotionEvent.ACTION_UP){main.removeCallbacks(beginVoice);touching=false;resetVoicePress();if(voice!=null)voice.release();else if(!voiceAttempted)speak.performClick();return true;}
         if(event.getActionMasked()==MotionEvent.ACTION_CANCEL){main.removeCallbacks(beginVoice);touching=false;resetVoicePress();if(voice!=null)voice.interrupt();return true;}return true;
     }
     private void startVoice(){if(voice!=null)return;voiceAttempted=true;

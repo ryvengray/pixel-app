@@ -11,13 +11,10 @@ if [[ ! -f server/.env ]]; then
   exit 1
 fi
 
-services=(greta-service)
-if [[ -n "$("${compose[@]}" ps --all --quiet pixel-decision)" ]]; then
-  services+=(pixel-decision)
-fi
+services=(greta-data-permissions greta-service pixel-decision)
 
-printf 'Restarting: %s\n' "${services[*]}"
-"${compose[@]}" restart "${services[@]}"
+printf 'Building and deploying: %s\n' "${services[*]}"
+"${compose[@]}" up -d --build "${services[@]}"
 
 printf '\nFollowing logs (Ctrl+C to stop): %s\n' "${services[*]}"
 "${compose[@]}" logs --follow --tail=100 "${services[@]}"

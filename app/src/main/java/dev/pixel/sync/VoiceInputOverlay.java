@@ -101,7 +101,7 @@ public final class VoiceInputOverlay extends FrameLayout implements RecognitionL
             }
         };
         fan.setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);addView(fan,new FrameLayout.LayoutParams(-1,-1));
-        cancel=text("取消",12);cancel.setCompoundDrawables(null,new ActionIcon(false),null,null);cancel.setCompoundDrawablePadding(dp(5));cancel.setGravity(Gravity.CENTER);cancel.setContentDescription("取消录音，不发送");cancel.setOnClickListener(v->finish("",false,null));
+        cancel=text("取消",12);cancel.setCompoundDrawables(null,new ActionIcon(false),null,null);cancel.setCompoundDrawablePadding(dp(5));cancel.setGravity(Gravity.CENTER);cancel.setContentDescription("取消录音，不发送");cancel.setOnClickListener(v->{target=1;releaseLocked();});
         FrameLayout.LayoutParams cp=new FrameLayout.LayoutParams(dp(76),dp(66),Gravity.BOTTOM|Gravity.LEFT);cp.leftMargin=dp(20);cp.bottomMargin=dp(164);addView(cancel,cp);
         edit=text("编辑",12);edit.setCompoundDrawables(null,new ActionIcon(true),null,null);edit.setCompoundDrawablePadding(dp(5));edit.setGravity(Gravity.CENTER);edit.setContentDescription("停止录音并编辑文字");edit.setOnClickListener(v->{target=2;releaseLocked();});
         FrameLayout.LayoutParams ep=new FrameLayout.LayoutParams(dp(76),dp(66),Gravity.BOTTOM|Gravity.RIGHT);ep.rightMargin=dp(20);ep.bottomMargin=dp(164);addView(edit,ep);
@@ -308,7 +308,11 @@ public final class VoiceInputOverlay extends FrameLayout implements RecognitionL
         updateFeedback(cancelDistance,editDistance);fan.invalidate();
         stop.setText(target==1?"松开取消":target==2?"松开编辑":"松开发送");
     }
-    public void release(float x,float y){if(released||finished)return;move(x,y);releaseLocked();}
+    public void release(){if(released||finished)return;
+        // Commit exactly the action already shown to the user. Lift-off jitter
+        // must not turn a visibly selected cancellation back into a send.
+        releaseLocked();
+    }
     private void releaseLocked(){if(released||finished)return;released=true;
         main.removeCallbacks(restart);main.removeCallbacks(startupTimeout);
         if(target==1){finish("",false,null);return;}
@@ -317,7 +321,10 @@ public final class VoiceInputOverlay extends FrameLayout implements RecognitionL
         try{recognizer.stopListening();}catch(Exception e){fail("识别未完成，已有文字已保留");}
     }
     public void interrupt(){if(!finished){String all=(committed+" "+partial).trim();finish(all,true,all.isEmpty()?null:"录音已中断，文字已保留");}}
-    private void finish(String text,boolean editText,String message){if(finished)return;finished=true;main.removeCallbacksAndMessages(null);fan.removeCallbacks(feedbackFrame);feedbackAnimating=false;closeRecognizer();
+    private void finish(String text,boolean editText,String message){if(finished)return;
+        // Cancellation wins over late recognition errors, timeouts and interruptions.
+        if(target==1){text="";editText=false;message=null;}
+        finished=true;main.removeCallbacksAndMessages(null);fan.removeCallbacks(feedbackFrame);feedbackAnimating=false;closeRecognizer();
         if(getParent() instanceof android.view.ViewGroup)((android.view.ViewGroup)getParent()).removeView(this);
         activity.getWindow().setStatusBarColor(oldStatus);activity.getWindow().setNavigationBarColor(oldNavigation);WindowInsetsController bars=activity.getWindow().getInsetsController();if(bars!=null)bars.setSystemBarsAppearance(oldAppearance,WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS|WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS);
         if(message!=null)Toast.makeText(activity,message,Toast.LENGTH_LONG).show();if(!text.trim().isEmpty())listener.completed(text.trim(),editText);else listener.dismissed();
