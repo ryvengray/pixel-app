@@ -100,6 +100,9 @@ docker compose exec greta-service python -m app.pairing
 docker compose ps
 docker compose logs -f greta-service
 
+# 重启 Greta；如果 Decision Engine 容器已创建，也会一起重启
+./scripts/restart-containers.sh
+
 # 更新代码后的重建与重启
 docker compose up -d --build
 

@@ -63,7 +63,7 @@ public final class VoiceInputOverlay extends FrameLayout implements RecognitionL
         FrameLayout.LayoutParams sp=new FrameLayout.LayoutParams(dp(156),dp(36),Gravity.TOP|Gravity.RIGHT);sp.topMargin=dp(24);sp.rightMargin=dp(28);addView(status,sp);
         transcript=text("说说你的想法…",27);transcript.setTextColor(muted);transcript.setGravity(Gravity.TOP|Gravity.START);transcript.setTextIsSelectable(false);transcript.setLineSpacing(dp(9),1f);transcript.setIncludeFontPadding(false);transcript.setPadding(0,dp(10),0,dp(20));
         transcriptScroll=new ScrollView(activity);transcriptScroll.setVerticalScrollBarEnabled(false);transcriptScroll.setOverScrollMode(OVER_SCROLL_NEVER);transcriptScroll.addView(transcript);
-        FrameLayout.LayoutParams textParams=new FrameLayout.LayoutParams(-1,-1);textParams.leftMargin=dp(28);textParams.rightMargin=dp(28);textParams.topMargin=dp(116);textParams.bottomMargin=dp(282);addView(transcriptScroll,textParams);
+        FrameLayout.LayoutParams textParams=new FrameLayout.LayoutParams(-1,-1);textParams.leftMargin=dp(28);textParams.rightMargin=dp(28);textParams.topMargin=dp(116);textParams.bottomMargin=dp(316);addView(transcriptScroll,textParams);
         waveform=new Waveform(activity,accent);FrameLayout.LayoutParams wp=new FrameLayout.LayoutParams(dp(112),dp(24),Gravity.TOP|Gravity.LEFT);wp.leftMargin=dp(28);wp.topMargin=dp(76);addView(waveform,wp);
 
         fan=new View(activity){
@@ -119,7 +119,7 @@ public final class VoiceInputOverlay extends FrameLayout implements RecognitionL
         originX=Float.isNaN(holdRawX)?getWidth()-getPaddingRight()-dp(72):holdRawX-location[0];
         originY=Float.isNaN(holdRawY)?getHeight()-getPaddingBottom()-dp(30):holdRawY-location[1];
         // Both targets share one radius around the original finger position.
-        fanRadius=Math.max(dp(80),Math.min(dp(152),Math.min((originX-getPaddingLeft()-dp(58))/.94f,(originY-getPaddingTop()-dp(120))/.94f)));
+        fanRadius=Math.max(dp(80),Math.min(dp(184),Math.min((originX-getPaddingLeft()-dp(72))/.94f,(originY-getPaddingTop()-dp(120))/.94f)));
         cancelX=originX-(float)Math.cos(Math.toRadians(20))*fanRadius;
         cancelY=originY-(float)Math.sin(Math.toRadians(20))*fanRadius;
         editX=originX-(float)Math.sin(Math.toRadians(20))*fanRadius;
@@ -154,9 +154,15 @@ public final class VoiceInputOverlay extends FrameLayout implements RecognitionL
         cancel.setText(target==1?"取消 ✓":"取消");edit.setText(target==2?"编辑 ✓":"编辑");
     }
     private void drawTargetBoundary(Canvas canvas,Paint paint,float x,float y,int color,float progress){
-        paint.setShader(null);paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(dp(1)*(1+progress));
-        paint.setColor(alpha(color,.2f+.7f*progress));
-        canvas.drawCircle(x,y,dp(52)+dp(10)*progress,paint);
+        float radius=dp(52)+dp(10)*progress,feather=dp(10),outer=radius+feather;
+        paint.setStyle(Paint.Style.FILL);paint.setColor(Color.WHITE);
+        // A translucent radial band feathers both edges without a hard neon outline.
+        paint.setShader(new RadialGradient(x,y,outer,
+            new int[]{alpha(color,0),alpha(color,0),alpha(color,(dark?.12f:.09f)+.16f*progress),alpha(color,0)},
+            new float[]{0,(radius-feather)/outer,radius/outer,1},Shader.TileMode.CLAMP));
+        canvas.drawCircle(x,y,outer,paint);paint.setShader(null);
+        paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(Math.max(1,dp(1)*.65f));
+        paint.setColor(alpha(color,.08f+.24f*progress));canvas.drawCircle(x,y,radius,paint);
     }
     private static int blend(int from,int to,float progress){
         float t=Math.max(0,Math.min(1,progress));
