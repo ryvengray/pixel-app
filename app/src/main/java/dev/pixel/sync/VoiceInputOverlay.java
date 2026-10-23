@@ -2,6 +2,8 @@ package dev.pixel.sync;
 
 import android.app.Activity;
 import android.content.Intent;
+import android.content.res.Configuration;
+import android.graphics.drawable.Drawable;
 import android.graphics.*;
 import android.graphics.drawable.GradientDrawable;
 import android.os.*;
@@ -22,8 +24,16 @@ public final class VoiceInputOverlay extends FrameLayout implements RecognitionL
     private String committed="";
     private final Waveform waveform;
     private final View fan;
+    private final ScrollView transcriptScroll;
+    private final boolean dark;
+    private final int ink,muted,accent;
     private float holdRawX=Float.NaN,holdRawY=Float.NaN,originX,originY,fanRadius;
     private float cancelX,cancelY,editX,editY;
+    private float cancelProgress,editProgress,cancelGoal,editGoal;
+    private final GradientDrawable cancelSurface=new GradientDrawable(),editSurface=new GradientDrawable();
+    private boolean feedbackAnimating;
+    private long feedbackTime;
+    private final Runnable feedbackFrame=this::animateFeedback;
     private boolean ready,released,finished,listening,onDevice,fallbackUsed;
     private int generation,recoveries;
     private final Runnable restart=this::listenAgain;
@@ -39,39 +49,52 @@ public final class VoiceInputOverlay extends FrameLayout implements RecognitionL
     private int dp(float n){return Math.round(n*getResources().getDisplayMetrics().density);}
     public VoiceInputOverlay(Activity activity,Listener listener){
         super(activity);this.activity=activity;this.listener=listener;
+        int theme=activity.getSharedPreferences("home",0).getInt("theme",0);
+        dark=theme==2||(theme==0&&(getResources().getConfiguration().uiMode&Configuration.UI_MODE_NIGHT_MASK)==Configuration.UI_MODE_NIGHT_YES);
+        ink=dark?0xFFE6EEF3:0xFF192F3C;muted=dark?0xFF8095A5:0xFF607784;accent=dark?0xFF8CDCD8:0xFF187675;
         oldStatus=activity.getWindow().getStatusBarColor();oldNavigation=activity.getWindow().getNavigationBarColor();WindowInsetsController bars=activity.getWindow().getInsetsController();oldAppearance=bars==null?0:bars.getSystemBarsAppearance();
-        GradientDrawable back=new GradientDrawable(GradientDrawable.Orientation.TL_BR,new int[]{Color.rgb(8,15,30),Color.rgb(10,25,35),Color.rgb(7,12,24)});setBackground(back);setClickable(true);setElevation(dp(50));setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_YES);
-        TextView heading=text("语音输入",22);heading.setTypeface(android.graphics.Typeface.create("sans-serif-medium",android.graphics.Typeface.NORMAL));FrameLayout.LayoutParams hp=new FrameLayout.LayoutParams(-2,-2,Gravity.TOP|Gravity.CENTER_HORIZONTAL);hp.topMargin=dp(54);addView(heading,hp);
-        TextView hint=text("按住说话 · 松开发送",13);hint.setTextColor(Color.rgb(155,177,183));FrameLayout.LayoutParams htp=new FrameLayout.LayoutParams(-2,-2,Gravity.TOP|Gravity.CENTER_HORIZONTAL);htp.topMargin=dp(88);addView(hint,htp);
-        transcript=text("开始说话，识别出的文字会显示在这里",21);transcript.setTextColor(Color.rgb(156,177,179));transcript.setPadding(dp(22),dp(22),dp(22),dp(22));transcript.setGravity(Gravity.TOP|Gravity.START);transcript.setTextIsSelectable(false);transcript.setLineSpacing(dp(7),1f);
-        GradientDrawable transcriptCard=new GradientDrawable();transcriptCard.setColor(0x55374852);transcriptCard.setCornerRadius(dp(24));transcriptCard.setStroke(dp(1),0x557D9BA2);transcript.setBackground(transcriptCard);
-        ScrollView scroll=new ScrollView(activity);scroll.setClipToPadding(false);scroll.addView(transcript);FrameLayout.LayoutParams textParams=new FrameLayout.LayoutParams(-1,-1);textParams.leftMargin=dp(22);textParams.rightMargin=dp(22);textParams.topMargin=dp(142);textParams.bottomMargin=dp(370);addView(scroll,textParams);
-        status=text("正在连接语音服务…",14);status.setGravity(Gravity.CENTER);status.setTextColor(Color.rgb(190,211,209));FrameLayout.LayoutParams sp=new FrameLayout.LayoutParams(-1,dp(36),Gravity.BOTTOM);sp.bottomMargin=dp(316);addView(status,sp);
-        waveform=new Waveform(activity);FrameLayout.LayoutParams wp=new FrameLayout.LayoutParams(dp(220),dp(58),Gravity.BOTTOM|Gravity.CENTER_HORIZONTAL);wp.bottomMargin=dp(352);addView(waveform,wp);
+        GradientDrawable back=new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,new int[]{dark?0xFF090F17:0xFFF4F8FA,dark?0xFF101E29:0xFFEAF2F5});
+        setBackground(back);setClickable(true);setElevation(dp(50));setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_YES);
+        TextView heading=text("GRETA  /  VOICE",11);heading.setTextColor(muted);heading.setLetterSpacing(.14f);
+        FrameLayout.LayoutParams hp=new FrameLayout.LayoutParams(-2,dp(36),Gravity.TOP|Gravity.LEFT);hp.leftMargin=dp(28);hp.topMargin=dp(24);heading.setGravity(Gravity.CENTER_VERTICAL);addView(heading,hp);
+        status=text("正在连接…",11);status.setTextColor(muted);status.setGravity(Gravity.CENTER_VERTICAL|Gravity.RIGHT);status.setSingleLine(true);
+        FrameLayout.LayoutParams sp=new FrameLayout.LayoutParams(dp(156),dp(36),Gravity.TOP|Gravity.RIGHT);sp.topMargin=dp(24);sp.rightMargin=dp(28);addView(status,sp);
+        transcript=text("说说你的想法…",27);transcript.setTextColor(muted);transcript.setGravity(Gravity.TOP|Gravity.START);transcript.setTextIsSelectable(false);transcript.setLineSpacing(dp(9),1f);transcript.setIncludeFontPadding(false);transcript.setPadding(0,dp(10),0,dp(20));
+        transcriptScroll=new ScrollView(activity);transcriptScroll.setVerticalScrollBarEnabled(false);transcriptScroll.setOverScrollMode(OVER_SCROLL_NEVER);transcriptScroll.addView(transcript);
+        FrameLayout.LayoutParams textParams=new FrameLayout.LayoutParams(-1,-1);textParams.leftMargin=dp(28);textParams.rightMargin=dp(28);textParams.topMargin=dp(116);textParams.bottomMargin=dp(282);addView(transcriptScroll,textParams);
+        waveform=new Waveform(activity,accent);FrameLayout.LayoutParams wp=new FrameLayout.LayoutParams(dp(144),dp(34),Gravity.BOTTOM|Gravity.LEFT);wp.leftMargin=dp(28);wp.bottomMargin=dp(234);addView(waveform,wp);
+        TextView hint=text("松开发送 · 滑动选择操作",12);hint.setTextColor(muted);FrameLayout.LayoutParams htp=new FrameLayout.LayoutParams(-2,dp(24),Gravity.BOTTOM|Gravity.LEFT);htp.leftMargin=dp(28);htp.bottomMargin=dp(200);addView(hint,htp);
         fan=new View(activity){
             private final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);
-            private final Path path=new Path();
             @Override protected void onDraw(Canvas canvas){
                 if(fanRadius<=0)return;
                 RectF circle=new RectF(originX-fanRadius,originY-fanRadius,originX+fanRadius,originY+fanRadius);
-                path.reset();path.moveTo(originX,originY);path.arcTo(circle,200,50,false);path.close();
-                paint.setStyle(Paint.Style.FILL);paint.setColor(0x123C9275);canvas.drawPath(path,paint);
-                paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(dp(1));paint.setColor(0x557FA99E);
-                canvas.drawArc(circle,200,50,false,paint);
-                paint.setColor(target==1?0xAAFF9EAA:target==2?0xAAACE9C2:0x447FA99E);
+                int cancelColor=dark?0xFFFFA7B1:0xFFA9475B;
+                drawHalo(canvas,paint,cancelX,cancelY-dp(7),cancelColor,cancelProgress);
+                drawHalo(canvas,paint,editX,editY-dp(7),accent,editProgress);
+                int base=dark?0x267EA3B6:0x303B697D;
+                paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(Math.max(1,dp(1)*.65f));paint.setColor(Color.WHITE);
+                paint.setShader(new SweepGradient(originX,originY,new int[]{base,blend(base,alpha(cancelColor,.8f),cancelProgress),blend(base,alpha(accent,.8f),editProgress),base},new float[]{0,200/360f,250/360f,1}));
+                canvas.drawArc(circle,200,50,false,paint);paint.setShader(null);
+                float strength=Math.max(cancelProgress,editProgress);
+                int tint=blend(accent,cancelColor,cancelProgress/Math.max(.001f,cancelProgress+editProgress));
+                paint.setColor(blend(dark?0x557FAAB7:0x55457285,tint,strength));
                 canvas.drawCircle(originX,originY,dp(27),paint);
-                if(target!=0)canvas.drawLine(originX,originY,target==1?cancelX:editX,target==1?cancelY:editY,paint);
+                paint.setStyle(Paint.Style.FILL);paint.setColor(alpha(tint,.05f+.09f*strength));
+                canvas.drawCircle(originX,originY,dp(23),paint);
+                paint.setColor(alpha(cancelColor,cancelProgress));canvas.drawCircle(cancelX,cancelY-dp(8),dp(2),paint);
+                paint.setColor(alpha(accent,editProgress));canvas.drawCircle(editX,editY-dp(8),dp(2),paint);
             }
         };
         fan.setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);addView(fan,new FrameLayout.LayoutParams(-1,-1));
-        cancel=text("取消录音",15);cancel.setGravity(Gravity.CENTER);cancel.setContentDescription("取消录音，不发送");cancel.setOnClickListener(v->finish("",false,null));
-        FrameLayout.LayoutParams cp=new FrameLayout.LayoutParams(dp(96),dp(52),Gravity.BOTTOM|Gravity.LEFT);cp.leftMargin=dp(20);cp.bottomMargin=dp(164);addView(cancel,cp);
-        edit=text("编辑文字",15);edit.setGravity(Gravity.CENTER);edit.setContentDescription("停止录音并编辑文字");edit.setOnClickListener(v->{target=2;releaseLocked();});
-        FrameLayout.LayoutParams ep=new FrameLayout.LayoutParams(dp(96),dp(52),Gravity.BOTTOM|Gravity.RIGHT);ep.rightMargin=dp(20);ep.bottomMargin=dp(164);addView(edit,ep);
-        stop=text("松开发送",15);stop.setTag("voice_release");stop.setTypeface(android.graphics.Typeface.create("sans-serif-medium",android.graphics.Typeface.NORMAL));stop.setGravity(Gravity.CENTER);stop.setIncludeFontPadding(false);stop.setTextColor(Color.rgb(199,242,215));
-        GradientDrawable releaseBackground=new GradientDrawable();releaseBackground.setColor(0x22378B67);releaseBackground.setCornerRadius(dp(22));releaseBackground.setStroke(dp(1),0x507BB78B);stop.setBackground(releaseBackground);
+        cancel=text("取消",12);cancel.setCompoundDrawables(null,new ActionIcon(false),null,null);cancel.setCompoundDrawablePadding(dp(5));cancel.setGravity(Gravity.CENTER);cancel.setContentDescription("取消录音，不发送");cancel.setOnClickListener(v->finish("",false,null));
+        FrameLayout.LayoutParams cp=new FrameLayout.LayoutParams(dp(76),dp(66),Gravity.BOTTOM|Gravity.LEFT);cp.leftMargin=dp(20);cp.bottomMargin=dp(164);addView(cancel,cp);
+        edit=text("编辑",12);edit.setCompoundDrawables(null,new ActionIcon(true),null,null);edit.setCompoundDrawablePadding(dp(5));edit.setGravity(Gravity.CENTER);edit.setContentDescription("停止录音并编辑文字");edit.setOnClickListener(v->{target=2;releaseLocked();});
+        FrameLayout.LayoutParams ep=new FrameLayout.LayoutParams(dp(76),dp(66),Gravity.BOTTOM|Gravity.RIGHT);ep.rightMargin=dp(20);ep.bottomMargin=dp(164);addView(edit,ep);
+        stop=text("松开发送",12);stop.setTag("voice_release");stop.setTypeface(android.graphics.Typeface.create("sans-serif-medium",android.graphics.Typeface.NORMAL));stop.setGravity(Gravity.CENTER);stop.setIncludeFontPadding(false);stop.setTextColor(accent);
+
         stop.setContentDescription("停止录音，转写完成后发送文字");stop.setOnClickListener(v->{target=0;releaseLocked();});
-        FrameLayout.LayoutParams bp=new FrameLayout.LayoutParams(dp(112),dp(44),Gravity.BOTTOM|Gravity.RIGHT);bp.bottomMargin=dp(16);addView(stop,bp);styleTarget(cancel,false,1);styleTarget(edit,false,2);
+        FrameLayout.LayoutParams bp=new FrameLayout.LayoutParams(dp(112),dp(44),Gravity.BOTTOM|Gravity.RIGHT);bp.bottomMargin=dp(16);addView(stop,bp);styleTarget(cancel,0,1);styleTarget(edit,0,2);
         setOnApplyWindowInsetsListener((v,insets)->{android.graphics.Insets safe=insets.getInsets(WindowInsets.Type.systemBars()|WindowInsets.Type.displayCutout());setPadding(safe.left,safe.top,safe.right,safe.bottom);return insets;});
     }
     public void setHoldOrigin(float rawX,float rawY){holdRawX=rawX;holdRawY=rawY;requestLayout();}
@@ -92,19 +115,59 @@ public final class VoiceInputOverlay extends FrameLayout implements RecognitionL
         place(stop,stopX,stopY);fan.invalidate();
     }
     private void place(View view,float x,float y){int left=Math.round(x-view.getMeasuredWidth()/2f),top=Math.round(y-view.getMeasuredHeight()/2f);view.layout(left,top,left+view.getMeasuredWidth(),top+view.getMeasuredHeight());}
-    private void styleTarget(TextView view,boolean active,int action){
-        int color=action==1?0xFFFF9EAA:0xFFACE9C2;
-        GradientDrawable background=new GradientDrawable();background.setCornerRadius(dp(26));
-        background.setColor(active?(action==1?0xAA65333F:0xAA285844):0xCC20353E);
-        background.setStroke(dp(1),active?color:0x557FA99E);view.setBackground(background);
-        view.setTextColor(active?color:0xFFE8EFE9);
+    private static int blend(int from,int to,float progress){
+        float t=Math.max(0,Math.min(1,progress));
+        return Color.argb(Math.round(Color.alpha(from)+(Color.alpha(to)-Color.alpha(from))*t),Math.round(Color.red(from)+(Color.red(to)-Color.red(from))*t),Math.round(Color.green(from)+(Color.green(to)-Color.green(from))*t),Math.round(Color.blue(from)+(Color.blue(to)-Color.blue(from))*t));
     }
-    private TextView text(String value,int size){TextView v=new TextView(activity);v.setText(value);v.setTextSize(size);v.setSoundEffectsEnabled(false);v.setTextColor(Color.rgb(232,239,233));return v;}
+    private static int alpha(int color,float opacity){return (color&0x00FFFFFF)|(Math.round(255*Math.max(0,Math.min(1,opacity)))<<24);}
+    private void drawHalo(Canvas canvas,Paint paint,float x,float y,int color,float progress){
+        if(progress<.001f)return;
+        float radius=dp(34)+dp(14)*progress;
+        paint.setStyle(Paint.Style.FILL);paint.setColor(Color.WHITE);
+        paint.setShader(new RadialGradient(x,y,radius,new int[]{alpha(color,(dark?.21f:.12f)*progress),alpha(color,.05f*progress),alpha(color,0)},new float[]{0,.5f,1},Shader.TileMode.CLAMP));
+        canvas.drawCircle(x,y,radius,paint);paint.setShader(null);
+    }
+    private void styleTarget(TextView view,float progress,int action){
+        int color=action==1?(dark?0xFFFFA7B1:0xFFA9475B):accent;
+        GradientDrawable background=action==1?cancelSurface:editSurface;
+        background.setCornerRadius(dp(18));background.setOrientation(GradientDrawable.Orientation.TL_BR);
+        background.setColors(new int[]{alpha(color,(dark?.15f:.09f)*progress),alpha(color,.035f*progress),alpha(color,0)});
+        if(view.getBackground()!=background)view.setBackground(background);
+        int foreground=blend(muted,color,progress);view.setTextColor(foreground);
+        for(Drawable icon:view.getCompoundDrawables())if(icon instanceof ActionIcon){((ActionIcon)icon).color=foreground;icon.invalidateSelf();}
+        view.invalidate();
+    }
+    private float proximity(float distance){
+        float range=Math.max(dp(100),fanRadius*.85f);
+        float t=Math.max(0,Math.min(1,(range-distance)/(range-dp(26))));
+        return t*t*(3-2*t);
+    }
+    private void updateFeedback(float cancelDistance,float editDistance){
+        cancelGoal=target==1?1:proximity(cancelDistance);editGoal=target==2?1:proximity(editDistance);
+        if(activity.getSharedPreferences("home",0).getBoolean("reduceMotion",false)){
+            fan.removeCallbacks(feedbackFrame);feedbackAnimating=false;cancelProgress=cancelGoal;editProgress=editGoal;applyFeedback();return;
+        }
+        if(!feedbackAnimating){feedbackAnimating=true;feedbackTime=SystemClock.uptimeMillis();fan.postOnAnimation(feedbackFrame);}
+    }
+    private void animateFeedback(){
+        if(finished||!isAttachedToWindow()){feedbackAnimating=false;return;}
+        long now=SystemClock.uptimeMillis();float step=1-(float)Math.exp(-Math.min(48,Math.max(1,now-feedbackTime))/65f);feedbackTime=now;
+        cancelProgress+=(cancelGoal-cancelProgress)*step;editProgress+=(editGoal-editProgress)*step;
+        boolean settled=Math.abs(cancelGoal-cancelProgress)<.002f&&Math.abs(editGoal-editProgress)<.002f;
+        if(settled){cancelProgress=cancelGoal;editProgress=editGoal;}
+        applyFeedback();
+        if(settled)feedbackAnimating=false;else fan.postOnAnimation(feedbackFrame);
+    }
+    private void applyFeedback(){
+        styleTarget(cancel,cancelProgress,1);styleTarget(edit,editProgress,2);
+        stop.setTextColor(blend(accent,dark?0xFFFFA7B1:0xFFA9475B,cancelProgress));fan.invalidate();
+    }
+    private TextView text(String value,int size){TextView v=new TextView(activity);v.setText(value);v.setTextSize(size);v.setSoundEffectsEnabled(false);v.setTextColor(ink);return v;}
     public void start(){
         if(!SpeechRecognizer.isRecognitionAvailable(activity)){finish("",false,"这台设备暂时没有可用的语音识别服务，请先打字");return;}
         ((android.view.inputmethod.InputMethodManager)activity.getSystemService(Activity.INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(activity.getWindow().getDecorView().getWindowToken(),0);
         ((FrameLayout)activity.getWindow().getDecorView()).addView(this,new FrameLayout.LayoutParams(-1,-1));requestApplyInsets();
-        activity.getWindow().setStatusBarColor(Color.BLACK);activity.getWindow().setNavigationBarColor(Color.BLACK);WindowInsetsController bars=activity.getWindow().getInsetsController();if(bars!=null)bars.setSystemBarsAppearance(0,WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS|WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS);
+        activity.getWindow().setStatusBarColor(Color.TRANSPARENT);activity.getWindow().setNavigationBarColor(Color.TRANSPARENT);WindowInsetsController bars=activity.getWindow().getInsetsController();if(bars!=null)bars.setSystemBarsAppearance(dark?0:WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS|WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS,WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS|WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS);
         onDevice=Build.VERSION.SDK_INT>=31&&SpeechRecognizer.isOnDeviceRecognitionAvailable(activity);
         openRecognizer();main.post(ticker);
     }
@@ -163,7 +226,8 @@ public final class VoiceInputOverlay extends FrameLayout implements RecognitionL
         if(target==1&&cancelDistance<dp(62))next=1;
         else if(target==2&&editDistance<dp(62))next=2;
         else if(Math.min(cancelDistance,editDistance)<dp(52))next=cancelDistance<editDistance?1:2;
-        if(next!=target){target=next;performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK);styleTarget(cancel,target==1,1);styleTarget(edit,target==2,2);fan.invalidate();}
+        if(next!=target){target=next;performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK);}
+        updateFeedback(cancelDistance,editDistance);
         stop.setText(target==1?"松开取消":target==2?"松开编辑":"松开发送");
     }
     public void release(float x,float y){if(released||finished)return;move(x,y);releaseLocked();}
@@ -175,15 +239,15 @@ public final class VoiceInputOverlay extends FrameLayout implements RecognitionL
         try{recognizer.stopListening();}catch(Exception e){fail("识别未完成，已有文字已保留");}
     }
     public void interrupt(){if(!finished){String all=(committed+" "+partial).trim();finish(all,true,all.isEmpty()?null:"录音已中断，文字已保留");}}
-    private void finish(String text,boolean editText,String message){if(finished)return;finished=true;main.removeCallbacksAndMessages(null);closeRecognizer();
+    private void finish(String text,boolean editText,String message){if(finished)return;finished=true;main.removeCallbacksAndMessages(null);fan.removeCallbacks(feedbackFrame);feedbackAnimating=false;closeRecognizer();
         if(getParent() instanceof android.view.ViewGroup)((android.view.ViewGroup)getParent()).removeView(this);
         activity.getWindow().setStatusBarColor(oldStatus);activity.getWindow().setNavigationBarColor(oldNavigation);WindowInsetsController bars=activity.getWindow().getInsetsController();if(bars!=null)bars.setSystemBarsAppearance(oldAppearance,WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS|WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS);
         if(message!=null)Toast.makeText(activity,message,Toast.LENGTH_LONG).show();if(!text.trim().isEmpty())listener.completed(text.trim(),editText);else listener.dismissed();
     }
     private String recognized(Bundle bundle){ArrayList<String> items=bundle==null?null:bundle.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);return items==null||items.isEmpty()?"":items.get(0);}
     public void onReadyForSpeech(Bundle b){if(finished||released)return;ready=true;main.removeCallbacks(startupTimeout);status.setText("正在聆听 · 松开发送");performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);}
-    public void onPartialResults(Bundle b){if(finished)return;String text=recognized(b);if(!text.isEmpty()){partial=text;transcript.setTextColor(Color.rgb(239,246,239));showTranscript();status.setText("正在识别…");}}
-    private void showTranscript(){String all=(committed+" "+partial).trim();transcript.setText(all);}
+    public void onPartialResults(Bundle b){if(finished)return;String text=recognized(b);if(!text.isEmpty()){partial=text;transcript.setTextColor(ink);showTranscript();status.setText("正在识别…");}}
+    private void showTranscript(){String all=(committed+" "+partial).trim();transcript.setText(all);transcriptScroll.post(()->transcriptScroll.fullScroll(ScrollView.FOCUS_DOWN));}
     private void listenAgain(){
         if(finished||released||recognizer==null||listening)return;
         ready=false;listening=true;main.removeCallbacks(startupTimeout);main.postDelayed(startupTimeout,12000);
@@ -194,7 +258,7 @@ public final class VoiceInputOverlay extends FrameLayout implements RecognitionL
         if(finished)return;listening=false;main.removeCallbacks(startupTimeout);recoveries=0;
         String text=recognized(b);
         if(!text.isEmpty()){if(!committed.isEmpty())committed+=" ";committed+=text;partial="";}else keepPartial();
-        if(!allText().isEmpty()){transcript.setTextColor(Color.rgb(239,246,239));showTranscript();}
+        if(!allText().isEmpty()){transcript.setTextColor(ink);showTranscript();}
         if(released){finish(allText(),target==2,null);return;}
         // A phrase ending during a pause does not end the user's hold gesture.
         scheduleRestart(180);
@@ -225,11 +289,35 @@ public final class VoiceInputOverlay extends FrameLayout implements RecognitionL
     }
     public void onBeginningOfSpeech(){} public void onRmsChanged(float n){main.post(()->{if(!finished&&!released)waveform.setLevel(n);});} public void onBufferReceived(byte[] b){} public void onEndOfSpeech(){} public void onEvent(int n,Bundle b){}
 
+    /** Small vector icons remain sharp on every screen density. */
+    private final class ActionIcon extends Drawable {
+        private final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);private final boolean pencil;private int color=muted;
+        ActionIcon(boolean pencil){this.pencil=pencil;setBounds(0,0,dp(22),dp(22));}
+        @Override public void draw(Canvas canvas){
+            canvas.save();canvas.translate(getBounds().left,getBounds().top);canvas.scale(getBounds().width()/24f,getBounds().height()/24f);
+            paint.setColor(color);paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(1.5f);paint.setStrokeCap(Paint.Cap.ROUND);paint.setStrokeJoin(Paint.Join.ROUND);
+            if(pencil){Path path=new Path();path.moveTo(5,16);path.lineTo(16,5);path.lineTo(20,9);path.lineTo(9,20);path.lineTo(4,21);path.close();canvas.drawPath(path,paint);canvas.drawLine(14,7,18,11,paint);}
+            else{canvas.drawLine(6,6,18,18,paint);canvas.drawLine(18,6,6,18,paint);}
+            canvas.restore();
+        }
+        @Override public void setAlpha(int alpha){paint.setAlpha(alpha);}
+        @Override public void setColorFilter(ColorFilter filter){paint.setColorFilter(filter);}
+        @Override public int getOpacity(){return PixelFormat.TRANSLUCENT;}
+    }
     private static final class Waveform extends View {
-        private final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);private float level;
-        Waveform(Activity a){super(a);paint.setColor(Color.rgb(133,218,155));paint.setStrokeWidth(dp(a,3));paint.setStrokeCap(Paint.Cap.ROUND);}
+        private final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);private float level;private final boolean reduced;
+        Waveform(Activity a,int color){super(a);paint.setColor(color);paint.setStrokeWidth(dp(a,2));paint.setStrokeCap(Paint.Cap.ROUND);reduced=a.getSharedPreferences("home",0).getBoolean("reduceMotion",false);setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);}
         private static int dp(Activity a,float n){return Math.round(n*a.getResources().getDisplayMetrics().density);}
         void setLevel(float value){level=Math.max(0,Math.min(1,(value+2)/12f));invalidate();}
-        @Override protected void onDraw(Canvas c){super.onDraw(c);float mid=getHeight()/2f;int count=19;float gap=getWidth()/(float)count;for(int i=0;i<count;i++){float wave=(float)Math.abs(Math.sin((SystemClock.uptimeMillis()/120.0)+i*.68));float h=dp((Activity)getContext(),5+level*32*wave);c.drawLine((i+.5f)*gap,mid-h/2,(i+.5f)*gap,mid+h/2,paint);}if(isAttachedToWindow())postInvalidateDelayed(70);}
+        @Override protected void onDraw(Canvas c){
+            super.onDraw(c);float mid=getHeight()/2f;int count=25;float gap=getWidth()/(float)count;
+            for(int i=0;i<count;i++){
+                float envelope=1-Math.abs(i-(count-1)/2f)/(count/2f);
+                float wave=reduced?.6f:(float)Math.abs(Math.sin((SystemClock.uptimeMillis()/160.0)+i*.7));
+                float h=dp((Activity)getContext(),2+level*12*wave*envelope);
+                paint.setAlpha(100+(int)(155*envelope));c.drawLine((i+.5f)*gap,mid-h,(i+.5f)*gap,mid+h,paint);
+            }
+            if(!reduced&&isAttachedToWindow()){level*=.97f;postInvalidateDelayed(50);}
+        }
     }
 }
