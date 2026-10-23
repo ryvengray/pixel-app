@@ -33,7 +33,7 @@ public final class HomeConversationView extends FrameLayout {
     private final ComposerUnderline composerUnderline;
     private VoiceInputOverlay voice;
     private Dialog detail;
-    private boolean dark, busy, active, closed, touching, keyboard, syncing, composing, queued;
+    private boolean dark, busy, active, closed, touching, voiceAttempted, keyboard, syncing, composing, queued;
     private String failureText;
     private int thinkingStep;
     private long generation, lastInteraction, pausedAt;
@@ -252,7 +252,7 @@ public final class HomeConversationView extends FrameLayout {
         });}});
     }
     public void resume(){active=true;if(!busy)restore();else render();main.removeCallbacks(poll);main.post(poll);if(pausedAt>0&&System.currentTimeMillis()-pausedAt>30*60*1000L)greetingEvaluated=false;main.postDelayed(this::maybeGreet,1400);}
-    public void pause(){active=false;updateFeedback();pausedAt=System.currentTimeMillis();main.removeCallbacks(poll);main.removeCallbacks(beginVoice);touching=false;if(voice!=null)voice.interrupt();}
+    public void pause(){active=false;updateFeedback();pausedAt=System.currentTimeMillis();main.removeCallbacks(poll);main.removeCallbacks(beginVoice);touching=false;resetVoicePress();if(voice!=null)voice.interrupt();}
     private boolean idleForProactive(){return active&&!closed&&!busy&&pendingGroup==null&&!keyboard&&input.length()==0&&!touching&&voice==null&&(detail==null||!detail.isShowing())&&activity.hasWindowFocus()&&System.currentTimeMillis()-lastInteraction>1200;}
     private void maybeGreet(){
         if(greetingEvaluated||!idleForProactive()||!prefs.getBoolean("proactive",true))return;
@@ -304,17 +304,21 @@ public final class HomeConversationView extends FrameLayout {
     }
     private String friendlyTime(String value){try{return java.time.OffsetDateTime.parse(value).atZoneSameInstant(java.time.ZoneId.systemDefault()).format(java.time.format.DateTimeFormatter.ofPattern("MM-dd HH:mm"));}catch(Exception e){return value;}}
     private void actOnReminder(String id,String action,View row){row.setEnabled(false);background.execute(()->{try{AssistantApi.reminderAction(activity,id,action);main.post(()->{if(closed)return;((android.view.ViewGroup)row.getParent()).removeView(row);String text=action.equals("complete")?"提醒已完成":"已延后 15 分钟";store.addMessage("tool",text);Toast.makeText(activity,text,Toast.LENGTH_SHORT).show();});}catch(Exception e){main.post(()->{row.setEnabled(true);Toast.makeText(activity,"操作未完成，请重试",Toast.LENGTH_SHORT).show();});}});}
-    private boolean voiceTouch(android.view.MotionEvent event){
-        if(event.getActionMasked()==MotionEvent.ACTION_DOWN){touching=true;speak.setScaleX(.94f);speak.setScaleY(.94f);speak.setAlpha(.72f);touchStartX=event.getRawX();touchStartY=event.getRawY();lastInteraction=System.currentTimeMillis();main.postDelayed(beginVoice,500);return true;}
-        if(event.getActionMasked()==MotionEvent.ACTION_MOVE){float dx=event.getRawX()-touchStartX,dy=event.getRawY()-touchStartY;if(voice==null&&Math.abs(dy)>dp(20))touching=false;if(voice!=null)voice.move(event.getRawX(),event.getRawY());return true;}
-        if(event.getActionMasked()==MotionEvent.ACTION_UP){main.removeCallbacks(beginVoice);touching=false;speak.setScaleX(1f);speak.setScaleY(1f);speak.setAlpha(1f);if(voice!=null)voice.release(event.getRawX(),event.getRawY());else speak.performClick();return true;}
-        if(event.getActionMasked()==MotionEvent.ACTION_CANCEL){main.removeCallbacks(beginVoice);touching=false;speak.setScaleX(1f);speak.setScaleY(1f);speak.setAlpha(1f);if(voice!=null)voice.interrupt();return true;}return true;
+    private void resetVoicePress(){
+        speak.setScaleX(1f);speak.setScaleY(1f);speak.setAlpha(1f);
+        if(speak.getParent()!=null)speak.getParent().requestDisallowInterceptTouchEvent(false);
     }
-    private void startVoice(){if(voice!=null)return;
+    private boolean voiceTouch(android.view.MotionEvent event){
+        if(event.getActionMasked()==MotionEvent.ACTION_DOWN){touching=true;voiceAttempted=false;speak.getParent().requestDisallowInterceptTouchEvent(true);speak.setScaleX(.94f);speak.setScaleY(.94f);speak.setAlpha(.72f);touchStartX=event.getRawX();touchStartY=event.getRawY();lastInteraction=System.currentTimeMillis();main.postDelayed(beginVoice,500);return true;}
+        if(event.getActionMasked()==MotionEvent.ACTION_MOVE){float dx=event.getRawX()-touchStartX,dy=event.getRawY()-touchStartY;if(voice==null&&Math.abs(dy)>dp(20))touching=false;if(voice!=null)voice.move(event.getRawX(),event.getRawY());return true;}
+        if(event.getActionMasked()==MotionEvent.ACTION_UP){main.removeCallbacks(beginVoice);touching=false;resetVoicePress();if(voice!=null)voice.release(event.getRawX(),event.getRawY());else if(!voiceAttempted)speak.performClick();return true;}
+        if(event.getActionMasked()==MotionEvent.ACTION_CANCEL){main.removeCallbacks(beginVoice);touching=false;resetVoicePress();if(voice!=null)voice.interrupt();return true;}return true;
+    }
+    private void startVoice(){if(voice!=null)return;voiceAttempted=true;
         if(activity.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO)!=android.content.pm.PackageManager.PERMISSION_GRANTED){touching=false;activity.requestPermissions(new String[]{android.Manifest.permission.RECORD_AUDIO},63);Toast.makeText(activity,"授权后，请重新按住说话",Toast.LENGTH_SHORT).show();return;}
         voice=new VoiceInputOverlay(activity,new VoiceInputOverlay.Listener(){
-            public void completed(String text,boolean edit){voice=null;if(edit){input.setText(text);if(active)focusInput();}else submit(text);}
-            public void dismissed(){voice=null;}
+            public void completed(String text,boolean edit){voice=null;resetVoicePress();if(edit){input.setText(text);if(active)focusInput();}else submit(text);}
+            public void dismissed(){voice=null;resetVoicePress();}
         });voice.start();
     }
     public void shutdown(){pause();closed=true;main.removeCallbacksAndMessages(null);if(detail!=null)detail.dismiss();background.shutdownNow();network.execute(store::close);network.shutdown();}

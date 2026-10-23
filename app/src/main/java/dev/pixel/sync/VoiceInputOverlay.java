@@ -21,11 +21,17 @@ public final class VoiceInputOverlay extends FrameLayout implements RecognitionL
     private String partial="";
     private String committed="";
     private final Waveform waveform;
-    private boolean ready,released,finished;
+    private boolean ready,released,finished,listening,onDevice,fallbackUsed;
+    private int generation,recoveries;
+    private final Runnable restart=this::listenAgain;
+    private final Runnable startupTimeout=()->{
+        if(finished||released||ready)return;
+        if(!fallbackToSystem())fail("语音服务没有响应，请稍后重试");
+    };
     private int target; // 0 send, 1 cancel, 2 edit
     private final int oldStatus,oldNavigation,oldAppearance;
     private final long started=SystemClock.elapsedRealtime();
-    private final Runnable timeout=()->finish((committed+" "+partial).trim(),true,"识别未完成，文字已保留，请检查后发送");
+    private final Runnable timeout=()->fail(allText().isEmpty()?"没听清，再试一次":"识别未完成，文字已保留，请检查后发送");
     private final Runnable ticker=new Runnable(){public void run(){if(finished||released)return;long seconds=(SystemClock.elapsedRealtime()-started)/1000;status.setText(ready?"正在听 · "+String.format(java.util.Locale.ROOT,"%02d:%02d",seconds/60,seconds%60):"正在准备…");main.postDelayed(this,1000);}};
     private int dp(float n){return Math.round(n*getResources().getDisplayMetrics().density);}
     public VoiceInputOverlay(Activity activity,Listener listener){
@@ -55,9 +61,57 @@ public final class VoiceInputOverlay extends FrameLayout implements RecognitionL
         ((android.view.inputmethod.InputMethodManager)activity.getSystemService(Activity.INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(activity.getWindow().getDecorView().getWindowToken(),0);
         ((FrameLayout)activity.getWindow().getDecorView()).addView(this,new FrameLayout.LayoutParams(-1,-1));requestApplyInsets();
         activity.getWindow().setStatusBarColor(Color.BLACK);activity.getWindow().setNavigationBarColor(Color.BLACK);WindowInsetsController bars=activity.getWindow().getInsetsController();if(bars!=null)bars.setSystemBarsAppearance(0,WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS|WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS);
-        try{recognizer=Build.VERSION.SDK_INT>=31&&SpeechRecognizer.isOnDeviceRecognitionAvailable(activity)?SpeechRecognizer.createOnDeviceSpeechRecognizer(activity):SpeechRecognizer.createSpeechRecognizer(activity);recognizer.setRecognitionListener(this);
-            Intent intent=new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL,RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE,"zh-CN");intent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS,true);intent.putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE,true);intent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS,1);recognizer.startListening(intent);main.post(ticker);
-        }catch(Exception e){finish("",false,"语音识别未能启动，请重试或打字");}
+        onDevice=Build.VERSION.SDK_INT>=31&&SpeechRecognizer.isOnDeviceRecognitionAvailable(activity);
+        openRecognizer();main.post(ticker);
+    }
+    private Intent recognitionIntent(){
+        Intent intent=new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
+        intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL,RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
+        intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE,"zh-CN");
+        intent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS,true);
+        // A missing offline Chinese model must not also constrain the system fallback.
+        intent.putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE,onDevice);
+        intent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS,1);return intent;
+    }
+    private void openRecognizer(){
+        if(finished||released)return;
+        try{
+            recognizer=onDevice?SpeechRecognizer.createOnDeviceSpeechRecognizer(activity):SpeechRecognizer.createSpeechRecognizer(activity);
+            recognizer.setRecognitionListener(new SessionListener(++generation));listenAgain();
+        }catch(Exception e){if(!fallbackToSystem())fail("语音识别未能启动，请稍后重试");}
+    }
+    private void closeRecognizer(){
+        ++generation;SpeechRecognizer old=recognizer;recognizer=null;listening=false;ready=false;
+        main.removeCallbacks(restart);main.removeCallbacks(startupTimeout);
+        if(old!=null){try{old.cancel();}catch(Exception ignored){}try{old.destroy();}catch(Exception ignored){}}
+    }
+    private boolean fallbackToSystem(){
+        if(finished||released||!onDevice||fallbackUsed)return false;
+        fallbackUsed=true;keepPartial();closeRecognizer();onDevice=false;
+        status.setText("正在切换语音服务…");main.postDelayed(this::openRecognizer,300);return true;
+    }
+    private String allText(){return (committed+" "+partial).trim();}
+    private void keepPartial(){if(!partial.isEmpty()){committed=allText();partial="";}}
+    private void fail(String message){finish(allText(),true,message);}
+    private void scheduleRestart(long delay){
+        if(finished||released)return;
+        listening=false;ready=false;main.removeCallbacks(startupTimeout);main.removeCallbacks(restart);
+        status.setText("继续说话 · 松开发送");main.postDelayed(restart,delay);
+    }
+    /** Old recognizers can deliver callbacks after cancel/destroy or a service switch. */
+    private final class SessionListener implements RecognitionListener {
+        private final int session;
+        SessionListener(int session){this.session=session;}
+        private boolean current(){return !finished&&session==generation;}
+        public void onReadyForSpeech(Bundle b){if(current())VoiceInputOverlay.this.onReadyForSpeech(b);}
+        public void onBeginningOfSpeech(){if(current())VoiceInputOverlay.this.onBeginningOfSpeech();}
+        public void onRmsChanged(float n){if(current())VoiceInputOverlay.this.onRmsChanged(n);}
+        public void onBufferReceived(byte[] b){if(current())VoiceInputOverlay.this.onBufferReceived(b);}
+        public void onEndOfSpeech(){if(current())VoiceInputOverlay.this.onEndOfSpeech();}
+        public void onError(int error){if(current())VoiceInputOverlay.this.onError(error);}
+        public void onResults(Bundle b){if(current())VoiceInputOverlay.this.onResults(b);}
+        public void onPartialResults(Bundle b){if(current())VoiceInputOverlay.this.onPartialResults(b);}
+        public void onEvent(int n,Bundle b){if(current())VoiceInputOverlay.this.onEvent(n,b);}
     }
     public void move(float rawX,float rawY){if(finished||released)return;int[] location=new int[2];getLocationOnScreen(location);float x=rawX-location[0],y=rawY-location[1];
         int next=0;float boundary=getHeight()-getPaddingBottom()-dp(150);if(y<boundary){if(x<getWidth()*.43f)next=1;else if(x>getWidth()*.57f)next=2;}
@@ -66,26 +120,61 @@ public final class VoiceInputOverlay extends FrameLayout implements RecognitionL
     }
     public void release(float x,float y){if(released||finished)return;move(x,y);releaseLocked();}
     private void releaseLocked(){if(released||finished)return;released=true;
-        if(target==1){finish("",false,null);return;}if(!ready){finish("",false,"还没准备好，请重新按住说话");return;}
-        stop.setEnabled(false);edit.setEnabled(false);status.setText("正在整理文字…");main.postDelayed(timeout,5000);if(recognizer!=null)recognizer.stopListening();
+        main.removeCallbacks(restart);main.removeCallbacks(startupTimeout);
+        if(target==1){finish("",false,null);return;}
+        if(!listening||!ready){String text=allText();finish(text,target==2,text.isEmpty()?"录音尚未就绪，请稍后重新按住说话":null);return;}
+        stop.setEnabled(false);edit.setEnabled(false);status.setText("正在整理文字…");main.postDelayed(timeout,5000);
+        try{recognizer.stopListening();}catch(Exception e){fail("识别未完成，已有文字已保留");}
     }
     public void interrupt(){if(!finished){String all=(committed+" "+partial).trim();finish(all,true,all.isEmpty()?null:"录音已中断，文字已保留");}}
-    private void finish(String text,boolean editText,String message){if(finished)return;finished=true;main.removeCallbacksAndMessages(null);if(recognizer!=null){recognizer.cancel();recognizer.destroy();recognizer=null;}
+    private void finish(String text,boolean editText,String message){if(finished)return;finished=true;main.removeCallbacksAndMessages(null);closeRecognizer();
         if(getParent() instanceof android.view.ViewGroup)((android.view.ViewGroup)getParent()).removeView(this);
         activity.getWindow().setStatusBarColor(oldStatus);activity.getWindow().setNavigationBarColor(oldNavigation);WindowInsetsController bars=activity.getWindow().getInsetsController();if(bars!=null)bars.setSystemBarsAppearance(oldAppearance,WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS|WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS);
         if(message!=null)Toast.makeText(activity,message,Toast.LENGTH_LONG).show();if(!text.trim().isEmpty())listener.completed(text.trim(),editText);else listener.dismissed();
     }
     private String recognized(Bundle bundle){ArrayList<String> items=bundle==null?null:bundle.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);return items==null||items.isEmpty()?"":items.get(0);}
-    public void onReadyForSpeech(Bundle b){if(finished||released)return;ready=true;status.setText("正在聆听 · 松开发送");performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);}
-    public void onPartialResults(Bundle b){if(finished)return;String text=recognized(b);if(!text.isEmpty())main.post(()->{if(!finished){partial=text;transcript.setTextColor(Color.rgb(239,246,239));showTranscript();status.setText("正在识别…");}});}
+    public void onReadyForSpeech(Bundle b){if(finished||released)return;ready=true;main.removeCallbacks(startupTimeout);status.setText("正在聆听 · 松开发送");performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);}
+    public void onPartialResults(Bundle b){if(finished)return;String text=recognized(b);if(!text.isEmpty()){partial=text;transcript.setTextColor(Color.rgb(239,246,239));showTranscript();status.setText("正在识别…");}}
     private void showTranscript(){String all=(committed+" "+partial).trim();transcript.setText(all);}
-    private void listenAgain(){if(finished||released||recognizer==null)return;try{Intent intent=new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL,RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE,"zh-CN");intent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS,true);intent.putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE,true);intent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS,1);recognizer.startListening(intent);}catch(Exception ignored){main.postDelayed(this::listenAgain,250);}}
-    public void onResults(Bundle b){if(finished)return;String text=recognized(b);if(!text.isEmpty()){if(!committed.isEmpty())committed+=" ";committed+=text;partial="";main.post(()->{if(!finished){transcript.setTextColor(Color.rgb(239,246,239));showTranscript();}});}
-        if(released){finish((committed+" "+partial).trim(),target==2,null);return;}
-        // Android recognizers commonly close a phrase after a pause. Re-arm while the user still holds.
-        main.postDelayed(this::listenAgain,180);
+    private void listenAgain(){
+        if(finished||released||recognizer==null||listening)return;
+        ready=false;listening=true;main.removeCallbacks(startupTimeout);main.postDelayed(startupTimeout,12000);
+        try{recognizer.startListening(recognitionIntent());}
+        catch(Exception e){listening=false;if(!fallbackToSystem())fail("语音识别未能启动，请稍后重试");}
     }
-    public void onError(int error){if(finished)return;if(!released&&(error==SpeechRecognizer.ERROR_NO_MATCH||error==SpeechRecognizer.ERROR_SPEECH_TIMEOUT)){main.postDelayed(this::listenAgain,180);return;}String message=error==SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS?"需要麦克风权限":error==SpeechRecognizer.ERROR_NO_MATCH||error==SpeechRecognizer.ERROR_SPEECH_TIMEOUT?"没听清，再试一次":"语音识别中断，请重试或编辑已有文字";finish((committed+" "+partial).trim(),true,message);}
+    public void onResults(Bundle b){
+        if(finished)return;listening=false;main.removeCallbacks(startupTimeout);recoveries=0;
+        String text=recognized(b);
+        if(!text.isEmpty()){if(!committed.isEmpty())committed+=" ";committed+=text;partial="";}else keepPartial();
+        if(!allText().isEmpty()){transcript.setTextColor(Color.rgb(239,246,239));showTranscript();}
+        if(released){finish(allText(),target==2,null);return;}
+        // A phrase ending during a pause does not end the user's hold gesture.
+        scheduleRestart(180);
+    }
+    public void onError(int error){
+        if(finished)return;listening=false;main.removeCallbacks(startupTimeout);
+        android.util.Log.w("GretaVoice","Recognition error="+error+", onDevice="+onDevice+", released="+released);
+        boolean silence=error==SpeechRecognizer.ERROR_NO_MATCH||error==SpeechRecognizer.ERROR_SPEECH_TIMEOUT;
+        if(released){String text=allText();finish(text,target==2||!silence,text.isEmpty()?(silence?"没听清，再试一次":errorMessage(error)):null);return;}
+        if(silence){keepPartial();scheduleRestart(250);return;}
+        if(error!=SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS&&fallbackToSystem())return;
+        boolean transientError=error==SpeechRecognizer.ERROR_RECOGNIZER_BUSY||error==SpeechRecognizer.ERROR_CLIENT||error==SpeechRecognizer.ERROR_SERVER_DISCONNECTED;
+        if(transientError&&recoveries++<2){keepPartial();closeRecognizer();status.setText("正在重新连接语音服务…");main.postDelayed(this::openRecognizer,500);return;}
+        fail(errorMessage(error));
+    }
+    private String errorMessage(int error){
+        switch(error){
+            case SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS:return "需要麦克风权限，请在应用权限中允许录音";
+            case SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED:return "当前语音服务不支持中文，请检查系统语音设置";
+            case SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE:return "中文语音包尚未就绪，请在系统语音设置中下载";
+            case SpeechRecognizer.ERROR_NETWORK:
+            case SpeechRecognizer.ERROR_NETWORK_TIMEOUT:return "语音服务连接失败，请检查网络后重试";
+            case SpeechRecognizer.ERROR_AUDIO:return "麦克风未能启动，请检查是否被其他应用占用";
+            case SpeechRecognizer.ERROR_RECOGNIZER_BUSY:return "语音服务正忙，请稍后重试";
+            case SpeechRecognizer.ERROR_TOO_MANY_REQUESTS:return "语音请求过于频繁，请稍后重试";
+            default:return "语音服务暂时不可用（"+error+"），请重试或编辑已有文字";
+        }
+    }
     public void onBeginningOfSpeech(){} public void onRmsChanged(float n){main.post(()->{if(!finished&&!released)waveform.setLevel(n);});} public void onBufferReceived(byte[] b){} public void onEndOfSpeech(){} public void onEvent(int n,Bundle b){}
 
     private static final class Waveform extends View {
