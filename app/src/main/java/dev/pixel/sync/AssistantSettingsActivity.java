@@ -24,7 +24,7 @@ public class AssistantSettingsActivity extends Activity {
         EditText edit=new EditText(this);edit.setSingleLine(true);if(secret)edit.setInputType(InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_VARIATION_PASSWORD);body.addView(edit,new LinearLayout.LayoutParams(-1,-2));return edit;
     }
     @Override public void onCreate(Bundle state){super.onCreate(state);getActionBar();
-        ScrollView scroll=new ScrollView(this);LinearLayout body=new LinearLayout(this);body.setOrientation(LinearLayout.VERTICAL);body.setPadding(dp(24),dp(28),dp(24),dp(36));scroll.addView(body);setContentView(scroll);
+        ScrollView scroll=new ScrollView(this);LinearLayout body=new LinearLayout(this);body.setOrientation(LinearLayout.VERTICAL);body.setPadding(dp(24),dp(28),dp(24),dp(36));scroll.addView(body);getWindow().setDecorFitsSystemWindows(false);getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING);setContentView(scroll);FormKeyboard.applyInsets(scroll,scroll);
         TextView title=new TextView(this);title.setText("助理设置");title.setTextSize(26);body.addView(title);
         TextView help=new TextView(this);help.setText("服务端通过一次性二维码配对，无需输入访问令牌。DeepSeek 本地密钥只在服务端不可用时作为手机直连的兜底，并由 Android Keystore 加密保存。\n");body.addView(help);
         endpoint=field(body,"服务地址（HTTPS，例如 https://greta.example.com）",false);

@@ -90,7 +90,7 @@ public final class RecordsActivity extends ToolActivity {
             JSONObject payload=new JSONObject().put("content",content.getText().toString().trim()).put("date",day.getText().toString().trim()).put("items",items);
             if(record==null)records.save(UUID.randomUUID().toString(),payload,content.getText().toString());else records.update(record.id,payload,false);
             LifeSync.schedule(this);dialog.dismiss();render();
-        }catch(Exception e){error(e);}}));dialog.show();
+        }catch(Exception e){error(e);}}));dialog.show();dialog.getWindow().setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);FormKeyboard.keepFocusVisible(scroll);
     }
     private static final class MoneyRow {EditText category,amount;Spinner kind,currency;}
     private void printImage(LifeImages.Image image){

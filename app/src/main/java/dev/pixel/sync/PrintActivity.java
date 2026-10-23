@@ -97,6 +97,7 @@ public class PrintActivity extends ToolActivity {
         body.addView(buildPrintButton());
 
         scroll.addView(body, new ScrollView.LayoutParams(-1, -1));
+        FormKeyboard.keepFocusVisible(scroll);
         root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
 
         root.setOnApplyWindowInsetsListener((v, insets) -> {
