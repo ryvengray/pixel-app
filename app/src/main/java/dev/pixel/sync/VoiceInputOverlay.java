@@ -18,7 +18,7 @@ public final class VoiceInputOverlay extends FrameLayout implements RecognitionL
     private final Activity activity;
     private final Listener listener;
     private final Handler main=new Handler(Looper.getMainLooper());
-    private final TextView transcript,status,cancel,edit,stop;
+    private final TextView transcript,status,cancel,edit,stop,releaseHint;
     private SpeechRecognizer recognizer;
     private String partial="";
     private String committed="";
@@ -28,7 +28,9 @@ public final class VoiceInputOverlay extends FrameLayout implements RecognitionL
     private final boolean dark;
     private final int ink,muted,accent;
     private float holdRawX=Float.NaN,holdRawY=Float.NaN,originX,originY,fanRadius;
-    private float cancelX,cancelY,editX,editY;
+    private float cancelX,cancelY,editX,editY,fingerX,fingerY;
+    private boolean fingerMoved;
+    private String releaseMessage="";
     private float cancelProgress,editProgress,cancelGoal,editGoal;
     private final GradientDrawable cancelSurface=new GradientDrawable(),editSurface=new GradientDrawable();
     private boolean feedbackAnimating;
@@ -62,8 +64,8 @@ public final class VoiceInputOverlay extends FrameLayout implements RecognitionL
         transcript=text("说说你的想法…",27);transcript.setTextColor(muted);transcript.setGravity(Gravity.TOP|Gravity.START);transcript.setTextIsSelectable(false);transcript.setLineSpacing(dp(9),1f);transcript.setIncludeFontPadding(false);transcript.setPadding(0,dp(10),0,dp(20));
         transcriptScroll=new ScrollView(activity);transcriptScroll.setVerticalScrollBarEnabled(false);transcriptScroll.setOverScrollMode(OVER_SCROLL_NEVER);transcriptScroll.addView(transcript);
         FrameLayout.LayoutParams textParams=new FrameLayout.LayoutParams(-1,-1);textParams.leftMargin=dp(28);textParams.rightMargin=dp(28);textParams.topMargin=dp(116);textParams.bottomMargin=dp(282);addView(transcriptScroll,textParams);
-        waveform=new Waveform(activity,accent);FrameLayout.LayoutParams wp=new FrameLayout.LayoutParams(dp(144),dp(34),Gravity.BOTTOM|Gravity.LEFT);wp.leftMargin=dp(28);wp.bottomMargin=dp(234);addView(waveform,wp);
-        TextView hint=text("松开发送 · 滑动选择操作",12);hint.setTextColor(muted);FrameLayout.LayoutParams htp=new FrameLayout.LayoutParams(-2,dp(24),Gravity.BOTTOM|Gravity.LEFT);htp.leftMargin=dp(28);htp.bottomMargin=dp(200);addView(hint,htp);
+        waveform=new Waveform(activity,accent);FrameLayout.LayoutParams wp=new FrameLayout.LayoutParams(dp(112),dp(24),Gravity.TOP|Gravity.LEFT);wp.leftMargin=dp(28);wp.topMargin=dp(76);addView(waveform,wp);
+
         fan=new View(activity){
             private final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);
             @Override protected void onDraw(Canvas canvas){
@@ -84,6 +86,16 @@ public final class VoiceInputOverlay extends FrameLayout implements RecognitionL
                 canvas.drawCircle(originX,originY,dp(23),paint);
                 paint.setColor(alpha(cancelColor,cancelProgress));canvas.drawCircle(cancelX,cancelY-dp(8),dp(2),paint);
                 paint.setColor(alpha(accent,editProgress));canvas.drawCircle(editX,editY-dp(8),dp(2),paint);
+                drawTargetBoundary(canvas,paint,cancelX,cancelY,cancelColor,cancelProgress);
+                drawTargetBoundary(canvas,paint,editX,editY,accent,editProgress);
+                if(fingerMoved){
+                    int cursor=target==1?cancelColor:target==2?accent:ink;
+                    paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(dp(1));paint.setColor(alpha(cursor,.45f));
+                    canvas.drawLine(originX,originY,fingerX,fingerY,paint);
+                    canvas.drawCircle(fingerX,fingerY,dp(22),paint);
+                    // Offset the bright marker so the fingertip cannot hide it.
+                    paint.setStyle(Paint.Style.FILL);paint.setColor(cursor);canvas.drawCircle(fingerX,fingerY-dp(28),dp(4),paint);
+                }
             }
         };
         fan.setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);addView(fan,new FrameLayout.LayoutParams(-1,-1));
@@ -95,6 +107,9 @@ public final class VoiceInputOverlay extends FrameLayout implements RecognitionL
 
         stop.setContentDescription("停止录音，转写完成后发送文字");stop.setOnClickListener(v->{target=0;releaseLocked();});
         FrameLayout.LayoutParams bp=new FrameLayout.LayoutParams(dp(112),dp(44),Gravity.BOTTOM|Gravity.RIGHT);bp.bottomMargin=dp(16);addView(stop,bp);styleTarget(cancel,0,1);styleTarget(edit,0,2);
+        releaseHint=text("",16);releaseHint.setGravity(Gravity.CENTER);releaseHint.setIncludeFontPadding(false);releaseHint.setLineSpacing(dp(5),1);releaseHint.setPadding(dp(12),dp(8),dp(12),dp(8));
+        releaseHint.setAccessibilityLiveRegion(ACCESSIBILITY_LIVE_REGION_POLITE);
+        FrameLayout.LayoutParams rp=new FrameLayout.LayoutParams(dp(216),dp(64));addView(releaseHint,rp);updateReleaseHint(0);
         setOnApplyWindowInsetsListener((v,insets)->{android.graphics.Insets safe=insets.getInsets(WindowInsets.Type.systemBars()|WindowInsets.Type.displayCutout());setPadding(safe.left,safe.top,safe.right,safe.bottom);return insets;});
     }
     public void setHoldOrigin(float rawX,float rawY){holdRawX=rawX;holdRawY=rawY;requestLayout();}
@@ -112,9 +127,37 @@ public final class VoiceInputOverlay extends FrameLayout implements RecognitionL
         place(cancel,cancelX,cancelY);place(edit,editX,editY);
         float stopX=Math.max(getPaddingLeft()+stop.getMeasuredWidth()/2f+dp(8),Math.min(originX,getWidth()-getPaddingRight()-stop.getMeasuredWidth()/2f-dp(8)));
         float stopY=Math.min(originY,getHeight()-getPaddingBottom()-stop.getMeasuredHeight()/2f);
-        place(stop,stopX,stopY);fan.invalidate();
+        place(stop,stopX,stopY);
+        if(!fingerMoved){fingerX=originX;fingerY=originY;}
+        layoutReleaseHint();fan.invalidate();
     }
     private void place(View view,float x,float y){int left=Math.round(x-view.getMeasuredWidth()/2f),top=Math.round(y-view.getMeasuredHeight()/2f);view.layout(left,top,left+view.getMeasuredWidth(),top+view.getMeasuredHeight());}
+    private void layoutReleaseHint(){
+        float half=releaseHint.getMeasuredWidth()/2f;
+        float x=Math.max(getPaddingLeft()+half+dp(16),Math.min(fingerX,getWidth()-getPaddingRight()-half-dp(16)));
+        float y=Math.max(getPaddingTop()+dp(152),Math.min(fingerY-dp(86),editY-dp(76)));
+        place(releaseHint,x,y);
+    }
+    private void updateReleaseHint(int near){
+        String title=target==1?"松开将取消":target==2?"松开后编辑":"松开将发送";
+        String detail=target==1?"本段语音不会发送":target==2?"先修改文字，不会立即发送":near==1?"继续滑向取消，选中后再松手":near==2?"继续滑向编辑，选中后再松手":"滑向取消或编辑可切换操作";
+        String message=title+"\n"+detail;
+        if(message.equals(releaseMessage))return;releaseMessage=message;
+        android.text.SpannableString text=new android.text.SpannableString(message);
+        text.setSpan(new android.text.style.StyleSpan(Typeface.BOLD),0,title.length(),0);
+        text.setSpan(new android.text.style.AbsoluteSizeSpan(11,true),title.length()+1,message.length(),0);
+        releaseHint.setText(text);releaseHint.setContentDescription(title+"，"+detail);
+        int color=target==1?(dark?0xFFFFA7B1:0xFFA9475B):target==2?accent:ink;
+        releaseHint.setTextColor(color);
+        GradientDrawable surface=new GradientDrawable(GradientDrawable.Orientation.TL_BR,new int[]{dark?0xF520303E:0xFAFFFFFF,dark?0xF014222E:0xFAEFF6F8});
+        surface.setCornerRadius(dp(16));surface.setStroke(dp(1),alpha(color,target==0?.2f:.65f));releaseHint.setBackground(surface);
+        cancel.setText(target==1?"取消 ✓":"取消");edit.setText(target==2?"编辑 ✓":"编辑");
+    }
+    private void drawTargetBoundary(Canvas canvas,Paint paint,float x,float y,int color,float progress){
+        paint.setShader(null);paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(dp(1)*(1+progress));
+        paint.setColor(alpha(color,.2f+.7f*progress));
+        canvas.drawCircle(x,y,dp(52)+dp(10)*progress,paint);
+    }
     private static int blend(int from,int to,float progress){
         float t=Math.max(0,Math.min(1,progress));
         return Color.argb(Math.round(Color.alpha(from)+(Color.alpha(to)-Color.alpha(from))*t),Math.round(Color.red(from)+(Color.red(to)-Color.red(from))*t),Math.round(Color.green(from)+(Color.green(to)-Color.green(from))*t),Math.round(Color.blue(from)+(Color.blue(to)-Color.blue(from))*t));
@@ -226,8 +269,11 @@ public final class VoiceInputOverlay extends FrameLayout implements RecognitionL
         if(target==1&&cancelDistance<dp(62))next=1;
         else if(target==2&&editDistance<dp(62))next=2;
         else if(Math.min(cancelDistance,editDistance)<dp(52))next=cancelDistance<editDistance?1:2;
-        if(next!=target){target=next;performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK);}
-        updateFeedback(cancelDistance,editDistance);
+        if(next!=target){target=next;performHapticFeedback(target==0?HapticFeedbackConstants.CLOCK_TICK:HapticFeedbackConstants.CONFIRM);}
+        fingerX=x;fingerY=y;fingerMoved=Math.hypot(x-originX,y-originY)>dp(12);
+        int near=Math.min(cancelDistance,editDistance)<fanRadius*.8f?(cancelDistance<editDistance?1:2):0;
+        updateReleaseHint(near);layoutReleaseHint();
+        updateFeedback(cancelDistance,editDistance);fan.invalidate();
         stop.setText(target==1?"松开取消":target==2?"松开编辑":"松开发送");
     }
     public void release(float x,float y){if(released||finished)return;move(x,y);releaseLocked();}
