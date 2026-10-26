@@ -45,6 +45,7 @@ public final class RecordsActivity extends ToolActivity {
         for(LifeRecords.Record r:rows){
             LinearLayout card=new LinearLayout(this);card.setOrientation(1);card.setPadding(dp(16),dp(12),dp(16),dp(10));card.setBackground(shape(Color.parseColor(dark?"#1C3326":"#FFFFFF")));
             TextView day=text(r.day,13);day.setTextColor(muted);card.addView(day);imagePreview(card,r);card.addView(text(r.payload.optString("content"),17));String summary=LifeRecords.summary(r.payload);if(!summary.isEmpty()){TextView money=text(summary,14);money.setTextColor(accent);card.addView(money);}
+            if(r.location!=null){TextView place=text("位置 · "+RecordLocation.label(r.location),13);place.setTextColor(muted);card.addView(place);}
             TextView status=text(r.state()+" · 点击修改，长按删除",12);status.setTextColor(muted);card.addView(status);rowStates.put(r.id,status);
             card.setOnClickListener(v->edit(r));card.setOnLongClickListener(v->{new AlertDialog.Builder(this).setTitle("删除这条记录？").setMessage("手机保留撤销机会，Obsidian 中会标记为已删除。").setNegativeButton("保留",null).setPositiveButton("删除",(d,w)->{try{records.update(r.id,r.payload,true);LifeSync.schedule(this);render();new AlertDialog.Builder(this).setMessage("记录已删除").setPositiveButton("撤销",(dd,ww)->{try{records.update(r.id,r.payload,false);LifeSync.schedule(this);render();}catch(Exception e){error(e);}}).setNegativeButton("关闭",null).show();}catch(Exception e){error(e);}}).show();return true;});
             LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,-2);lp.topMargin=dp(12);list.addView(card,lp);
@@ -75,6 +76,10 @@ public final class RecordsActivity extends ToolActivity {
         EditText input=new EditText(this);input.setTextColor(fg);input.setHintTextColor(muted);input.setHint(hint);input.setText(value);input.setTextSize(16);input.setContentDescription(hint);input.setPadding(dp(12),dp(12),dp(12),dp(12));GradientDrawable border=shape(Color.parseColor(dark?"#1C3326":"#FFFFFF"));border.setStroke(dp(1),Color.parseColor(dark?"#406651":"#CADBC7"));input.setBackground(border);input.setSingleLine(!multiline);if(multiline){input.setMinLines(3);input.setMaxLines(8);input.setGravity(Gravity.TOP);}LinearLayout.LayoutParams fieldParams=new LinearLayout.LayoutParams(-1,-2);fieldParams.bottomMargin=dp(10);body.addView(input,fieldParams);return input;
     }
     private void edit(LifeRecords.Record record){
+        if(record==null){RecordLocation.withPermission(this,()->editReady(null));return;}
+        editReady(record);
+    }
+    private void editReady(LifeRecords.Record record){
         LinearLayout body=new LinearLayout(this);body.setPadding(dp(16),dp(8),dp(16),dp(12));body.setOrientation(1);ScrollView scroll=new ScrollView(this);scroll.addView(body);
         EditText day=field(body,"日期，例如 2026-10-20",record==null?LocalDate.now().toString():record.day,false);
         if(record!=null&&!record.images.isEmpty()){
@@ -88,8 +93,13 @@ public final class RecordsActivity extends ToolActivity {
         dialog.setOnShowListener(d->dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->{try{
             JSONArray items=new JSONArray();for(MoneyRow row:rows)items.put(new JSONObject().put("category",row.category.getText().toString().trim()).put("amount",row.amount.getText().toString().trim()).put("kind",row.kind.getSelectedItemPosition()==0?"expense":"income").put("currency",row.currency.getSelectedItem().toString()));
             JSONObject payload=new JSONObject().put("content",content.getText().toString().trim()).put("date",day.getText().toString().trim()).put("items",items);
-            if(record==null)records.save(UUID.randomUUID().toString(),payload,content.getText().toString());else records.update(record.id,payload,false);
-            LifeSync.schedule(this);dialog.dismiss();render();
+            if(!LifeRecords.valid(payload))throw new IllegalArgumentException("请检查内容、日期和金额");
+            String id=record==null?UUID.randomUUID().toString():record.id,original=content.getText().toString();
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(false);dialog.setCancelable(false);dialog.getButton(AlertDialog.BUTTON_NEGATIVE).setEnabled(false);
+            imageWorker.execute(()->{try(LifeRecords saving=new LifeRecords(this)){
+                if(record==null)saving.save(id,payload,original);else saving.update(id,payload,false);
+                LifeSync.schedule(this);handler.post(()->{if(!isDestroyed()){dialog.dismiss();render();}});
+            }catch(Exception e){handler.post(()->{if(!isDestroyed()){dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(true);dialog.getButton(AlertDialog.BUTTON_NEGATIVE).setEnabled(true);dialog.setCancelable(true);error(e);}});}});
         }catch(Exception e){error(e);}}));dialog.show();dialog.getWindow().setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);FormKeyboard.keepFocusVisible(scroll);
     }
     private static final class MoneyRow {EditText category,amount;Spinner kind,currency;}

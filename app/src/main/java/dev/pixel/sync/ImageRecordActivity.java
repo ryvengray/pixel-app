@@ -69,6 +69,9 @@ public final class ImageRecordActivity extends Activity {
         worker.execute(()->{try{Uri uri=LifeImages.preparePrint(this,true,photo);main.post(()->{if(destroyed)return;preparingPrint=false;setReady(true);status.setText("图片已就绪 · 保存后可在生活记录里查看");Intent next=new Intent(this,PrintActivity.class).setDataAndType(uri,getContentResolver().getType(uri)).putExtra(PrintActivity.EXTRA_FILE_NAME,photo.name).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);next.setClipData(ClipData.newRawUri("图片",uri));startActivity(next);});}catch(Exception e){main.post(()->{if(destroyed)return;preparingPrint=false;setReady(true);status.setText("图片准备失败，请重试");});}});
     }
     private void saveRecord(){
+        RecordLocation.withPermission(this,this::saveWithLocation);
+    }
+    private void saveWithLocation(){
         if(image==null||saving||preparingPrint)return;saving=true;setReady(false);note.setEnabled(false);date.setEnabled(false);save.setText("正在保存…");String content=note.getText().toString().trim(),recordDay=day;LifeImages.Image attachment=image;
         worker.execute(()->{try(LifeRecords records=new LifeRecords(this)){
             JSONObject payload=new JSONObject().put("content",content.isEmpty()?"图片记录":content).put("date",recordDay).put("items",new JSONArray());records.saveWithImage(recordId,payload,content,attachment);LifeSync.schedule(this);

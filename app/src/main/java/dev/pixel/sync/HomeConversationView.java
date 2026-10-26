@@ -211,6 +211,10 @@ public final class HomeConversationView extends FrameLayout {
         updateComposer();submit(text);
     }
     private void submit(String text){
+        if(ClientTools.recordCommand(text)){RecordLocation.withPermission(activity,()->submitReady(text));return;}
+        submitReady(text);
+    }
+    private void submitReady(String text){
         DecisionActions.cancelPending(activity);queued=true;failureText=null;
         lastInteraction=System.currentTimeMillis();prefs.edit().putLong("last_conversation_at",lastInteraction).apply();generation++;
         if(pendingGroup==null){pendingGroup=UUID.randomUUID().toString();if(inFlightGroup!=null)prefs.edit().putString("display:"+pendingGroup,prefs.getString("display:"+inFlightGroup,inFlightGroup)).apply();}

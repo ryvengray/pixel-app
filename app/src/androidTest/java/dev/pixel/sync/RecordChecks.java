@@ -59,6 +59,33 @@ final class RecordChecks {
                 try(LifeRecords reopened=new LifeRecords(context,"record-tests.db")){LifeRecords.Record r=reopened.find(id);expect(r.payload.getJSONArray("items").length()==2,"amount lost");expect(r.original.contains("400"),"original lost");expect(r.day.equals("2026-10-20"),"date lost");reopened.update(id,r.payload,true);}
                 store.save(id,args().put("content","duplicate"),"duplicate");expect(store.find(id).deleted,"retry resurrected deleted record");expect(!store.find(id).payload.getString("content").equals("duplicate"),"retry rewrote existing record");
             });
+            check("locationSnapshotPersistenceAndExport",()->{
+                android.location.Location fix=new android.location.Location("gps");fix.setLatitude(31.2304);fix.setLongitude(121.4737);fix.setAccuracy(12);fix.setTime(System.currentTimeMillis());fix.setElapsedRealtimeNanos(SystemClock.elapsedRealtimeNanos());
+                JSONObject location=RecordLocation.snapshot(fix);expect(location!=null,"fresh fix rejected");String id=id();
+                store.save(id,args(),"记录位置",location);
+                try(LifeRecords reopened=new LifeRecords(context,"record-tests.db")){
+                    LifeRecords.Record r=reopened.find(id);expect(r.location.getDouble("latitude")==31.2304,"location lost after restart");
+                    expect(r.location.getLong("captured_at")==fix.getTime()&&r.location.getDouble("accuracy_m")==12,"fix metadata lost");
+                    expect(LifeRecords.markdown(r).contains("31.230400, 121.473700"),"export lost coordinates");
+                    reopened.update(id,args().put("content","修改后"),false);reopened.save(id,args(),"重试",null);
+                    expect(reopened.find(id).location.toString().equals(location.toString()),"edit/retry replaced original location");
+                    reopened.update(id,args(),true);expect(!LifeRecords.markdown(reopened.find(id)).contains("31.230400"),"deleted export retained location");
+                    reopened.update(id,args(),false);expect(reopened.find(id).location!=null,"undo lost location");
+                }
+                fix.setElapsedRealtimeNanos(SystemClock.elapsedRealtimeNanos()-java.util.concurrent.TimeUnit.MINUTES.toNanos(3));expect(RecordLocation.snapshot(fix)==null,"stale fix accepted");
+                expect(RecordLocation.snapshot(null)==null,"missing fix accepted");
+                expect(!LifeRecords.valid(args().put("location",location)),"model supplied location accepted");
+            });
+            check("versionFiveLocationMigration",()->{
+                String database="record-location-migration.db";context.deleteDatabase(database);
+                try{
+                    try(AssistantStore old=new AssistantStore(context,database)){
+                        SQLiteDatabase db=old.getWritableDatabase();db.execSQL("ALTER TABLE life_record DROP COLUMN location");db.setVersion(5);
+                        db.execSQL("INSERT INTO life_record(id,day,timezone,payload,original,created) VALUES(?,?,?,?,?,?)",new Object[]{"old","2026-10-20","Asia/Shanghai",args().toString(),"原文",1});
+                    }
+                    try(LifeRecords upgraded=new LifeRecords(context,database)){expect(upgraded.find("old").location==null,"old entry acquired location");expect(upgraded.find("old").original.equals("原文"),"migration lost record");upgraded.save("new",args(),"新记录",new JSONObject().put("latitude",1).put("longitude",2));expect(upgraded.find("new").location!=null,"new location not persisted");}
+                }finally{context.deleteDatabase(database);}
+            });
             check("diaryWithoutMoneyDefaultsToLocalToday",()->{String id=id();store.save(id,new JSONObject().put("content","今天很开心").put("items",new JSONArray()),"记日记今天很开心");expect(store.find(id).day.equals(java.time.LocalDate.now().toString()),"wrong local date");});
             check("safExportRetryAndConflict",()->{
                 // Isolated db makes the fake vault independent of any prior emulator records.
