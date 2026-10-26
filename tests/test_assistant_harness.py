@@ -58,6 +58,30 @@ class HarnessTests(unittest.TestCase):
         self.assertEqual(main.create_reminder("带材料", "2030-01-01T15:00:00")["ok"], "false")
         self.assertEqual(main.create_reminder("带材料", "2020-01-01T15:00:00+08:00")["ok"], "false")
 
+    def test_calendar_todo_creation_and_completion_are_handed_to_phone(self):
+        cases = [
+            ("save_special_date", {"title": "交周报", "event_type": "todo", "date": "2026-10-26", "repeat": "biweekly", "year_known": True}, "添加每两周交周报的待办"),
+            ("set_calendar_todo_completed", {"id": "todo-id", "expected_revision": 2, "occurrence": "2026-10-26", "completed": True}, "完成今天交周报的待办"),
+        ]
+        for index, (name, arguments, text) in enumerate(cases):
+            with self.subTest(tool=name):
+                model = AsyncMock(return_value={"role": "assistant", "content": None, "tool_calls": [{"id": "calendar-call", "type": "function", "function": {"name": name, "arguments": json.dumps(arguments)}}]})
+                payload = {"messages": [{"role": "user", "content": text}], "client_message_id": f"calendar-todo-{index}", "client_tools": [name]}
+                with patch.object(main, "deepseek", model):
+                    response = self.client.post("/v1/chat", json=payload, headers=self.headers)
+                self.assertEqual(response.status_code, 200)
+                action = response.json()["client_action"]
+                self.assertTrue(response.json()["pending_client"])
+                self.assertEqual(action["name"], name)
+                self.assertEqual(action["arguments"], arguments)
+                self.assertTrue(action["operation_id"])
+
+    def test_calendar_todo_schema_rejects_invalid_repetition_and_missing_occurrence(self):
+        validator = main.Draft202012Validator(main.SCHEMAS["save_special_date"])
+        self.assertTrue(list(validator.iter_errors({"title": "待办", "repeat": "fortnight"})))
+        validator = main.Draft202012Validator(main.SCHEMAS["set_calendar_todo_completed"])
+        self.assertTrue(list(validator.iter_errors({"id": "todo", "expected_revision": 1, "completed": True})))
+
     def test_operation_id_prevents_duplicate_tool_side_effect(self):
         due = (datetime.now(timezone.utc)+timedelta(days=1)).isoformat()
         first = main.create_reminder("带材料", due, "stable-operation")

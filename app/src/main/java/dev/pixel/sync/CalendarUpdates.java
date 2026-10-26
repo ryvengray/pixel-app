@@ -22,7 +22,7 @@ public final class CalendarUpdates extends BroadcastReceiver {
             List<Due> tasks=new ArrayList<>();long now=System.currentTimeMillis();
             for(JSONObject e:store.items("event")){
                 if(!e.optBoolean("remind",true))continue;ZoneId zone=e.optBoolean("follow_timezone",true)?ZoneId.systemDefault():ZoneId.of(e.optString("timezone",ZoneId.systemDefault().getId()));LocalDate today=LocalDate.now(zone);int offset=e.optInt("remind_days",1);LocalTime time=LocalTime.parse(e.optString("remind_time","09:00"));
-                LocalDate occurrence=CalendarDates.occurrence(e,today.minusDays(1));if(occurrence!=null)tasks.add(new Due("event:"+e.getString("id")+":"+occurrence,e.getString("title")+" · "+occurrence,occurrence,offset,time,zone,false));
+                for(LocalDate occurrence:CalendarDates.reminderOccurrences(e,today))tasks.add(new Due("event:"+e.getString("id")+":"+occurrence,e.getString("title")+" · "+occurrence,occurrence,offset,time,zone,false));
                 if(e.has("milestone")){LocalDate d=LocalDate.parse(e.getString("date")).plusDays(e.getInt("milestone"));tasks.add(new Due("milestone:"+e.getString("id")+":"+d,e.getString("title")+" · 第"+e.getInt("milestone")+"天",d,offset,time,zone,false));}
             }
             JSONObject settings=store.settings(),prediction=store.prediction();

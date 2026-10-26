@@ -146,7 +146,7 @@ class ChatRequest(BaseModel):
     timezone: str = Field(default="Asia/Shanghai", max_length=80)
     client_message_id: str | None = Field(default=None, min_length=8, max_length=100)
     decision_enabled: bool = False
-    client_tools: list[Literal["open_sync", "open_print", "open_topics", "create_life_record", "open_records", "open_calendar", "query_calendar", "save_special_date", "delete_special_date", "get_cycle_summary", "save_cycle_record", "delete_cycle_record", "update_cycle_settings", "update_calendar_preferences", "undo_calendar_operation", "list_calendar_widgets", "configure_calendar_widget"]] = Field(default_factory=list, max_length=25)
+    client_tools: list[Literal["open_sync", "open_print", "open_topics", "create_life_record", "open_records", "open_calendar", "query_calendar", "save_special_date", "set_calendar_todo_completed", "delete_special_date", "get_cycle_summary", "save_cycle_record", "delete_cycle_record", "update_cycle_settings", "update_calendar_preferences", "undo_calendar_operation", "list_calendar_widgets", "configure_calendar_widget"]] = Field(default_factory=list, max_length=25)
     client_tool_result: dict[str, Any] | None = None
     original_message_id: str | None = Field(default=None, exclude=True)
     suppressed_topic_ids: list[str] = Field(default_factory=list, max_length=200)
@@ -238,7 +238,7 @@ TOOLS = [
 # UI preparation is safe; printing still requires the existing page's Print button.
 CLIENT_TOOLS = json.loads((Path(__file__).parent / "client_assets" / "tools.json").read_text(encoding="utf-8"))
 CLIENT_TOOL_NAMES = {tool["function"]["name"] for tool in CLIENT_TOOLS}
-CALENDAR_TOOL_NAMES = {"open_calendar", "query_calendar", "save_special_date", "delete_special_date", "get_cycle_summary", "save_cycle_record", "delete_cycle_record", "update_cycle_settings", "update_calendar_preferences", "undo_calendar_operation", "list_calendar_widgets", "configure_calendar_widget"}
+CALENDAR_TOOL_NAMES = {"open_calendar", "query_calendar", "save_special_date", "set_calendar_todo_completed", "delete_special_date", "get_cycle_summary", "save_cycle_record", "delete_cycle_record", "update_cycle_settings", "update_calendar_preferences", "undo_calendar_operation", "list_calendar_widgets", "configure_calendar_widget"}
 LOCAL_CALENDAR_TOOLS = CALENDAR_TOOL_NAMES - {"open_calendar"}
 EXECUTION_TOOLS = [*TOOLS, *CLIENT_TOOLS]
 SCHEMAS = {t["function"]["name"]: t["function"]["parameters"] for t in EXECUTION_TOOLS}
@@ -253,7 +253,7 @@ async def route_request(request: ChatRequest) -> Decision:
     if request.messages[-1].role != "user" or (len(request.messages) > 1 and request.messages[-2].role == "user"):
         return fallback("conversation_context")
     text = request.messages[-1].content
-    if any(name in CALENDAR_TOOL_NAMES for name in request.client_tools) and any(word in turn.content for turn in request.messages[-6:] for word in ("日历", "农历", "生日", "纪念日", "大姨妈", "月经", "经期", "排卵", "倒数")):
+    if any(name in CALENDAR_TOOL_NAMES for name in request.client_tools) and any(word in turn.content for turn in request.messages[-6:] for word in ("日历", "待办", "农历", "生日", "纪念日", "大姨妈", "月经", "经期", "排卵", "倒数")):
         return fallback("calendar_context")
     if len(text) > 2000:
         return fallback("long_input")

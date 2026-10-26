@@ -179,7 +179,7 @@
     "type": "function",
     "function": {
       "name": "save_special_date",
-      "description": "Create or patch a special date only on an explicit request to save/change it. Query first for updates; id AND expected_revision are required for updates. date is the original Gregorian equivalent; for lunar input supply lunar_month/day/leap and a Gregorian date in the intended year. Do not invent birth years. Every mutation returns actual commit status and operation_id for undo. Default reminders are 1 day ahead at 09:00 local time. Omitted patch fields retain previous values. For a yearless birthday, supply month/day without date and year_known=false; the local executor stores a conversion anchor with unknown year and never calculates age. Lunar month/day also require lunar_month/lunar_day. Do not describe the anchor year as a birth year. Saving a reminder rule is not proof of notification permission or future delivery. When the result reports notification permission missing, tell the user to enable notifications in the calendar UI.",
+      "description": "Create or patch a special date only on an explicit request to save/change it. Query first for updates; id AND expected_revision are required for updates. date is the original Gregorian equivalent; for lunar input supply lunar_month/day/leap and a Gregorian date in the intended year. Do not invent birth years. Every mutation returns actual commit status and operation_id for undo. Default reminders are 1 day ahead at 09:00 local time. Omitted patch fields retain previous values. For a yearless birthday, supply month/day without date and year_known=false; the local executor stores a conversion anchor with unknown year and never calculates age. Lunar month/day also require lunar_month/lunar_day. Do not describe the anchor year as a birth year. Saving a reminder rule is not proof of notification permission or future delivery. When the result reports notification permission missing, tell the user to enable notifications in the calendar UI. Also creates or patches dated to-dos using event_type=todo, a full Gregorian date, year_known=true and repeat=none/daily/weekly/biweekly/monthly/yearly. To-dos default to same-day 09:00 reminders. Monthly repetition keeps the original day and uses month-end in shorter months. Use set_calendar_todo_completed for a single occurrence, never delete the series to mark one occurrence done. Nonannual repeats require Gregorian calendar and a known start year. repeat overrides legacy yearly; omit both when keeping the current rule.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -280,9 +280,62 @@
           "follow_timezone": {
             "type": "boolean",
             "description": "Default true: remind at local device time while travelling. Set false with an explicit IANA timezone to keep a fixed zone."
+          },
+          "event_type": {
+            "type": "string",
+            "enum": [
+              "date",
+              "todo"
+            ],
+            "description": "date is an important date; todo is a completable dated task."
+          },
+          "repeat": {
+            "type": "string",
+            "enum": [
+              "none",
+              "daily",
+              "weekly",
+              "biweekly",
+              "monthly",
+              "yearly"
+            ],
+            "description": "Anchored to original date. biweekly means every 14 days. Monthly uses month-end when needed without shifting later months. Lunar supports none/yearly only."
           }
         },
         "required": [],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "set_calendar_todo_completed",
+      "description": "Mark one dated to-do occurrence completed or pending on an explicit request. Query the exact id, revision and occurrence date first. Does not complete other occurrences or delete the repeating series. Supports operation undo.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "expected_revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "occurrence": {
+            "type": "string",
+            "description": "Exact occurrence date YYYY-MM-DD from query_calendar."
+          },
+          "completed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "expected_revision",
+          "occurrence",
+          "completed"
+        ],
         "additionalProperties": false
       }
     }

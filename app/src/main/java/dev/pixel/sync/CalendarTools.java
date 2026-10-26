@@ -7,7 +7,7 @@ import java.util.*;
 
 /** Agent and local UI use the same validated, revisioned executor. */
 final class CalendarTools {
-    static final Set<String> NAMES=new HashSet<>(Arrays.asList("open_calendar","query_calendar","save_special_date","delete_special_date","get_cycle_summary","save_cycle_record","delete_cycle_record","update_cycle_settings","update_calendar_preferences","undo_calendar_operation","list_calendar_widgets","configure_calendar_widget"));
+    static final Set<String> NAMES=new HashSet<>(Arrays.asList("open_calendar","query_calendar","save_special_date","set_calendar_todo_completed","delete_special_date","get_cycle_summary","save_cycle_record","delete_cycle_record","update_cycle_settings","update_calendar_preferences","undo_calendar_operation","list_calendar_widgets","configure_calendar_widget"));
     static boolean isTool(String name){return NAMES.contains(name);}
     static boolean isLocal(String name){return isTool(name)&&!name.equals("open_calendar");}
     static boolean valid(String name,JSONObject args){
@@ -19,7 +19,8 @@ final class CalendarTools {
             case "open_calendar":fields="date item show_cycle";break;
             case "query_calendar":fields="from to query include_archived";break;
             case "get_cycle_summary":fields="from to";break;
-            case "save_special_date":fields="id expected_revision title date month day year_known calendar lunar_month lunar_day lunar_leap yearly count_up milestone leap_day missing_day remind remind_days remind_time timezone follow_timezone note";break;
+            case "set_calendar_todo_completed":fields="id expected_revision occurrence completed";break;
+            case "save_special_date":fields="event_type repeat id expected_revision title date month day year_known calendar lunar_month lunar_day lunar_leap yearly count_up milestone leap_day missing_day remind remind_days remind_time timezone follow_timezone note";break;
             case "save_cycle_record":fields="id expected_revision start end note";break;
             case "update_cycle_settings":fields="expected_revision cycle_days duration enabled adaptive remind remind_days remind_time timezone follow_timezone ai_access";break;
             case "update_calendar_preferences":fields="expected_revision show_cycle private_notifications";break;
@@ -27,13 +28,14 @@ final class CalendarTools {
             default:fields="id expected_revision";
         }
         Set<String> allowed=new HashSet<>(Arrays.asList(fields.split(" ")));
-        Set<String> bools=new HashSet<>(Arrays.asList("show_cycle","include_archived","year_known","lunar_leap","yearly","count_up","remind","enabled","adaptive","ai_access","private_notifications","follow_timezone"));
+        Set<String> bools=new HashSet<>(Arrays.asList("completed","show_cycle","include_archived","year_known","lunar_leap","yearly","count_up","remind","enabled","adaptive","ai_access","private_notifications","follow_timezone"));
         Set<String> nums=new HashSet<>(Arrays.asList("expected_revision","widget_id","theme","month","day","lunar_month","lunar_day","milestone","remind_days","cycle_days","duration"));
         try{
             for(Iterator<String> keys=args.keys();keys.hasNext();){String k=keys.next();if(!allowed.contains(k))return false;Object value=args.get(k);if(args.isNull(k)){if(!k.equals("end")&&!k.equals("milestone"))return false;continue;}
                 if(bools.contains(k)){if(!(value instanceof Boolean))return false;}else if(nums.contains(k)){if(!(value instanceof Number)||((Number)value).doubleValue()!=((Number)value).intValue())return false;}else if(!(value instanceof String)||((String)value).length()>2000)return false;
-                if(Arrays.asList("date","start","end","from","to").contains(k))LocalDate.parse(args.getString(k));
+                if(Arrays.asList("occurrence","date","start","end","from","to").contains(k))LocalDate.parse(args.getString(k));
             }
+            if(name.equals("set_calendar_todo_completed")&&(!args.has("id")||!args.has("expected_revision")||!args.has("occurrence")||!args.has("completed")))return false;
             if(name.equals("configure_calendar_widget")&&(!args.has("widget_id")||!args.has("expected_revision")))return false;
             if(name.startsWith("delete_")&&(!args.has("id")||!args.has("expected_revision")))return false;
             return true;
@@ -54,6 +56,7 @@ final class CalendarTools {
                 case "get_cycle_summary":{
                     LocalDate from=LocalDate.parse(args.optString("from",LocalDate.now().minusMonths(6).toString())),to=LocalDate.parse(args.optString("to",LocalDate.now().toString()));if(to.isBefore(from)||CalendarDates.days(from,to)>732)throw new IllegalArgumentException("每次查询最多两年");JSONArray records=new JSONArray();for(JSONObject e:store.cycles()){LocalDate date=LocalDate.parse(e.getString("start"));if(!date.isBefore(from)&&!date.isAfter(to)){records.put(e);if(records.length()>50)records.remove(0);}}return new JSONObject().put("ok",true).put("records",records).put("notifications_allowed",store.notificationsAllowed()).put("settings",store.settings()).put("recent_operations",store.recentOperations(true)).put("prediction",store.prediction()).put("summary","已读取大姨妈实际记录与预测，预测不能作为避孕依据");
                 }
+                case "set_calendar_todo_completed":return store.completeTodo(args.getString("id"),args.getInt("expected_revision"),LocalDate.parse(args.getString("occurrence")),args.getBoolean("completed"),operation);
                 case "save_special_date":return store.write("event",args,operation);
                 case "save_cycle_record":return store.write("cycle",args,operation);
                 case "update_cycle_settings":return store.write("settings",new JSONObject(args.toString()).put("id","cycle-settings"),operation);

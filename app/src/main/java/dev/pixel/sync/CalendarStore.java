@@ -10,7 +10,8 @@ import java.util.*;
 /** Local calendar facts. Predictions never become records. All writes are revisioned and idempotent. */
 final class CalendarStore extends SQLiteOpenHelper {
     private final Context context;
-    CalendarStore(Context c){super(c.getApplicationContext(),"calendar.db",null,1);context=c.getApplicationContext();}
+    CalendarStore(Context c){this(c,"calendar.db");}
+    CalendarStore(Context c,String name){super(c.getApplicationContext(),name,null,1);context=c.getApplicationContext();}
     public void onConfigure(SQLiteDatabase db){db.enableWriteAheadLogging();}
     public void onCreate(SQLiteDatabase db){db.execSQL("CREATE TABLE item(id TEXT PRIMARY KEY,kind TEXT NOT NULL,body TEXT NOT NULL)");db.execSQL("CREATE TABLE operation(id TEXT PRIMARY KEY,result TEXT NOT NULL)");db.execSQL("CREATE TABLE delivered(id TEXT PRIMARY KEY,at INTEGER NOT NULL)");}
     public void onUpgrade(SQLiteDatabase db,int old,int next){}
@@ -26,6 +27,11 @@ final class CalendarStore extends SQLiteOpenHelper {
             if(!Arrays.asList("solar","lunar").contains(j.optString("calendar","solar")))throw new IllegalArgumentException("历法无效");
             if(!Arrays.asList("feb28","march1").contains(j.optString("leap_day","feb28")))throw new IllegalArgumentException("闰日规则无效");
             if(!Arrays.asList("last_day","skip","regular").contains(j.optString("missing_day","last_day")))throw new IllegalArgumentException("农历缺日规则无效");
+            if(!Arrays.asList("date","todo").contains(j.optString("event_type","date")))throw new IllegalArgumentException("日期类型无效");
+            if(!Arrays.asList(CalendarDates.REPEATS).contains(CalendarDates.repeat(j)))throw new IllegalArgumentException("重复方式无效");
+            if("lunar".equals(j.optString("calendar"))&&!Arrays.asList("none","yearly").contains(CalendarDates.repeat(j)))throw new IllegalArgumentException("按日、周、两周、月重复请使用公历");
+            if(!j.optBoolean("year_known",true)&&!"yearly".equals(CalendarDates.repeat(j)))throw new IllegalArgumentException("仅记月日需要每年重复");
+            if(CalendarDates.todo(j)&&(!j.optBoolean("year_known",true)||!"solar".equals(j.optString("calendar","solar"))||j.optBoolean("count_up")||j.has("milestone")))throw new IllegalArgumentException("待办需要完整公历日期，不支持正数纪念或里程碑");
             number(j,"lunar_month",1,12);number(j,"lunar_day",1,30);number(j,"milestone",1,100000);number(j,"remind_days",0,365);
         }
         if(kind.equals("cycle")){
@@ -46,6 +52,13 @@ final class CalendarStore extends SQLiteOpenHelper {
             JSONObject after=before==null?new JSONObject():new JSONObject(before.toString());for(Iterator<String> it=change.keys();it.hasNext();){String k=it.next();if(!k.equals("expected_revision")){if(change.isNull(k))after.remove(k);else after.put(k,change.get(k));}}
             if(before!=null&&before.optBoolean("deleted")&&!change.has("deleted")){if(kind.equals("settings")||kind.equals("preferences"))after.put("deleted",false);else throw new IllegalArgumentException("记录已删除，请撤销删除后再修改");}
             if(kind.equals("event")&&!change.has("date")&&change.has("month")&&change.has("day"))after.put("date",LocalDate.of(2000,after.getInt("month"),after.getInt("day")).toString()).put("year_known",false).put("yearly",true);
+            if(kind.equals("event")){
+                if(!change.has("date")&&change.has("month")&&change.has("day")&&!change.has("repeat"))after.put("repeat","yearly");
+                if(before==null&&CalendarDates.todo(after)&&!after.has("remind_days"))after.put("remind_days",0);
+                if(change.has("repeat")&&!change.isNull("repeat"))after.put("yearly","yearly".equals(change.getString("repeat")));
+                else if(change.has("yearly")&&!change.isNull("yearly"))after.put("repeat",change.getBoolean("yearly")?"yearly":"none");
+                if(before!=null&&CalendarDates.todo(before)&&!CalendarDates.todo(after))after.remove("completed_dates");
+            }
             if(kind.equals("event")&&"lunar".equals(after.optString("calendar"))&&!change.has("lunar_month")&&!change.has("lunar_day")){
                 if(change.has("month")&&change.has("day"))after.put("lunar_month",change.getInt("month")).put("lunar_day",change.getInt("day"));
                 else if(change.has("date")||change.has("calendar")){CalendarDates.Lunar lunar=CalendarDates.lunar(LocalDate.parse(after.getString("date")));after.put("lunar_month",lunar.month).put("lunar_day",lunar.day).put("lunar_leap",lunar.leap);}
@@ -106,10 +119,21 @@ final class CalendarStore extends SQLiteOpenHelper {
         LocalDate last=LocalDate.parse(list.get(list.size()-1).getString("start")),next=last.plusDays(length);out.put("available",true).put("last_record_id",list.get(list.size()-1).getString("id")).put("last_start",last.toString()).put("next_start",next.toString()).put("next_end",next.plusDays(settings.getInt("duration")-1).toString()).put("cycle_days",length).put("intervals",intervals).put("variable",spread>10).put("algorithm","calendar-v1").put("overdue",next.isBefore(LocalDate.now()));
         if(spread>10){out.put("range_start",next.minusDays(spread/2).toString()).put("range_end",next.plusDays(spread/2).toString());}else out.put("ovulation",next.minusDays(14).toString()).put("fertile_start",next.minusDays(19).toString()).put("fertile_end",next.minusDays(13).toString());return out;
     }
+    JSONObject completeTodo(String id,int revision,LocalDate date,boolean completed,String operation)throws Exception{
+        SQLiteDatabase db=getWritableDatabase();db.beginTransaction();try{
+            JSONObject previous=operation(operation);if(previous!=null){db.setTransactionSuccessful();return previous;}
+            JSONObject item=get(id);if(item==null||item.optBoolean("deleted")||!CalendarDates.todo(item))throw new IllegalArgumentException("待办不存在，请重新查询");
+            if(!date.equals(CalendarDates.occurrence(item,date)))throw new IllegalArgumentException("该日期不是这条待办的发生日期");
+            JSONArray dates=item.optJSONArray("completed_dates"),updated=new JSONArray();if(dates!=null)for(int i=0;i<dates.length();i++)if(!date.toString().equals(dates.getString(i)))updated.put(dates.getString(i));if(completed)updated.put(date.toString());
+            JSONObject result=write("event",new JSONObject().put("id",id).put("expected_revision",revision).put("completed_dates",updated),operation);
+            result.put("summary",completed?"已完成这次待办":"已恢复这次待办");
+            ContentValues value=new ContentValues();value.put("result",result.toString());db.update("operation",value,"id=?",new String[]{operation});db.setTransactionSuccessful();return result;
+        }finally{db.endTransaction();CalendarUpdates.changed(context);}
+    }
     JSONArray events(LocalDate from,LocalDate to)throws Exception {
         JSONArray out=new JSONArray();for(JSONObject item:items("event")){
             LocalDate d=CalendarDates.occurrence(item,from);int limit=0;
-            while(d!=null&&!d.isAfter(to)&&limit++<20){if(!d.isBefore(from)){JSONObject copy=new JSONObject(item.toString());copy.put("occurrence",d.toString()).put("days_until",CalendarDates.days(LocalDate.now(),d)).put("elapsed_days",item.optBoolean("year_known",true)?CalendarDates.days(LocalDate.parse(item.getString("date")),LocalDate.now()):JSONObject.NULL);out.put(copy);}if(!item.optBoolean("yearly"))break;d=CalendarDates.occurrence(item,d.plusDays(1));}
+            while(d!=null&&!d.isAfter(to)&&limit++<800){if(!d.isBefore(from)){JSONObject copy=new JSONObject(item.toString());copy.remove("completed_dates");copy.put("completed",CalendarDates.todo(item)&&CalendarDates.completed(item,d));copy.put("occurrence",d.toString()).put("days_until",CalendarDates.days(LocalDate.now(),d)).put("elapsed_days",item.optBoolean("year_known",true)?CalendarDates.days(LocalDate.parse(item.getString("date")),LocalDate.now()):JSONObject.NULL);out.put(copy);}if(!CalendarDates.repeats(item))break;d=CalendarDates.occurrence(item,d.plusDays(1));}
             if(item.has("milestone")){LocalDate milestone=LocalDate.parse(item.getString("date")).plusDays(item.getInt("milestone"));if(!milestone.isBefore(from)&&!milestone.isAfter(to))out.put(new JSONObject(item.toString()).put("occurrence",milestone.toString()).put("days_until",CalendarDates.days(LocalDate.now(),milestone)).put("title",item.getString("title")+" · 第"+item.getInt("milestone")+"天"));}
         }
         List<JSONObject> sorted=new ArrayList<>();for(int i=0;i<out.length();i++)sorted.add(out.getJSONObject(i));sorted.sort(Comparator.comparing(j->j.optString("occurrence")));return new JSONArray(sorted);

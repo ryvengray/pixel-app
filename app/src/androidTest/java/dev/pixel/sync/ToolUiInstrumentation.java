@@ -16,9 +16,10 @@ import org.json.JSONObject;
 public final class ToolUiInstrumentation extends Instrumentation {
     private Activity current;
     private int passed;
-    private boolean homeSuite,syncSuite,recordSuite,imageSuite;
-    @Override public void onCreate(Bundle args){super.onCreate(args);homeSuite=args!=null&&"home".equals(args.getString("suite"));syncSuite=args!=null&&"sync".equals(args.getString("suite"));recordSuite=args!=null&&"records".equals(args.getString("suite"));imageSuite=args!=null&&"images".equals(args.getString("suite"));start();}
+    private boolean homeSuite,syncSuite,recordSuite,imageSuite,calendarSuite;
+    @Override public void onCreate(Bundle args){super.onCreate(args);homeSuite=args!=null&&"home".equals(args.getString("suite"));syncSuite=args!=null&&"sync".equals(args.getString("suite"));recordSuite=args!=null&&"records".equals(args.getString("suite"));imageSuite=args!=null&&"images".equals(args.getString("suite"));calendarSuite=args!=null&&"calendar".equals(args.getString("suite"));start();}
     @Override public void onStart(){
+        if(calendarSuite){new CalendarChecks(this).run();return;}
         if(imageSuite){new ImageImportChecks(this).run();return;}
         if(recordSuite){new RecordChecks(this).run();return;}
         if(homeSuite){new HomeInteractionChecks(this).run();return;}

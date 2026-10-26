@@ -37,8 +37,24 @@ final class CalendarDates {
         for(Map.Entry<LocalDate,Integer> e:ordinary.entrySet())if(!leapYears.contains(e.getValue()))exact.add(e.getKey());Collections.sort(exact);List<LocalDate> result=Collections.unmodifiableList(exact);lunarCache.put(key,result);return result;
     }
     static LocalDate lunarInYear(int year,int month,int day,boolean leap,String policy){List<LocalDate> dates=lunarCandidates(year,month,day,leap,policy);return dates.isEmpty()?null:dates.get(0);}
+    static final String[] REPEATS={"none","daily","weekly","biweekly","monthly","yearly"};
+    static final String[] REPEAT_LABELS={"不重复","每天","每周","每两周","每月","每年"};
+    static String repeat(org.json.JSONObject e){return e.optString("repeat",e.optBoolean("yearly",false)?"yearly":"none");}
+    static boolean repeats(org.json.JSONObject e){return !"none".equals(repeat(e));}
+    static boolean todo(org.json.JSONObject e){return "todo".equals(e.optString("event_type"));}
+    static boolean completed(org.json.JSONObject e,LocalDate date){org.json.JSONArray dates=e.optJSONArray("completed_dates");if(dates!=null)for(int i=0;i<dates.length();i++)if(date.toString().equals(dates.optString(i)))return true;return false;}
+    static String repeatLabel(org.json.JSONObject e){int index=Arrays.asList(REPEATS).indexOf(repeat(e));return REPEAT_LABELS[Math.max(0,index)];}
     static LocalDate occurrence(org.json.JSONObject e,LocalDate after){
-        LocalDate base=LocalDate.parse(e.optString("date"));if(!e.optBoolean("yearly",false))return base;boolean known=e.optBoolean("year_known",true);int firstYear=known?Math.max(after.getYear(),base.getYear()):after.getYear();
+        LocalDate base=LocalDate.parse(e.optString("date"));String repeat=repeat(e);if("none".equals(repeat))return base;
+        if(Arrays.asList("daily","weekly","biweekly").contains(repeat)){
+            int step="daily".equals(repeat)?1:"weekly".equals(repeat)?7:14;
+            long gap=Math.max(0,days(base,after));return base.plusDays(((gap+step-1)/step)*step);
+        }
+        if("monthly".equals(repeat)){
+            long gap=Math.max(0,ChronoUnit.MONTHS.between(YearMonth.from(base),YearMonth.from(after)));
+            LocalDate candidate=base.plusMonths(gap);return candidate.isBefore(after)?base.plusMonths(gap+1):candidate;
+        }
+        boolean known=e.optBoolean("year_known",true);int firstYear=known?Math.max(after.getYear(),base.getYear()):after.getYear();
         for(int y=firstYear;y<firstYear+20;y++){
             LocalDate d;
             if("lunar".equals(e.optString("calendar"))){Lunar b=lunar(base);for(LocalDate candidate:lunarCandidates(y,e.optInt("lunar_month",b.month),e.optInt("lunar_day",b.day),e.optBoolean("lunar_leap",b.leap),e.optString("missing_day","last_day")))if(!candidate.isBefore(after)&&(!known||!candidate.isBefore(base)))return candidate;continue;}
@@ -46,6 +62,13 @@ final class CalendarDates {
             if(d!=null&&!d.isBefore(after)&&(!known||!d.isBefore(base)))return d;
         }
         return null;
+    }
+    static List<LocalDate> reminderOccurrences(org.json.JSONObject e,LocalDate today){
+        Set<LocalDate> dates=new TreeSet<>();LocalDate current=occurrence(e,today);
+        if(current!=null)dates.add(current);
+        LocalDate next=occurrence(e,today.plusDays(e.optInt("remind_days",1)));
+        if(next!=null){dates.add(next);if(repeats(e)){LocalDate following=occurrence(e,next.plusDays(1));if(following!=null)dates.add(following);}}
+        dates.removeIf(date->todo(e)&&completed(e,date));return new ArrayList<>(dates);
     }
     static long days(LocalDate a,LocalDate b){return ChronoUnit.DAYS.between(a,b);}
     private CalendarDates(){}

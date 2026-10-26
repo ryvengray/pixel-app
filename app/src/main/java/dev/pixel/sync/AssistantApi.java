@@ -32,7 +32,7 @@ public final class AssistantApi {
             catch(ApiException incompatible){
                 if(incompatible.status!=422||!incompatible.getMessage().contains("client_tools")||request.has("client_tool_result"))throw incompatible;
                 String latest=messages.isEmpty()?"":messages.get(messages.size()-1).content;
-                if(latest.matches("(?s).*(日历|生日|大姨妈|农历|纪念|排卵|倒数|月经|经期).*"))throw new IOException("助理服务尚未更新日历能力，请更新服务端；日历页面和本地提醒仍可使用");
+                if(latest.matches("(?s).*(日历|待办|生日|大姨妈|农历|纪念|排卵|倒数|月经|经期).*"))throw new IOException("助理服务尚未更新日历能力，请更新服务端；日历页面和本地提醒仍可使用");
                 request.put("client_tools",new JSONArray(Arrays.asList("open_sync","open_print","open_topics","create_life_record","open_records")));requests.edit().putString(messageId,request.toString()).commit();reply=parseServer(post(url+"/v1/chat",token,request));
             }
             for(int step=0;reply.pendingClient&&step<24;step++){
@@ -102,7 +102,7 @@ public final class AssistantApi {
     }
     private static JSONObject calendarResult(Context context,String name,JSONObject args,String operation,List<AssistantStore.Message> messages)throws Exception{
         boolean query=name.equals("query_calendar")||name.equals("get_cycle_summary")||name.equals("list_calendar_widgets");String latest=messages.isEmpty()?"":messages.get(messages.size()-1).content;
-        if(!query&&(!latest.matches("(?s).*(记|保存|添加|创建|改|修正|删除|撤销|开启|关闭|隐藏|显示|设置|提醒|来了|结束|开始|取消|停止).*" )||latest.matches("(?s).*(假如|假设|如果|如何|怎么|介绍|解释|是否支持|能不能支持).*")))return new JSONObject().put("ok",false).put("error","需要明确的新增或修改指令；普通问询不会写入记录");
+        if(!query&&(!latest.matches("(?s).*(记|保存|添加|创建|改|修正|删除|撤销|完成|恢复|开启|关闭|隐藏|显示|设置|提醒|来了|结束|开始|取消|停止).*" )||latest.matches("(?s).*(假如|假设|如果|如何|怎么|介绍|解释|是否支持|能不能支持).*")))return new JSONObject().put("ok",false).put("error","需要明确的新增或修改指令；普通问询不会写入记录");
         return CalendarTools.execute(context,name,args,operation);
     }
     private static JSONArray getArray(Context context,String path)throws Exception{
