@@ -56,6 +56,32 @@ def record_intent(text: str) -> bool:
     return bool(re.search(r"^(?:请|麻烦|帮我|给我|我要|我想|我需要)*(?:记一下|记录一下|记一笔|记录一笔|记日记|写日记)", text.strip())) and not non_action(text)
 
 
+def record_confirmation(offer: str, answer: str) -> bool:
+    # Only a short answer to the immediately preceding, unambiguous save offer.
+    answer = re.sub(r"[\s，,。.!！~～]+", "", answer).lower()
+    if answer not in {"好", "好的", "好啊", "好呀", "行", "行的", "可以", "可以的", "嗯", "嗯嗯", "是", "是的", "对", "确定", "确认", "同意", "记吧", "记下来", "保存吧", "帮我记下", "好记吧", "好记一下", "ok", "yes"}:
+        return False
+    prompt = re.split(r"\n\s*\n", offer, maxsplit=1)[0]
+    if re.search(r"还是|或者|或是|同时|顺便|提醒|打印|删除|同步|待办|重要日期|不要|不需要|已经|已保存|已记录|没能|无法|不能", prompt):
+        return False
+    return bool(re.search(r"(?:要我|要不要|需要我|是否|我帮你|我来|要)[^。！？?!\n]{0,100}(?:(?:记|记录|保存|存入|存进|存到|写入|写进)[^。！？?!\n]{0,30}(?:生活记录|日记|账本)|记账)[^。！？?!\n]{0,30}(?:吗|么|[？?])", prompt))
+
+
+def record_requested(messages) -> bool:
+    if not messages or messages[-1].role != "user":
+        return False
+    start = len(messages) - 1
+    while start > 0 and messages[start - 1].role == "user":
+        start -= 1
+    if record_intent(messages[-1].content):
+        return True
+    return (start == len(messages) - 1 and start >= 2
+            and messages[start - 1].role == "assistant"
+            and messages[start - 2].role == "user"
+            and bool(messages[start - 2].content.strip())
+            and record_confirmation(messages[start - 1].content, messages[start].content))
+
+
 def non_action(text: str) -> bool:
     # Ambiguous, quoted, negative and multi-action turns retain the LLM context.
     return not operation_intent(text) or informational(text) or bool(re.search(

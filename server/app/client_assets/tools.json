@@ -45,7 +45,7 @@
     "type": "function",
     "function": {
       "name": "create_life_record",
-      "description": "Save a diary/life record and optional multiple financial items ON THE PHONE, only when the user explicitly asks to record it (记一下/记一笔/记日记). Preserve all supplied amounts; never treat this as stable memory. Do not invent amounts or currency conversions. Date defaults to today in user's timezone; resolve 昨天/今天 to YYYY-MM-DD. Ask if ambiguous. This returns a pending local action; never claim saved until phone commits it.",
+      "description": "Save a diary/life record and optional multiple financial items ON THE PHONE, when the user explicitly asks to record it (记一下/记一笔/记日记), or gives a short affirmative reply (好/可以/确认) to your immediately preceding unambiguous offer to save it to life records. Use the original user facts and supplements for a confirmed record; do not ask for a repeated full command. Preserve all supplied amounts and nonfinancial details (for example odometer mileage) in content; never treat this as stable memory. Do not invent amounts or currency conversions. Date defaults to today in user's timezone; resolve 昨天/今天 to YYYY-MM-DD. Ask if ambiguous. This returns a pending local action; never claim saved until phone commits it.",
       "parameters": {
         "type": "object",
         "properties": {

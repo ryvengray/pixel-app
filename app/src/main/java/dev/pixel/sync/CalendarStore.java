@@ -138,6 +138,32 @@ final class CalendarStore extends SQLiteOpenHelper {
         }
         List<JSONObject> sorted=new ArrayList<>();for(int i=0;i<out.length();i++)sorted.add(out.getJSONObject(i));sorted.sort(Comparator.comparing(j->j.optString("occurrence")));return new JSONArray(sorted);
     }
+    /** Summaries show one next pending occurrence per record, including overdue one-off tasks. */
+    JSONArray upcoming(LocalDate from,LocalDate to)throws Exception{
+        List<JSONObject> result=new ArrayList<>();for(JSONObject item:items("event")){
+            JSONObject next=nextUpcoming(item,from,to);if(next!=null)result.add(next);
+        }
+        result.sort(Comparator.comparing((JSONObject e)->e.optString("occurrence")).thenComparingInt(e->CalendarDates.todo(e)?0:1).thenComparing(e->e.optString("title")).thenComparing(e->e.optString("id")));
+        return new JSONArray(result);
+    }
+    static JSONObject nextUpcoming(JSONObject item,LocalDate from,LocalDate to)throws Exception{
+        LocalDate date=CalendarDates.occurrence(item,from);boolean todo=CalendarDates.todo(item);
+        if(todo){
+            JSONArray completed=item.optJSONArray("completed_dates");int remaining=completed==null?0:completed.length();
+            while(date!=null&&CalendarDates.completed(item,date)){
+                if(!CalendarDates.repeats(item)||remaining--<=0){date=null;break;}
+                date=CalendarDates.occurrence(item,date.plusDays(1));
+            }
+        }
+        if(date!=null&&(date.isAfter(to)||(!todo&&date.isBefore(from))))date=null;
+        boolean milestone=false;if(item.has("milestone")){
+            LocalDate day=LocalDate.parse(item.getString("date")).plusDays(item.getInt("milestone"));
+            if(!day.isBefore(from)&&!day.isAfter(to)&&(date==null||day.isBefore(date))){date=day;milestone=true;}
+        }
+        if(date==null)return null;
+        JSONObject copy=new JSONObject(item.toString());copy.remove("completed_dates");copy.put("occurrence",date.toString()).put("completed",false).put("days_until",CalendarDates.days(LocalDate.now(),date)).put("elapsed_days",item.optBoolean("year_known",true)?CalendarDates.days(LocalDate.parse(item.getString("date")),LocalDate.now()):JSONObject.NULL);
+        if(milestone)copy.put("title",item.getString("title")+" · 第"+item.getInt("milestone")+"天");return copy;
+    }
     boolean delivered(String key){try(Cursor c=getReadableDatabase().rawQuery("SELECT 1 FROM delivered WHERE id=?",new String[]{key})){return c.moveToFirst();}}
     void markDelivered(String key){ContentValues v=new ContentValues();v.put("id",key);v.put("at",System.currentTimeMillis());getWritableDatabase().insertWithOnConflict("delivered",null,v,SQLiteDatabase.CONFLICT_IGNORE);}
 }

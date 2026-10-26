@@ -234,6 +234,37 @@ class GatewayTests(unittest.TestCase):
             with patch.object(main,"deepseek",AsyncMock(side_effect=[self.call("create_life_record",{"content":"今天很开心","items":[]}),{"content":"请说明要记录的内容"}])):
                 self.assertNotIn("client_action",self.send().json())
 
+    def test_confirmed_life_record_reaches_phone_with_context_and_retry(self):
+        source = "今天加了340块钱的油，现在的里程是 61978 公里"
+        offer = "要我把这笔记进生活记录吗？\n\n- 油费：340元\n- 当前里程：61978公里"
+        args = {"content": "今天加油340元，当前里程61978公里", "items": [{"amount": "340", "currency": "CNY", "kind": "expense", "category": "油费"}]}
+        for index, answer in enumerate(["好", "好的。", "可以", "确认"]):
+            with self.subTest(answer=answer):
+                self.payload.update(messages=[{"role": "user", "content": source}, {"role": "assistant", "content": offer}, {"role": "user", "content": answer}], client_message_id=f"confirmed-life-record-{index}", client_tools=["create_life_record"])
+                model = AsyncMock(return_value=self.call("create_life_record", args))
+                # The non-action router must still expose this context-authorized tool.
+                with patch.object(main, "route_request", AsyncMock(return_value=fallback("non_action"))), patch.object(main, "deepseek", model):
+                    first = self.send(); retry = self.send()
+                self.assertEqual(first.status_code, 200)
+                self.assertEqual(first.json()["client_action"]["arguments"], args)
+                self.assertEqual(first.json(), retry.json())
+                model.assert_awaited_once()
+                self.assertIn("create_life_record", {tool["function"]["name"] for tool in model.call_args.args[1]})
+                self.assertIn("61978", str(model.call_args.args[0]))
+                self.assertNotIn("已记录", first.json()["content"])
+
+    def test_record_confirmation_does_not_authorize_other_actions_or_stale_offers(self):
+        from app.decision import record_requested
+        source = main.Turn(role="user", content="今天加了340块钱的油，现在的里程是61978公里")
+        offer = main.Turn(role="assistant", content="要我把这笔记进生活记录吗？")
+        for answer in ["不要", "不用了", "先不记", "可以吗？", "好，但别保存", "好，340改成400", "好，打印一下"]:
+            self.assertFalse(record_requested([source, offer, main.Turn(role="user", content=answer)]), answer)
+        for question in ["要我提醒你吗？", "要记入生活记录还是打印？", "已经记进生活记录了。要我打印吗？", "要我把生日加到重要日期吗？"]:
+            self.assertFalse(record_requested([source, main.Turn(role="assistant", content=question), main.Turn(role="user", content="好")]), question)
+        self.assertFalse(record_requested([main.Turn(role="user", content="好")]))
+        self.assertFalse(record_requested([source, offer, main.Turn(role="user", content="换个话题"), main.Turn(role="assistant", content="今天过得好吗？"), main.Turn(role="user", content="好")]))
+        self.assertFalse(record_requested([main.Turn(role="user", content="记一下今天加油340元"), main.Turn(role="user", content="不要记了")]))
+
     def test_record_required_policy_never_direct(self):
         request=DecisionRequest(text="记一下我今天加了油400块",available_tools=["create_life_record"])
         self.assertEqual(apply_policy(request,"create_life_record",1).type,"TOOL_WITH_LLM")

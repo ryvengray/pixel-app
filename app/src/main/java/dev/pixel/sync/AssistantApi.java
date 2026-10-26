@@ -53,10 +53,9 @@ public final class AssistantApi {
     }
     private static Reply commitRecord(Context context,Reply reply,List<AssistantStore.Message> messages,String id)throws Exception{
         if(reply.clientAction==null||!"create_life_record".equals(reply.clientAction.optString("name")))return reply;
-        String original=messages.isEmpty()?"":messages.get(messages.size()-1).content;
-        if(!id.equals(reply.clientAction.optString("id"))||!ClientTools.recordCommand(original))throw new IOException("记录指令未通过校验");
-        StringBuilder evidence=new StringBuilder();for(AssistantStore.Message m:messages)if(m.role.equals("user")&&m.groupId.equals(id)){if(evidence.length()>0)evidence.append("\n");evidence.append(m.content);}
-        try(LifeRecords records=new LifeRecords(context)){records.save(id,reply.clientAction.getJSONObject("arguments"),evidence.length()>0?evidence.toString():original);}
+        String evidence=ClientTools.recordEvidence(messages);
+        if(!id.equals(reply.clientAction.optString("id"))||evidence==null)throw new IOException("记录指令未通过校验");
+        try(LifeRecords records=new LifeRecords(context)){records.save(id,reply.clientAction.getJSONObject("arguments"),evidence);}
         LifeSync.schedule(context);
         return new Reply("已记录。"+LifeRecords.summary(reply.clientAction.getJSONObject("arguments")),reply.memories,reply.directFallback,reply.toolResults);
     }
@@ -67,14 +66,14 @@ public final class AssistantApi {
         JSONObject state;String snapshot=sessions.getString(messageId,null);
         if(snapshot!=null)state=new JSONObject(snapshot);
         else{
-            JSONArray turns=new JSONArray();StringBuilder context=new StringBuilder("Current date/time: "+java.time.ZonedDateTime.now()+". You are Greta, a warm concise assistant. Only execute mutations explicitly requested by the user. Calendar facts live on the phone: query to obtain ids/revisions before patching. Never infer actual periods from predictions or save these facts to general memory. User-facing term is 大姨妈. Date-only cycle predictions cannot provide safe days or diagnosis. Do not guess a birth year. Never claim saved before a successful tool result.\n");
+            JSONArray turns=new JSONArray();StringBuilder context=new StringBuilder("Current date/time: "+java.time.ZonedDateTime.now()+". You are Greta, a warm concise assistant. Only execute mutations explicitly requested by the user. Calendar facts live on the phone: query to obtain ids/revisions before patching. Never infer actual periods from predictions or save these facts to general memory. User-facing term is 大姨妈. Date-only cycle predictions cannot provide safe days or diagnosis. Do not guess a birth year. Never claim saved before a successful tool result. A short affirmative answer to your immediately preceding offer to save a life record authorizes create_life_record using the original user details. Preserve mileage and other nonfinancial details in content. If a tool is unavailable, do not guess permissions or ask the user to restate facts already in this conversation.\n");
             for(AssistantStore.Memory m:memories)context.append("- [").append(m.category).append("] ").append(m.fact).append("\n");
             turns.put(new JSONObject().put("role","system").put("content",context.toString()));for(AssistantStore.Message m:messages)turns.put(new JSONObject().put("role",m.role).put("content",m.content));
             state=new JSONObject().put("messages",turns).put("step",0).put("pending",new JSONArray()).put("index",0);
         }
         String latest=messages.isEmpty()?"":messages.get(messages.size()-1).content;
         JSONArray definitions=ClientTools.definitions(phone),allowed=new JSONArray();
-        for(int i=0;i<definitions.length();i++){JSONObject t=definitions.getJSONObject(i);String name=t.getJSONObject("function").getString("name");if(CalendarTools.isTool(name)||ClientTools.explicitCommand(latest))allowed.put(t);}
+        for(int i=0;i<definitions.length();i++){JSONObject t=definitions.getJSONObject(i);String name=t.getJSONObject("function").getString("name");if(CalendarTools.isTool(name)||ClientTools.explicitCommand(latest)||(name.equals("create_life_record")&&ClientTools.recordEvidence(messages)!=null))allowed.put(t);}
         while(state.getInt("step")<8){
             JSONArray turns=state.getJSONArray("messages"),calls=state.getJSONArray("pending");
             if(calls.length()==0){
@@ -89,7 +88,7 @@ public final class AssistantApi {
                     String operation=messageId+":"+state.getInt("step")+":"+i+":"+name;
                     JSONObject result=calendarResult(phone,name,args,operation,messages);
                     turns.put(new JSONObject().put("role","tool").put("tool_call_id",call.getString("id")).put("content",result.toString()));state.put("index",i+1);sessions.edit().putString(messageId,state.toString()).commit();
-                }else if(ClientTools.valid(name,args)&&(CalendarTools.isTool(name)||ClientTools.explicitCommand(latest))&&calls.length()==1){
+                }else if(ClientTools.valid(name,args)&&(CalendarTools.isTool(name)||ClientTools.explicitCommand(latest)||(name.equals("create_life_record")&&ClientTools.recordEvidence(messages)!=null))&&calls.length()==1){
                     sessions.edit().remove(messageId).apply();Reply reply=new Reply("已准备打开本地工具。",Collections.emptyList(),true);reply.clientAction=new JSONObject().put("name",name).put("arguments",args).put("id",messageId);return reply;
                 }else throw new IOException("工具请求不完整，请说明要修改或查询的内容");
             }

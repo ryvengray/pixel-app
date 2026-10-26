@@ -84,10 +84,61 @@ final class CalendarChecks {
                     JSONObject occurrence=saved.events(LocalDate.now(),LocalDate.now()).getJSONObject(0);method.invoke(activity,occurrence);dialog=(Dialog)field.get(activity);find(dialog.getWindow().getDecorView(),"标记完成 · "+LocalDate.now()).performClick();expect(CalendarDates.completed(saved.get(entry.getString("id")),LocalDate.now()),"form completion did not persist");
                 }catch(Exception error){throw new RuntimeException(error);}});}finally{test.runOnMainSync(activity::finish);test.waitForIdleSync();context.deleteDatabase("calendar-ui-tests.db");}
             });
+            check("upcomingDeduplicatesByRecordAndAdvancesCompletedTasks",()->{
+                String db="calendar-upcoming-tests.db";context.deleteDatabase(db);try(CalendarStore isolated=new CalendarStore(context,db)){
+                    LocalDate today=LocalDate.now();JSONObject biweekly=isolated.write("event",task(today.toString(),"biweekly"),UUID.randomUUID().toString()).getJSONObject("record");
+                    JSONObject second=isolated.write("event",task(today.plusDays(1).toString(),"weekly"),UUID.randomUUID().toString()).getJSONObject("record");
+                    JSONArray upcoming=isolated.upcoming(today,today.plusYears(1));expect(upcoming.length()==2,"repeated series flooded summary or equal titles were merged");expect(upcoming.getJSONObject(0).getString("id").equals(biweekly.getString("id")),"today task not first");
+                    expect(isolated.events(today,today.plusDays(30)).length()>2,"calendar dates lost repetitions");
+                    isolated.completeTodo(biweekly.getString("id"),1,today,true,UUID.randomUUID().toString());upcoming=isolated.upcoming(today,today.plusYears(1));
+                    expect(upcoming.length()==2&&upcoming.getJSONObject(0).getString("id").equals(second.getString("id")),"pending items not chronologically sorted");expect(upcoming.getJSONObject(1).getString("occurrence").equals(today.plusDays(14).toString()),"completed task did not advance exactly two weeks");
+                    JSONObject once=isolated.write("event",task(today.minusDays(2).toString(),"none"),UUID.randomUUID().toString()).getJSONObject("record");expect(isolated.upcoming(today,today.plusYears(1)).getJSONObject(0).getString("id").equals(once.getString("id")),"overdue one-off task disappeared");
+                    isolated.completeTodo(once.getString("id"),1,today.minusDays(2),true,UUID.randomUUID().toString());expect(isolated.upcoming(today,today.plusYears(1)).length()==2,"completed one-off task still in summary");
+                }finally{context.deleteDatabase(db);}
+            });
+            check("widgetCompletionIsIdempotentAndOccurrenceSpecific",()->{
+                String db="calendar-widget-complete-tests.db";context.deleteDatabase(db);try(CalendarStore isolated=new CalendarStore(context,db)){
+                    LocalDate today=LocalDate.now();JSONObject e=isolated.write("event",task(today.toString(),"biweekly"),UUID.randomUUID().toString()).getJSONObject("record");Intent click=CalendarWidget.completionIntent(e,today);
+                    CalendarWidget.completeTodo(isolated,click);CalendarWidget.completeTodo(isolated,click);JSONObject current=isolated.get(e.getString("id"));expect(current.getInt("revision")==2,"double widget tap duplicated completion");expect(CalendarDates.completed(current,today)&&!CalendarDates.completed(current,today.plusDays(14)),"widget completed the whole series");
+                    JSONObject next=isolated.upcoming(today,today.plusYears(1)).getJSONObject(0);expect(next.getString("occurrence").equals(today.plusDays(14).toString()),"summary did not advance after widget completion");
+                    Intent stale=CalendarWidget.completionIntent(e,today.plusDays(14));boolean rejected=false;try{CalendarWidget.completeTodo(isolated,stale);}catch(IllegalArgumentException error){rejected=true;}expect(rejected,"stale widget changed a newer record");
+                }finally{context.deleteDatabase(db);}
+            });
+            check("shortWidgetKeepsScrollableTasksAndCompletionButton",()->{
+                String db="calendar-widget-view-tests.db";context.deleteDatabase(db);int widget=-41257;
+                try(CalendarStore isolated=new CalendarStore(context,db)){
+                    LocalDate today=LocalDate.now();JSONObject fixture=isolated.write("event",task(today.toString(),"biweekly").put("title","今天的组件待办"),UUID.randomUUID().toString()).getJSONObject("record");
+                    int offset=(int)java.time.temporal.ChronoUnit.MONTHS.between(YearMonth.now(),YearMonth.of(2026,8));CalendarWidget.prefs(context,widget).edit().putInt("offset",offset).putInt("theme",1).putString("event",fixture.getString("id")).commit();
+                    android.os.Bundle options=new android.os.Bundle();options.putInt(android.appwidget.AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT,360);options.putInt(android.appwidget.AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH,300);
+                    for(String mode:new String[]{"calendar","agenda","countdown"})test.runOnMainSync(()->{try{
+                        options.putInt(android.appwidget.AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT,mode.equals("calendar")?360:mode.equals("agenda")?120:140);
+                        android.appwidget.AppWidgetHostView frame=new android.appwidget.AppWidgetHostView(context);android.appwidget.AppWidgetProviderInfo info=android.appwidget.AppWidgetManager.getInstance(context).getInstalledProviders().stream().filter(provider->provider.provider.equals(new ComponentName(context,CalendarWidget.class))).findFirst().get();frame.setAppWidget(widget,info);View view=CalendarWidget.build(context,widget,isolated,mode,options).apply(context,frame);frame.addView(view);
+                        float density=context.getResources().getDisplayMetrics().density;int width=Math.round(300*density),height=Math.round((mode.equals("calendar")?360:mode.equals("agenda")?120:140)*density);frame.measure(View.MeasureSpec.makeMeasureSpec(width,View.MeasureSpec.EXACTLY),View.MeasureSpec.makeMeasureSpec(height,View.MeasureSpec.EXACTLY));frame.layout(0,0,width,height);
+                        ListView list=view.findViewById(R.id.widget_events);expect(list.getHeight()>=Math.round(44*density),"short "+mode+" widget has only "+list.getHeight()+" pixels for tasks");expect(list.getAdapter()!=null&&list.getAdapter().getCount()==1,"widget hides today task or repeats the same series");View row=list.getAdapter().getView(0,null,list);expect(((TextView)row.findViewById(R.id.widget_event)).getText().toString().contains("今天的组件待办"),"today task missing");expect(row.findViewById(R.id.widget_event_complete).getVisibility()==View.VISIBLE,"widget completion control missing");
+                        if(mode.equals("calendar")){android.graphics.Bitmap bitmap=android.graphics.Bitmap.createBitmap(width,height,android.graphics.Bitmap.Config.ARGB_8888);frame.draw(new android.graphics.Canvas(bitmap));try(java.io.OutputStream output=new java.io.FileOutputStream(new java.io.File(context.getExternalFilesDir(null),"calendar-widget-short-todo.png"))){bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG,100,output);}bitmap.recycle();}
+                    }catch(Exception error){throw new RuntimeException(error);}});
+                }finally{CalendarWidget.prefs(context,widget).edit().clear().commit();context.deleteDatabase(db);}
+            });
+            check("boundWidgetCheckboxCommitsThroughBroadcast",()->{
+                android.appwidget.AppWidgetManager manager=android.appwidget.AppWidgetManager.getInstance(context);android.appwidget.AppWidgetHost host=new android.appwidget.AppWidgetHost(context,41257);int widget=-1;Activity activity=null;String recordId=null;
+                try(CalendarStore phone=new CalendarStore(context)){
+                    test.getUiAutomation().adoptShellPermissionIdentity();widget=host.allocateAppWidgetId();expect(manager.bindAppWidgetIdIfAllowed(widget,new ComponentName(context,CalendarWidget.class)),"cannot bind isolated test widget");test.getUiAutomation().dropShellPermissionIdentity();host.startListening();
+                    LocalDate today=LocalDate.now();String title="组件点击测试-"+UUID.randomUUID();JSONObject item=phone.write("event",task(today.toString(),"biweekly").put("title",title),UUID.randomUUID().toString()).getJSONObject("record");recordId=item.getString("id");
+                    Bundle options=new Bundle();options.putInt(android.appwidget.AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT,360);options.putInt(android.appwidget.AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH,300);manager.updateAppWidgetOptions(widget,options);
+                    activity=test.startActivitySync(new Intent(context,CalendarActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));Activity screen=activity;int bound=widget;final android.appwidget.AppWidgetHostView[] hosted={null};
+                    test.runOnMainSync(()->{try{FrameLayout frame=new FrameLayout(screen);hosted[0]=host.createView(screen,bound,manager.getAppWidgetInfo(bound));frame.addView(hosted[0],new FrameLayout.LayoutParams(Math.round(300*context.getResources().getDisplayMetrics().density),Math.round(360*context.getResources().getDisplayMetrics().density)));screen.setContentView(frame);hosted[0].updateAppWidget(CalendarWidget.build(context,bound,phone,"calendar",options));}catch(Exception error){throw new RuntimeException(error);}});test.waitForIdleSync();
+                    final boolean[] clicked={false};for(int attempt=0;attempt<30&&!clicked[0];attempt++){test.runOnMainSync(()->{View control=findDescription(hosted[0],"完成待办："+title+"，"+today);if(control!=null)clicked[0]=control.performClick();});if(!clicked[0])SystemClock.sleep(100);}
+                    expect(clicked[0],"bound widget completion button not clickable");boolean done=false;for(int attempt=0;attempt<50;attempt++){if(CalendarDates.completed(phone.get(recordId),today)){done=true;break;}SystemClock.sleep(100);}expect(done,"widget click did not reach phone database");expect(!CalendarDates.completed(phone.get(recordId),today.plusDays(14)),"widget click completed next repeat");
+                }finally{
+                    test.getUiAutomation().dropShellPermissionIdentity();if(activity!=null){Activity screen=activity;test.runOnMainSync(screen::finish);test.waitForIdleSync();}host.stopListening();if(widget!=-1){host.deleteAppWidgetId(widget);CalendarWidget.prefs(context,widget).edit().clear().commit();}
+                    if(recordId!=null)try(CalendarStore cleanup=new CalendarStore(context)){cleanup.getWritableDatabase().delete("item","id=?",new String[]{recordId});cleanup.getWritableDatabase().delete("operation","result LIKE ?",new String[]{"%"+recordId+"%"});}
+                }
+            });
             result.putString("stream","Calendar tests passed: "+passed+"\n");
         }catch(Throwable error){code=Activity.RESULT_CANCELED;result.putString("stream",android.util.Log.getStackTraceString(error));}
         finally{if(store!=null)store.close();context.deleteDatabase("calendar-tests.db");}test.finish(code,result);
     }
+    private static View findDescription(View view,String label){if(view==null)return null;if(label.contentEquals(view.getContentDescription()==null?"":view.getContentDescription()))return view;if(view instanceof ViewGroup)for(int i=0;i<((ViewGroup)view).getChildCount();i++){View found=findDescription(((ViewGroup)view).getChildAt(i),label);if(found!=null)return found;}return null;}
     private static void collectInputs(View view,List<EditText> out){if(view instanceof EditText){out.add((EditText)view);return;}if(view instanceof ViewGroup)for(int i=0;i<((ViewGroup)view).getChildCount();i++)collectInputs(((ViewGroup)view).getChildAt(i),out);}
     private static void collect(View view,List<Spinner> out){if(view instanceof Spinner){out.add((Spinner)view);return;}if(view instanceof ViewGroup)for(int i=0;i<((ViewGroup)view).getChildCount();i++)collect(((ViewGroup)view).getChildAt(i),out);}
 }

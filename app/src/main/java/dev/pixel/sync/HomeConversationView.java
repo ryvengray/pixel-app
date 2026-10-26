@@ -211,7 +211,8 @@ public final class HomeConversationView extends FrameLayout {
         updateComposer();submit(text);
     }
     private void submit(String text){
-        if(ClientTools.recordCommand(text)){RecordLocation.withPermission(activity,()->submitReady(text));return;}
+        List<AssistantStore.Message> intent=new ArrayList<>(store.conversation(28));intent.add(new AssistantStore.Message("user",text,System.currentTimeMillis()));
+        if(ClientTools.recordEvidence(intent)!=null){RecordLocation.withPermission(activity,()->submitReady(text));return;}
         submitReady(text);
     }
     private void submitReady(String text){

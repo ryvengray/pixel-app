@@ -60,11 +60,11 @@ final class CalendarMonthView extends View {
             boolean otherCycleDay=inside&&phase==0&&isOtherCycleDay(day);
             int dateInk=phase==1||phase==2?roseInk:phase>=3?purple:otherCycleDay?green:day.equals(LocalDate.now())?accent:ink;
             int lunarInk=phase==1||phase==2?roseMuted:phase>=3?purple:otherCycleDay?green:muted;
-            text(c,String.valueOf(day.getDayOfMonth()),x,top+(widget?20:21*scale),widget?14:15*scale,inside?dateInk:(dark?0xFF627775:0xFFA5B4A8));
-            text(c,CalendarDates.lunar(day).shortLabel(),x,top+(widget?35:38*scale),widget?11:10.5f*scale,inside?lunarInk:(dark?0xFF627775:0xFFA5B4A8));
+            text(c,String.valueOf(day.getDayOfMonth()),x,top+(widget?row*.44f:21*scale),widget?14:15*scale,inside?dateInk:(dark?0xFF627775:0xFFA5B4A8));
+            text(c,CalendarDates.lunar(day).shortLabel(),x,top+(widget?row*.77f:38*scale),widget?11:10.5f*scale,inside?lunarInk:(dark?0xFF627775:0xFFA5B4A8));
             if(phase==4)flower(c,rect.right-6*scale,rect.top+6*scale,scale,purple);
 
-            if(events.contains(day)){paint.setStyle(Paint.Style.FILL);paint.setColor(accent);c.drawCircle(x,top+row-4*scale,1.5f*scale,paint);}
+            if(events.contains(day)){paint.setStyle(Paint.Style.FILL);paint.setColor(accent);c.drawCircle(x,top+row-(widget?2:4*scale),1.5f*scale,paint);}
         }
     }
     private boolean isOtherCycleDay(LocalDate day){

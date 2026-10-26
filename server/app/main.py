@@ -18,7 +18,7 @@ from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, Header, HTTPE
 from pydantic import BaseModel, Field
 
 from . import topics
-from .decision import Decision, DecisionRequest, apply_policy, fallback, non_action, informational, record_intent
+from .decision import Decision, DecisionRequest, apply_policy, fallback, non_action, informational, record_requested
 from jsonschema import Draft202012Validator, FormatChecker
 
 
@@ -307,6 +307,7 @@ def system_prompt(user_timezone: str, include_topics: bool = True, excluded_topi
         current = utc_now()
     return f"""You are Greta, a warm concise personal assistant. The user time zone is {user_timezone}. Current date and time: {current}.
 The user talks to you through a pet's speech bubble on the home screen. Keep replies natural and concise; put tool results in tools rather than repeating long output. Consecutive user messages can be supplements or corrections; consider them together before taking action.
+A short affirmative answer to your immediately preceding offer to save a life record authorizes create_life_record using the original user details. Preserve nonfinancial details such as mileage in content. Do not ask the user to repeat facts already in the conversation or guess phone permissions when a tool is unavailable.
 Only claim an action succeeded when its tool result confirms success. Never claim an unavailable tool ran. Calendar tools run on the phone and return real results. Query records before editing to obtain exact ids and expected_revision. Treat 大姨妈 predictions separately from actual records; never claim safe days, diagnose, or store these facts in general memory. Use 大姨妈 in user-facing wording, not 经期. Never call calendar mutations for hypothetical questions; only explicit user changes. For birthdays given only as month/day, use year_known=false with month/day; do not invent a birth year or age.
 Use memories only when relevant; they may be outdated and the user's correction wins. Do not mention hidden memory unless useful.
 For a stable, explicit preference or fact, call save_memory. Do not infer personality from one event and do not save sensitive information. Upcoming events and temporary worries belong to time-bounded topics, not stable memory. Topic extraction happens asynchronously after the reply; do not claim a new topic is already saved or a follow-up scheduled unless a successful tool result confirms it.
@@ -401,7 +402,7 @@ async def agent_reply(request: ChatRequest, decision: Decision | None = None) ->
         "changes": [], "tool_results": [], "step": 0, "pending": [], "call_index": 0,
         "decision": decision.model_dump() if decision else None,
         "allowed_tools": ([decision.tool] if decision and decision.type == "TOOL_WITH_LLM" else
-                          [name for name in request.client_tools if name in CALENDAR_TOOL_NAMES] if decision and decision.reason == "non_action" else
+                          [name for name in request.client_tools if name in CALENDAR_TOOL_NAMES or (name == "create_life_record" and record_requested(request.messages))] if decision and decision.reason == "non_action" else
                           [t["function"]["name"] for t in TOOLS] +
                           [name for name in request.client_tools if name in CLIENT_TOOL_NAMES]),
     }
@@ -470,9 +471,9 @@ async def agent_reply(request: ChatRequest, decision: Decision | None = None) ->
                         state["waiting_client"] = {"action": action, "name": name, "operation_id": operation, "call_id": call["id"], "index": index}
                         checkpoint()
                         return {"content": "等待手机日历工具。", "memory_changes": [], "tool_results": [], "pending_client": True, "client_action": action}
-                    if name not in request.client_tools or (non_action(request.messages[-1].content) and name != "open_calendar") or len(calls) != 1:
+                    if name not in request.client_tools or (non_action(request.messages[-1].content) and name != "open_calendar" and not (name == "create_life_record" and record_requested(request.messages))) or len(calls) != 1:
                         raise ValueError("Local tools require an explicit user command and client capability")
-                    if name == "create_life_record" and not record_intent(request.messages[-1].content):
+                    if name == "create_life_record" and not record_requested(request.messages):
                         raise ValueError("Saving a life record requires an explicit request to record it")
                     errors = list(Draft202012Validator(SCHEMAS[name], format_checker=FormatChecker()).iter_errors(args))
                     needs_text = (name == "open_print" and state.get("decision") and

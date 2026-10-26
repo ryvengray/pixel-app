@@ -18,6 +18,7 @@ final class RecordChecks {
     private static void expect(boolean value,String message){if(!value)throw new AssertionError(message);}
     private String id(){String value="record-test-"+UUID.randomUUID();ids.add(value);return value;}
     private JSONObject args()throws Exception{return new JSONObject("{\"content\":\"今天加油、买水\",\"date\":\"2026-10-20\",\"items\":[{\"amount\":\"400\",\"currency\":\"CNY\",\"kind\":\"expense\",\"category\":\"加油\"},{\"amount\":\"5.50\",\"currency\":\"CNY\",\"kind\":\"expense\",\"category\":\"饮料\"}]}");}
+    private List<AssistantStore.Message> confirmed(String offer,String answer,String id){return Arrays.asList(new AssistantStore.Message(0,"user","今天加了340块钱的油，现在的里程是 61978 公里",1,"original-record","sent"),new AssistantStore.Message("assistant",offer,2),new AssistantStore.Message(0,"user",answer,3,id,"pending"));}
     private static final class RecordAgent implements AutoCloseable {
         final java.net.ServerSocket server=new java.net.ServerSocket(0,10,java.net.InetAddress.getByName("127.0.0.1"));
         final java.util.concurrent.atomic.AtomicInteger calls=new java.util.concurrent.atomic.AtomicInteger();
@@ -46,6 +47,14 @@ final class RecordChecks {
                 a=args().put("date","2026-02-30");expect(!LifeRecords.valid(a),"invalid date accepted");
                 expect(!ClientTools.recordCommand("同步笔记"),"unrelated command allowed a write");
                 expect(ClientTools.recordCommand("记一下我今天加了油400块"),"command rejected");expect(!ClientTools.explicitCommand("可以记一下加油400块吗"),"question accepted");expect(!ClientTools.explicitCommand("不要记一下加油400块"),"negation accepted");
+            });
+            check("contextualConfirmationGuardsAndOriginalEvidence",()->{
+                String offer="要我把这笔记进生活记录吗？\n\n- 油费：340元\n- 当前里程：61978公里";
+                for(String answer:new String[]{"好","好的。","可以","确认"}){String evidence=ClientTools.recordEvidence(confirmed(offer,answer,"confirm"));expect(evidence!=null&&evidence.contains("340")&&evidence.contains("61978"),"confirmation lost original facts "+answer);}
+                for(String answer:new String[]{"不要","不用了","先不记","可以吗？","好，但别保存","好，340改成400","好，打印一下"})expect(ClientTools.recordEvidence(confirmed(offer,answer,"confirm"))==null,"ambiguous or negative confirmation accepted "+answer);
+                for(String question:new String[]{"要我提醒你吗？","要记入生活记录还是打印？","已经记进生活记录了。要我打印吗？","要我把生日加到重要日期吗？"})expect(ClientTools.recordEvidence(confirmed(question,"好","confirm"))==null,"unrelated offer allowed write "+question);
+                List<AssistantStore.Message> stale=new ArrayList<>(confirmed(offer,"换个话题","confirm"));stale.add(new AssistantStore.Message("assistant","今天过得好吗？",4));stale.add(new AssistantStore.Message("user","好",5));expect(ClientTools.recordEvidence(stale)==null,"stale offer allowed write");
+                expect(ClientTools.recordEvidence(Arrays.asList(new AssistantStore.Message("user","记一下加油340元",1),new AssistantStore.Message("user","不要记了",2)))==null,"later refusal ignored");
             });
             check("versionThreeMigrationPreservesConversation",()->{
                 String database="record-migration-tests.db";context.deleteDatabase(database);
@@ -107,6 +116,23 @@ final class RecordChecks {
                     expect(reply.content.contains("已记录")&&reply.clientAction==null,"pending action leaked instead of committed reply");
                     try(LifeRecords local=new LifeRecords(context)){expect(local.find(id)!=null,"success before commit");}
                     AssistantApi.chat(context,turns,Collections.emptyList(),id);expect(agent.calls.get()==1,"retry called model again");
+                }finally{
+                    SharedPreferences.Editor se=settings.edit();if(oldUrl==null)se.remove("server_url");else se.putString("server_url",oldUrl);se.commit();
+                    SharedPreferences.Editor token=secure.edit();if(oldToken==null)token.remove("device_token");else token.putString("device_token",oldToken);token.commit();
+                    try(AssistantStore local=new AssistantStore(context)){local.getWritableDatabase().delete("life_record","id=?",new String[]{id});}
+                    context.getSharedPreferences("chat_requests",0).edit().remove(id).commit();
+                }
+            });
+            check("httpConfirmationPersistsAmountsMileageAndRetryIsLocal",()->{
+                String id=id();SharedPreferences settings=context.getSharedPreferences("gray_settings",0),secure=context.getSharedPreferences("gray_secure",0);
+                String oldUrl=settings.getString("server_url",null),oldToken=secure.getString("device_token",null);
+                JSONObject payload=new JSONObject().put("content","今天加油340元，当前里程61978公里").put("items",new JSONArray().put(new JSONObject().put("amount","340").put("currency","CNY").put("kind","expense").put("category","油费")));
+                try(RecordAgent agent=new RecordAgent(id,payload)){
+                    settings.edit().putString("server_url","http://127.0.0.1:"+agent.server.getLocalPort()).commit();new SecureStore(context).put("device_token","record-test-token");
+                    List<AssistantStore.Message> turns=confirmed("要我把这笔记进生活记录吗？\n\n- 油费：340元\n- 当前里程：61978公里","好",id);
+                    AssistantApi.Reply reply=AssistantApi.chat(context,turns,Collections.emptyList(),id);expect(reply.content.contains("已记录")&&reply.clientAction==null,"confirmation did not commit");
+                    try(LifeRecords local=new LifeRecords(context)){LifeRecords.Record saved=local.find(id);expect(saved!=null,"success before commit");expect(saved.original.contains("61978")&&saved.original.contains("340"),"only saved affirmative without original evidence");expect(saved.payload.getString("content").contains("61978"),"mileage dropped");expect(saved.payload.getJSONArray("items").getJSONObject(0).getString("amount").equals("340"),"fuel amount lost");}
+                    AssistantApi.chat(context,turns,Collections.emptyList(),id);expect(agent.calls.get()==1,"confirmation retry called model again");
                 }finally{
                     SharedPreferences.Editor se=settings.edit();if(oldUrl==null)se.remove("server_url");else se.putString("server_url",oldUrl);se.commit();
                     SharedPreferences.Editor token=secure.edit();if(oldToken==null)token.remove("device_token");else token.putString("device_token",oldToken);token.commit();
