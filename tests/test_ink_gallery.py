@@ -60,3 +60,27 @@ def test_invalid_image_reports_format():
     with pytest.raises(HTTPException) as error:gallery.normalize(b'not an image')
     assert error.value.status_code==400
     assert '格式' in error.value.detail
+
+
+def test_today_weather_loads_and_reports_missing_config(monkeypatch):
+    import sqlite3
+    import types
+    db=sqlite3.connect(':memory:');db.row_factory=sqlite3.Row
+    db.execute('CREATE TABLE reminder(title TEXT,due_at TEXT,state TEXT)')
+    monkeypatch.setitem(sys.modules,'server.app.main',types.SimpleNamespace(connect=lambda:db))
+    monkeypatch.delenv('INK_LATITUDE',raising=False);monkeypatch.delenv('INK_LONGITUDE',raising=False)
+    assert '未配置' in asyncio.run(ink.today_data()).weather
+    monkeypatch.setenv('INK_LATITUDE','30.598593');monkeypatch.setenv('INK_LONGITUDE','103.920888')
+    class Client:
+        def __init__(self,**kwargs):pass
+        async def __aenter__(self):return self
+        async def __aexit__(self,*args):pass
+        async def get(self,url,params):
+            assert params['latitude']==30.598593
+            return types.SimpleNamespace(raise_for_status=lambda:None,json=lambda:{'daily':{'temperature_2m_min':[17],'temperature_2m_max':[24],'precipitation_probability_max':[60],'weather_code':[3]}})
+    monkeypatch.setattr(ink.httpx,'AsyncClient',Client)
+    data=asyncio.run(ink.today_data())
+    assert data.low==17 and data.high==24
+    assert '多云' in data.weather and '60%' in data.weather
+    assert '带伞' in data.clothing
+    db.close()
