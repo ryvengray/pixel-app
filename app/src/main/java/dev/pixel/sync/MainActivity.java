@@ -156,7 +156,10 @@ public class MainActivity extends Activity {
   String mime=intent.getType();if(mime==null)try{mime=getContentResolver().getType(uri);}catch(Exception ignored){}
   if(mime!=null&&mime.startsWith("image/")){
    Intent next=new Intent(this,ImageRecordActivity.class).setDataAndType(uri,mime).putExtra(PrintActivity.EXTRA_FILE_NAME,fileName(uri)).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-   next.setClipData(ClipData.newRawUri("图片",uri));CharSequence caption=intent.getCharSequenceExtra(Intent.EXTRA_TEXT);if(caption!=null)next.putExtra(Intent.EXTRA_TEXT,caption.toString());startActivity(next);return;
+   next.setClipData(ClipData.newRawUri("图片",uri));CharSequence caption=intent.getCharSequenceExtra(Intent.EXTRA_TEXT);if(caption!=null)next.putExtra(Intent.EXTRA_TEXT,caption.toString());new android.app.AlertDialog.Builder(this).setTitle("使用这张图片做什么？").setItems(new String[]{"日记","打印","水墨屏"},(dialog,which)->{
+    if(which==0)startActivity(next);
+    else {Intent target=new Intent(next);target.setClass(this,which==1?PrintActivity.class:InkImageActivity.class);startActivity(target);}
+   }).show();return;
   }
   showFileAction(uri,fileName(uri),grantFlags);
  }
