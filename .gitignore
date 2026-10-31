@@ -25,3 +25,4 @@ server/models/
 
 server/ink-backgrounds/
 server/compose.override.yaml
+compose.override.yaml
