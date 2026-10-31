@@ -2,7 +2,7 @@ import hashlib, io, json, os, re, sqlite3, time, uuid
 from pathlib import Path
 from contextlib import asynccontextmanager
 import paho.mqtt.client as mqtt
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from PIL import Image, ImageDraw, ImageFont
@@ -73,7 +73,10 @@ def health(): return {'ok': True, 'mqtt_connected': client.is_connected()}
 
 @app.post('/v1/devices/{device_id}/display', dependencies=[Depends(auth)])
 def display(device_id: str, req: DisplayRequest):
-    check_id(device_id); bitmap = render(req); version = hashlib.sha256(bitmap).hexdigest()
+    return save_bitmap(device_id, render(req))
+
+def save_bitmap(device_id, bitmap):
+    check_id(device_id); version = hashlib.sha256(bitmap).hexdigest()
     now = int(time.time())
     with db() as c:
         c.execute('INSERT INTO history(device_id,version,bitmap,created) VALUES(?,?,?,?)', (device_id,version,bitmap,now))
@@ -118,3 +121,35 @@ def history(device_id: str, cursor: int = 0, direction: str = 'latest'):
             if not row:
                 row = c.execute('SELECT seq,version,created FROM history WHERE device_id=? AND seq=?', (device_id,cursor)).fetchone()
     return dict(row) if row else {'version': None}
+
+
+@app.post('/v1/devices/{device_id}/image', dependencies=[Depends(auth)])
+async def upload_image(device_id: str, request: Request):
+    check_id(device_id)
+    data = bytearray()
+    async for chunk in request.stream():
+        data.extend(chunk)
+        if len(data) > 15 * 1024 * 1024:
+            raise HTTPException(413, 'image exceeds 15 MB')
+    try:
+        import warnings
+        from PIL import ImageOps
+        with warnings.catch_warnings():
+            warnings.simplefilter('error', Image.DecompressionBombWarning)
+            with Image.open(io.BytesIO(data)) as source:
+                if source.width * source.height > 24000000:
+                    raise ValueError('image exceeds 24 megapixels')
+                source = ImageOps.exif_transpose(source).convert('RGBA')
+                source.thumbnail((800,480), Image.Resampling.LANCZOS)
+                canvas = Image.new('RGBA',(800,480),'white')
+                canvas.alpha_composite(source,((800-source.width)//2,(480-source.height)//2))
+                palette = Image.new('P',(1,1))
+                # Fill unused entries with white, so every quantized color maps to a wire index.
+                palette.putpalette([v for rgb in PALETTE for v in rgb]+[255]*(768-18))
+                quantized = canvas.convert('RGB').quantize(palette=palette,dither=Image.Dither.FLOYDSTEINBERG)
+                raw = quantized.tobytes()
+                indices = [i if i < 6 else 0 for i in raw]
+                packed = bytes((indices[i]<<4)|indices[i+1] for i in range(0,len(indices),2))
+    except Exception as exc:
+        raise HTTPException(400, 'invalid or unsupported image') from exc
+    return save_bitmap(device_id, packed)
