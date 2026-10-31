@@ -1,0 +1,4 @@
+.env
+firmware/include/config.h
+firmware/.pio/
+__pycache__/
