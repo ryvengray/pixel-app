@@ -6,7 +6,7 @@ services:
       PIXEL_TOKEN: ${PIXEL_TOKEN:?Set PIXEL_TOKEN in .env}
       MQTT_HOST: mosquitto
     ports:
-      - "${API_BIND:-0.0.0.0}:8000:8000"
+      - "${API_BIND:-0.0.0.0}:18000:18000"
     volumes:
       - pixel-data:/data
     depends_on:

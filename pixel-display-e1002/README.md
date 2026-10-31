@@ -1,5 +1,7 @@
 # Pixel Display v1 — E1002
 
+首次操作请按 [一步一步操作手册](操作手册.md) 执行。
+
 此版本适用于 Seeed reTerminal E1002 7.3 英寸六色电子纸，包含 Ubuntu Docker Compose 服务端、MQTT、文本渲染、设备固件及 pixel-app 调用示例。当前版本为首次实机验证准备的原型：尚未完成固件编译、烧录或真实屏幕联调。
 
 ## 硬件与工作方式
@@ -18,16 +20,16 @@ cp .env.example .env
 nano .env
 docker compose up --build -d
 docker compose logs -f api
-curl http://127.0.0.1:8000/health
+curl http://127.0.0.1:18000/health
 ```
 
-默认占用 8000 和 1883 端口。数据存放在本 Compose 项目的 `pixel-data` 卷。`docker compose down -v` 会删除其数据。
+默认占用 18000 和 1883 端口。数据存放在本 Compose 项目的 `pixel-data` 卷。`docker compose down -v` 会删除其数据。
 
 此原型使用明文 HTTP 共享令牌及匿名明文 MQTT，仅用于可信局域网。不要暴露到公网；其他局域网用户可以监听或注入 MQTT 消息。正式部署需要 HTTPS、MQTT TLS 和账户/ACL、设备独立凭据和网络访问控制。
 
 ## 固件
 
-安装 PlatformIO，复制 `firmware/include/config.example.h` 为 `config.h`，填写 2.4 GHz Wi-Fi、服务器局域网 IP、与 `.env` 一致的令牌和唯一设备 ID。`API_BASE` 形如 `http://192.168.1.10:8000`，不要用 `localhost`。
+安装 PlatformIO，复制 `firmware/include/config.example.h` 为 `config.h`，填写 2.4 GHz Wi-Fi、服务器局域网 IP、与 `.env` 一致的令牌和唯一设备 ID。`API_BASE` 形如 `http://192.168.1.10:18000`，不要用 `localhost`。
 
 ```sh
 cd firmware
@@ -44,10 +46,10 @@ PlatformIO 从 Seeed GitHub 仓库下载驱动，需要网络和 Git。此依赖
 
 ```sh
 TOKEN='替换成 .env 中的令牌'
-curl -sS -X POST http://127.0.0.1:8000/v1/devices/desk-01/display \
+curl -sS -X POST http://127.0.0.1:18000/v1/devices/desk-01/display \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   --data '{"title":"你好，Pixel","body":"E1002 六色测试\n来自 pixel-app 的消息","title_color":"blue"}'
-curl -sS http://127.0.0.1:8000/v1/devices/desk-01/desired \
+curl -sS http://127.0.0.1:18000/v1/devices/desk-01/desired \
   -H "Authorization: Bearer $TOKEN"
 ```
 
