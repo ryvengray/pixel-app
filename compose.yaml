@@ -5,9 +5,10 @@ services:
     container_name: greta-data-permissions
     user: "0:0"
     restart: "no"
-    command: ["sh", "-c", "mkdir -p /data && chown -R 10001:10001 /data"]
+    command: ["sh", "-c", "mkdir -p /data /ink-backgrounds && chown -R 10001:10001 /data && chown 10001:10001 /ink-backgrounds"]
     volumes:
       - ./server/data:/data
+      - ${INK_BACKGROUND_HOST_DIR:-./server/ink-backgrounds}:/ink-backgrounds
 
   greta-service:
     build:
@@ -19,6 +20,7 @@ services:
       - ./server/.env
     environment:
       DATABASE_PATH: /data/greta.db
+      INK_GALLERY_DIR: /ink-backgrounds
       FIREBASE_SERVICE_ACCOUNT_FILE: /run/secrets/firebase-service-account.json
       # The service uses the host network, so this reaches Ubuntu's CUPS
       # daemon rather than the printer's unreliable embedded IPP endpoint.
@@ -31,6 +33,7 @@ services:
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8787", "--proxy-headers"]
     volumes:
       - ./server/data:/data
+      - ${INK_BACKGROUND_HOST_DIR:-./server/ink-backgrounds}:/ink-backgrounds
     secrets:
       - source: firebase_service_account
         target: firebase-service-account.json

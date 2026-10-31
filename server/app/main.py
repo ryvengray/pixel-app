@@ -17,7 +17,7 @@ import httpx
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
-from . import topics, ink
+from . import topics, ink, ink_gallery
 from .decision import Decision, DecisionRequest, apply_policy, fallback, non_action, informational, record_requested
 from jsonschema import Draft202012Validator, FormatChecker
 
@@ -606,11 +606,12 @@ async def lifespan(_: FastAPI):
         )
     task = asyncio.create_task(reminder_loop())
     topic_task = asyncio.create_task(topics.worker())
+    ink_task = asyncio.create_task(ink_gallery.loop())
     try:
         yield
     finally:
-        task.cancel(); topic_task.cancel()
-        await asyncio.gather(task, topic_task, return_exceptions=True)
+        task.cancel(); topic_task.cancel(); ink_task.cancel()
+        await asyncio.gather(task, topic_task, ink_task, return_exceptions=True)
 
 
 app = FastAPI(title="Greta private service", lifespan=lifespan)

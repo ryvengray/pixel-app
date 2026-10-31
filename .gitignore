@@ -22,3 +22,5 @@ __pycache__/
 server/models/
 .venv-bge/
 .decision-download/
+
+server/ink-backgrounds/
