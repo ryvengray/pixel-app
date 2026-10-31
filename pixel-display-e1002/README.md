@@ -1,6 +1,6 @@
-# Pixel Display v1 — E1002 独立版
+# Pixel Display v1 — E1002
 
-此版本适用于 Seeed reTerminal E1002 7.3 英寸六色电子纸，包含 Ubuntu Docker Compose 服务端、MQTT、文本渲染、设备固件及 pixel-app 调用示例。原 E1001 项目保持独立。当前版本为首次实机验证准备的原型：尚未完成固件编译、烧录或真实屏幕联调。
+此版本适用于 Seeed reTerminal E1002 7.3 英寸六色电子纸，包含 Ubuntu Docker Compose 服务端、MQTT、文本渲染、设备固件及 pixel-app 调用示例。当前版本为首次实机验证准备的原型：尚未完成固件编译、烧录或真实屏幕联调。
 
 ## 硬件与工作方式
 
@@ -21,7 +21,7 @@ docker compose logs -f api
 curl http://127.0.0.1:8000/health
 ```
 
-默认占用 8000 和 1883 端口。如果 E1001 版本也在同一主机运行，需在 Compose 中更改本版本的宿主机端口，并在固件配置中相应修改；两个版本的位图协议不兼容，不要让 E1002 固件连接 E1001 服务。数据存放在本 Compose 项目的 `pixel-data` 卷。`docker compose down -v` 会删除其数据。
+默认占用 8000 和 1883 端口。数据存放在本 Compose 项目的 `pixel-data` 卷。`docker compose down -v` 会删除其数据。
 
 此原型使用明文 HTTP 共享令牌及匿名明文 MQTT，仅用于可信局域网。不要暴露到公网；其他局域网用户可以监听或注入 MQTT 消息。正式部署需要 HTTPS、MQTT TLS 和账户/ACL、设备独立凭据和网络访问控制。
 
