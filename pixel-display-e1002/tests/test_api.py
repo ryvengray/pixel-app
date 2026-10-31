@@ -37,3 +37,39 @@ def test_render_and_api():
         assert c.post('/v1/devices/a/ack', headers=auth, json={'version':version,'status':'displayed'}).status_code == 200
         assert c.get('/v1/devices/a/desired', headers=auth).json()['displayed_version'] == version
         assert c.post('/v1/devices/a/ack', headers=auth, json={'version':'old','status':'displayed'}).status_code == 409
+
+
+def test_history_navigation_and_restart():
+    auth = {'Authorization': 'Bearer test-token'}
+    with TestClient(module.app) as c:
+        assert c.get('/v1/devices/history-test/history').status_code == 401
+        assert c.get('/v1/devices/history-test/history', headers=auth).json()['version'] is None
+        versions = [c.post('/v1/devices/history-test/display', headers=auth,
+                         json={'title': title}).json()['version'] for title in ('first', 'second', 'third')]
+        latest = c.get('/v1/devices/history-test/history', headers=auth).json()
+        assert latest['version'] == versions[2]
+        previous = c.get('/v1/devices/history-test/history', headers=auth,
+                         params={'cursor': latest['seq'], 'direction': 'previous'}).json()
+        assert previous['version'] == versions[1]
+        first = c.get('/v1/devices/history-test/history', headers=auth,
+                      params={'cursor': previous['seq'], 'direction': 'previous'}).json()
+        assert first['version'] == versions[0]
+        assert c.get('/v1/devices/history-test/history', headers=auth,
+                     params={'cursor': first['seq'], 'direction': 'previous'}).json() == first
+        assert c.get('/v1/devices/history-test/history', headers=auth,
+                     params={'cursor': first['seq'], 'direction': 'next'}).json() == previous
+        assert c.get('/v1/devices/history-test/history', headers=auth,
+                     params={'cursor': first['seq'], 'direction': 'latest'}).json() == latest
+        image = c.get('/v1/devices/history-test/bitmap', headers=auth, params={'version':versions[0]})
+        assert hashlib.sha256(image.content).hexdigest() == versions[0]
+        assert c.get('/v1/devices/other/bitmap', headers=auth, params={'version':versions[0]}).status_code == 404
+        assert c.post('/v1/devices/history-test/ack', headers=auth,
+                      json={'version':versions[0], 'status':'displayed'}).status_code == 200
+        state = c.get('/v1/devices/history-test/desired', headers=auth).json()
+        assert state['version'] == versions[2] and state['displayed_version'] == versions[0]
+        with module.db() as db:
+            db.execute('INSERT INTO devices(id,version,bitmap,updated) VALUES(?,?,?,?)',
+                       ('legacy', versions[0], image.content, 1))
+    with TestClient(module.app) as c:
+        assert c.get('/v1/devices/history-test/history', headers=auth).json() == latest
+        assert c.get('/v1/devices/legacy/history', headers=auth).json()['version'] == versions[0]

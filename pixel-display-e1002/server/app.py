@@ -28,6 +28,8 @@ client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id='pixel-api-' + 
 async def lifespan(app):
     with db() as c:
         c.execute('CREATE TABLE IF NOT EXISTS devices (id TEXT PRIMARY KEY, version TEXT, bitmap BLOB, updated INTEGER, displayed_version TEXT, last_seen INTEGER, status TEXT)')
+        c.execute('CREATE TABLE IF NOT EXISTS history (seq INTEGER PRIMARY KEY AUTOINCREMENT, device_id TEXT NOT NULL, version TEXT NOT NULL, bitmap BLOB NOT NULL, created INTEGER NOT NULL)')
+        c.execute('INSERT INTO history(device_id,version,bitmap,created) SELECT id,version,bitmap,updated FROM devices d WHERE version IS NOT NULL AND NOT EXISTS (SELECT 1 FROM history h WHERE h.device_id=d.id)')
     client.reconnect_delay_set(1, 30)
     client.connect_async(MQTT_HOST, int(os.getenv('MQTT_PORT', '1883')), 60); client.loop_start()
     yield
@@ -74,6 +76,7 @@ def display(device_id: str, req: DisplayRequest):
     check_id(device_id); bitmap = render(req); version = hashlib.sha256(bitmap).hexdigest()
     now = int(time.time())
     with db() as c:
+        c.execute('INSERT INTO history(device_id,version,bitmap,created) VALUES(?,?,?,?)', (device_id,version,bitmap,now))
         c.execute('INSERT INTO devices(id,version,bitmap,updated) VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET version=excluded.version, bitmap=excluded.bitmap, updated=excluded.updated', (device_id,version,bitmap,now))
     info = client.publish(f'pixel/v1/devices/{device_id}/notify', json.dumps({'version':version}), qos=1, retain=False)
     return {'device_id': device_id, 'version': version, 'mqtt_queued': info.rc == mqtt.MQTT_ERR_SUCCESS}
@@ -89,15 +92,29 @@ def desired(device_id: str):
 @app.get('/v1/devices/{device_id}/bitmap', dependencies=[Depends(auth)])
 def bitmap(device_id: str, version: str):
     check_id(device_id)
-    with db() as c: row = c.execute('SELECT version,bitmap FROM devices WHERE id=?',(device_id,)).fetchone()
-    if not row or row['version'] != version: raise HTTPException(404, 'version not found')
+    with db() as c: row = c.execute('SELECT bitmap FROM history WHERE device_id=? AND version=? ORDER BY seq DESC LIMIT 1',(device_id,version)).fetchone()
+    if not row: raise HTTPException(404, 'version not found')
     return Response(row['bitmap'], media_type='application/octet-stream', headers={'Cache-Control':'no-store'})
 
 @app.post('/v1/devices/{device_id}/ack', dependencies=[Depends(auth)])
 def ack(device_id: str, req: Ack):
     check_id(device_id)
     with db() as c:
-        row = c.execute('SELECT version FROM devices WHERE id=?',(device_id,)).fetchone()
-        if not row or row['version'] != req.version: raise HTTPException(409, 'version no longer current')
+        row = c.execute('SELECT 1 FROM history WHERE device_id=? AND version=?',(device_id,req.version)).fetchone()
+        if not row: raise HTTPException(409, 'unknown version')
         c.execute('UPDATE devices SET displayed_version=?,last_seen=?,status=? WHERE id=?', (req.version if req.status == 'displayed' else None,int(time.time()),req.status,device_id))
     return {'ok':True}
+
+@app.get('/v1/devices/{device_id}/history', dependencies=[Depends(auth)])
+def history(device_id: str, cursor: int = 0, direction: str = 'latest'):
+    check_id(device_id)
+    if direction not in ('latest', 'previous', 'next'): raise HTTPException(400, 'invalid direction')
+    with db() as c:
+        if direction == 'latest' or cursor == 0:
+            row = c.execute('SELECT seq,version,created FROM history WHERE device_id=? ORDER BY seq DESC LIMIT 1', (device_id,)).fetchone()
+        else:
+            op, order = ('<', 'DESC') if direction == 'previous' else ('>', 'ASC')
+            row = c.execute(f'SELECT seq,version,created FROM history WHERE device_id=? AND seq {op} ? ORDER BY seq {order} LIMIT 1', (device_id,cursor)).fetchone()
+            if not row:
+                row = c.execute('SELECT seq,version,created FROM history WHERE device_id=? AND seq=?', (device_id,cursor)).fetchone()
+    return dict(row) if row else {'version': None}

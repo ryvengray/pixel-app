@@ -1,6 +1,6 @@
 # Pixel Display v1 — E1002
 
-首次操作请按 [一步一步操作手册](操作手册.md) 执行。
+首次操作请按 [一步一步操作手册](操作手册.md) 执行。烧录及修改代码后的更新步骤见 [固件更新说明](固件更新说明.md)。
 
 此版本适用于 Seeed reTerminal E1002 7.3 英寸六色电子纸，包含 Ubuntu Docker Compose 服务端、MQTT、文本渲染、设备固件及 pixel-app 调用示例。当前版本为首次实机验证准备的原型：尚未完成固件编译、烧录或真实屏幕联调。
 
@@ -65,11 +65,23 @@ curl -sS http://127.0.0.1:18000/v1/devices/desk-01/desired \
 
 - API 均需要 `Authorization: Bearer <token>`，设备 ID 仅允许字母、数字、`_` 和 `-`。
 - `POST /v1/devices/{id}/display` 接受 JSON `title`、`body`、`title_color`。`GET /v1/devices/{id}/desired` 返回目标和已确认版本；首次无目标时返回 `version: null`。
-- `GET /v1/devices/{id}/bitmap?version=<sha256>` 返回当前版本，旧版本返回 404。HTTP body 固定 192,000 字节，800×480，按行排列，每字节高半字节为左像素、低半字节为右像素。索引 0 白、1 黑、2 红、3 黄、4 绿、5 蓝；6–15 保留。SHA-256 对完整 body 计算。这是本项目传输格式，不是面板寄存器颜色编码。
-- `POST /v1/devices/{id}/ack` 接受 `{"version":"...","status":"displayed"}` 或 `failed`；目标已变化时返回 409。
+- `GET /v1/devices/{id}/bitmap?version=<sha256>` 返回当前版本，未保存的版本返回 404。HTTP body 固定 192,000 字节，800×480，按行排列，每字节高半字节为左像素、低半字节为右像素。索引 0 白、1 黑、2 红、3 黄、4 绿、5 蓝；6–15 保留。SHA-256 对完整 body 计算。这是本项目传输格式，不是面板寄存器颜色编码。
+- `POST /v1/devices/{id}/ack` 接受 `{"version":"...","status":"displayed"}` 或 `failed`；版本未保存时返回 409。
 - MQTT topic `pixel/v1/devices/<id>/notify`，QoS 1、非 retained，消息为 `{"version":"..."}`。它仅触发检查；可靠性依赖 HTTP 轮询。`mqtt_queued` 表示客户端接受发布请求，不保证设备收到。
 - 首版为文本面板，支持六种标题颜色，不包含图片上传、图像抖动、深睡眠、OTA、注册或电量监测。固件上一次已显示版本保存在 NVS；断电后屏幕保留画面，确认丢失时重发。
 
 ## 自动测试
 
 安装 `server/requirements.txt`、`pytest`、`httpx` 和 Noto CJK 字体后运行 `pytest tests/test_api.py`。测试使用模拟 MQTT，不覆盖设备、真实 broker 或屏幕。
+
+## 历史记录与按键
+
+服务端为每次提交保存一条历史画面（包括重复提交），按提交顺序浏览；数据持久保存在原 SQLite 数据卷中，升级启动时会自动将原有最新画面补入历史。升级前的更早画面无法恢复。当前不自动清理历史，每条位图约 192 KB，请关注磁盘空间。
+
+按键默认 KEY0/GPIO3 后退、KEY1/GPIO4 前进、KEY2/GPIO5 返回最新，采用上拉、低电平按下和防抖。引脚参考 [Seeed 官方外设说明](https://wiki.seeedstudio.com/reterminal_e10xx_with_arduino_peripherals/)，实物图标顺序仍需按键验证。
+
+浏览历史时不会被 MQTT 或轮询的新消息打断，到达首尾时停留；刷新键退出浏览并重新查询最新记录。若内容与已显示画面一致，不重复闪屏。刷新键事件在屏幕刷新期间也会记录，物理刷新完成后处理；屏幕最小 60 秒刷新间隔仍然有效，不能立即中断正在刷新的画面。离线时需要恢复网络才能从服务端获取历史或最新画面，重启后默认回到最新。
+
+新增 `GET /v1/devices/{id}/history?cursor=<seq>&direction=latest|previous|next`，返回 `seq`、`version`、`created`。省略 cursor 时返回最新；首尾越界时返回原记录。bitmap 接口支持历史版本，ack 接受已保存的历史版本；desired 中 `version` 始终代表最新目标，`displayed_version` 可代表正在浏览的历史画面。
+
+升级时先在 Ubuntu 更新服务端代码，执行 `docker compose up --build -d`，再按《固件更新说明》编译并 USB 烧录新固件。不要删除原数据卷。验收：连续提交三条不同消息，后退两次、前进一次；浏览中提交第四条，确认停留；按刷新返回第四条。刷新期间按刷新键，再确认结束后最终回到最新。
