@@ -42,3 +42,21 @@ def test_gallery_rotation_persists_and_retries(monkeypatch,tmp_path):
     second=asyncio.run(gallery.rotate(afternoon))
     assert second['background']!=first['background']
     assert len(sent)==2
+
+
+def test_large_phone_photo_downsample_and_orientation():
+    # Typical 48 MP phone photo, formerly rejected by the 24 MP limit.
+    source=Image.new('RGB',(8000,6000),'red')
+    exif=Image.Exif();exif[274]=6
+    raw=io.BytesIO();source.save(raw,format='JPEG',exif=exif);source.close()
+    normalized=Image.open(io.BytesIO(gallery.normalize(raw.getvalue())))
+    assert normalized.size==(1800,2400)
+    assert normalized.mode=='RGB'
+
+
+def test_invalid_image_reports_format():
+    import pytest
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException) as error:gallery.normalize(b'not an image')
+    assert error.value.status_code==400
+    assert '格式' in error.value.detail

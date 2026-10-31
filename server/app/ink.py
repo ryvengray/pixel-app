@@ -28,18 +28,13 @@ class Today(BaseModel):
 def render_today(data):
     image=Image.new('RGB',(800,480),'#d8e0d6')
     if data.background:
+        from .ink_gallery import normalize
         try:
-            import warnings
-            with warnings.catch_warnings():
-                warnings.simplefilter('error', Image.DecompressionBombWarning)
-                raw=base64.b64decode(data.background.split(',')[-1],validate=True)
-                with Image.open(io.BytesIO(raw)) as source:
-                    if source.width*source.height>24000000:raise ValueError('image too large')
-                    source=ImageOps.exif_transpose(source).convert('RGBA')
-                    fitted=ImageOps.fit(source,(800,480),method=Image.Resampling.LANCZOS)
-                    base=Image.new('RGBA',(800,480),'white');base.alpha_composite(fitted)
-                    image=base.convert('RGB')
-        except Exception as exc:raise HTTPException(400,'背景图片无效或超过 2400 万像素') from exc
+            raw=base64.b64decode(data.background.split(',')[-1],validate=True)
+        except ValueError as exc:raise HTTPException(400,'背景图片编码无效，请重新上传') from exc
+        with Image.open(io.BytesIO(normalize(raw))) as source:
+            fitted=ImageOps.fit(source.convert('RGB'),(800,480),method=Image.Resampling.LANCZOS)
+            image=fitted
     else:
         # Native palette fallback avoids noisy dithering when no photo is selected.
         image=Image.new('RGB',(800,480),'white')
@@ -122,7 +117,10 @@ async def image(device_id: str, request: Request):
     async for chunk in request.stream():
         data.extend(chunk)
         if len(data)>15*1024*1024:raise HTTPException(413,'Image exceeds 15 MB')
-    return await forward(device_id,bytes(data))
+    import asyncio
+    from .ink_gallery import normalize
+    normalized=await asyncio.to_thread(normalize,bytes(data))
+    return await forward(device_id,normalized)
 
 @router.post('/today/preview.png')
 def preview(data: Today):

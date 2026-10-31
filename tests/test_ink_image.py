@@ -7,6 +7,9 @@ from fastapi.testclient import TestClient
 
 
 def load(name, path):
+    import sys
+    sys.path.insert(0,str(Path(__file__).parents[1]))
+    if str(path).endswith('server/app/ink.py'):name='server.app.'+name
     spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)

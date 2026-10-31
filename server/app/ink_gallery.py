@@ -11,7 +11,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
-from PIL import Image, ImageOps
+from PIL import Image, ImageOps, UnidentifiedImageError
 
 log = logging.getLogger(__name__)
 
@@ -26,18 +26,28 @@ def state_db():
     return db
 
 def normalize(raw):
+    """Downsample phone photos before EXIF transpose and RGBA allocation."""
     import warnings
+    if len(raw)>15*1024*1024:raise HTTPException(413,'图片文件超过 15 MB')
     try:
         with warnings.catch_warnings():
             warnings.simplefilter('error', Image.DecompressionBombWarning)
             with Image.open(io.BytesIO(raw)) as source:
-                if source.width*source.height > 24000000:raise ValueError('too large')
-                source = ImageOps.exif_transpose(source).convert('RGBA')
+                if source.width*source.height > 80000000:
+                    raise HTTPException(413,'图片超过 8000 万像素，请选择较小的照片')
+                # JPEG draft decoding is applied by thumbnail before full loading.
                 source.thumbnail((2400,2400),Image.Resampling.LANCZOS)
+                source = ImageOps.exif_transpose(source).convert('RGBA')
                 white = Image.new('RGBA',source.size,'white');white.alpha_composite(source)
                 out=io.BytesIO();white.convert('RGB').save(out,format='JPEG',quality=95)
                 return out.getvalue()
-    except Exception as exc:raise HTTPException(400,'无效图片或超过 2400 万像素') from exc
+    except HTTPException:raise
+    except (Image.DecompressionBombError,Image.DecompressionBombWarning) as exc:
+        raise HTTPException(413,'图片像素过大，请选择 8000 万像素以内的照片') from exc
+    except UnidentifiedImageError as exc:
+        raise HTTPException(400,'无法识别图片格式，请使用 JPG、PNG 或 WebP；HEIC/HEIF 请先导出为 JPG') from exc
+    except (OSError,ValueError) as exc:
+        raise HTTPException(400,'图片解码失败，文件可能损坏，请重新上传或导出为 JPG') from exc
 
 def save(raw):
     content=normalize(raw); name=hashlib.sha256(content).hexdigest()+'.jpg'
