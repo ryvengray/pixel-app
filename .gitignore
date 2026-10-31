@@ -24,3 +24,4 @@ server/models/
 .decision-download/
 
 server/ink-backgrounds/
+server/compose.override.yaml
