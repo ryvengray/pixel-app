@@ -616,6 +616,7 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(title="Greta private service", lifespan=lifespan)
 app.include_router(topics.router, dependencies=[Depends(require_device)])
+app.include_router(ink.auth_router)
 app.include_router(ink.router, dependencies=[Depends(ink.require_ink_access)])
 app.add_api_route("/ink-screen", ink.page, response_class=ink.HTMLResponse, methods=["GET"])
 chat_lock = asyncio.Lock()
