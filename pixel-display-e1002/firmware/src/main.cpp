@@ -8,6 +8,7 @@
 #include <GxEPD2_7C.h>
 #include <mbedtls/sha256.h>
 #include "config.h"
+#include "battery.h"
 
 static constexpr int W=800, H=480, BYTES=W*H/2;
 SPIClass epdSPI(HSPI);
@@ -29,6 +30,29 @@ String navigation="latest";
 bool refreshRequested = true;
 unsigned long lastPoll=0, lastWifi=0, lastMqtt=0, lastRefresh=0;
 bool hasRefreshed=false;
+bool bitmapValid=false;
+unsigned long lastBatteryCheck=0;
+int shownBattery=-1;
+int readBatteryPercent() {
+  digitalWrite(21,HIGH);
+  delay(10); // Seeed recommends settling before reading the divided voltage.
+  uint32_t sum=0;
+  for(int i=0;i<16;++i) { sum+=analogReadMilliVolts(1); delay(2); }
+  digitalWrite(21,LOW);
+  return batteryPercent((sum*2+8)/16);
+}
+void drawBattery(int percent) {
+  // Opaque backing keeps the icon legible on uploaded pictures too.
+  display.fillRoundRect(714,22,62,34,5,GxEPD_WHITE);
+  uint16_t color=percent<10 ? GxEPD_RED : percent<20 ? GxEPD_YELLOW : GxEPD_BLACK;
+  display.fillRoundRect(720,27,48,24,5,color);
+  display.fillRoundRect(722,29,44,20,3,GxEPD_WHITE);
+  display.fillRoundRect(769,34,3,10,1,color);
+  int width=batteryFillWidth(percent);
+  if(width) display.fillRoundRect(724,31,width,16,2,color);
+}
+void renderDisplay(int percent);
+
 String base() { return String(API_BASE) + "/v1/devices/" + DEVICE_ID; }
 void headers(HTTPClient &h) { h.addHeader("Authorization", String("Bearer ")+API_TOKEN); }
 void notify(char*, byte*, unsigned int) { if(!browsing) refreshRequested=true; }
@@ -57,9 +81,16 @@ void syncDisplay() {
   if(err || !doc["version"].is<const char*>()) return;
   long selectedCursor=doc["seq"].as<long>();
   String version=doc["version"].as<String>(); if(version.length()!=64) return;
-  if(version==shown) { cursor=selectedCursor; navigation="latest"; if(doc["displayed_version"].as<String>()!=shown) ack(shown,"displayed"); return; }
+  if(version==shown && hasRefreshed) { cursor=selectedCursor; navigation="latest"; if(doc["displayed_version"].as<String>()!=shown) ack(shown,"displayed"); return; }
   if(hasRefreshed && millis()-lastRefresh < 60000UL) { refreshRequested=true; return; }
+  bitmapValid=false;
   if(!download(version)) { Serial.println("download or SHA-256 failed"); ack(version,"failed"); return; }
+  bitmapValid=true;
+  renderDisplay(readBatteryPercent());
+  cursor=selectedCursor; navigation="latest"; shown=version; prefs.putString("shown",shown); ack(version,"displayed");
+  Serial.println("displayed "+shown);
+}
+void renderDisplay(int percent) {
   display.setRotation(0); display.setFullWindow(); display.firstPage();
   int page = 0;
   do {
@@ -72,13 +103,17 @@ void syncDisplay() {
       }
       yield();
     }
+    drawBattery(percent);
     ++page;
   } while(display.nextPage());
-  display.hibernate(); cursor=selectedCursor; navigation="latest"; hasRefreshed=true; lastRefresh=millis(); shown=version; prefs.putString("shown",shown); ack(version,"displayed");
-  Serial.println("displayed "+shown);
+  display.hibernate();
+  shownBattery=percent; hasRefreshed=true; lastRefresh=millis(); lastBatteryCheck=millis();
 }
+
 void setup() {
   Serial.begin(115200); delay(200);
+  pinMode(21,OUTPUT); digitalWrite(21,LOW);
+  analogReadResolution(12); analogSetPinAttenuation(1,ADC_11db);
   pinMode(3,INPUT_PULLUP); pinMode(4,INPUT_PULLUP); pinMode(5,INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(3),key0,FALLING);
   attachInterrupt(digitalPinToInterrupt(4),key1,FALLING);
@@ -91,6 +126,13 @@ void setup() {
 }
 void loop() {
   unsigned long now=millis();
+  // Refresh the cached page even offline or while browsing history.
+  if(bitmapValid && now-lastBatteryCheck>=900000UL && now-lastRefresh>=60000UL) {
+    lastBatteryCheck=now;
+    int percent=readBatteryPercent();
+    if(batteryFillWidth(percent)!=batteryFillWidth(shownBattery) || batteryBand(percent)!=batteryBand(shownBattery)) renderDisplay(percent);
+    now=millis();
+  }
   if(keyEvent[2]) { keyEvent[0]=keyEvent[1]=keyEvent[2]=false; browsing=false; navigation="latest"; refreshRequested=true; }
   else if(keyEvent[0] || keyEvent[1]) { navigation=keyEvent[0] ? "previous" : "next"; keyEvent[0]=keyEvent[1]=false; browsing=true; refreshRequested=true; }
   if(WiFi.status()!=WL_CONNECTED) {

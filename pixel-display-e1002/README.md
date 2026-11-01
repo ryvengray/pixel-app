@@ -68,7 +68,7 @@ curl -sS http://127.0.0.1:18000/v1/devices/desk-01/desired \
 - `GET /v1/devices/{id}/bitmap?version=<sha256>` 返回当前版本，未保存的版本返回 404。HTTP body 固定 192,000 字节，800×480，按行排列，每字节高半字节为左像素、低半字节为右像素。索引 0 白、1 黑、2 红、3 黄、4 绿、5 蓝；6–15 保留。SHA-256 对完整 body 计算。这是本项目传输格式，不是面板寄存器颜色编码。
 - `POST /v1/devices/{id}/ack` 接受 `{"version":"...","status":"displayed"}` 或 `failed`；版本未保存时返回 409。
 - MQTT topic `pixel/v1/devices/<id>/notify`，QoS 1、非 retained，消息为 `{"version":"..."}`。它仅触发检查；可靠性依赖 HTTP 轮询。`mqtt_queued` 表示客户端接受发布请求，不保证设备收到。
-- 首版为文本面板，支持六种标题颜色，不包含图片上传、图像抖动、深睡眠、OTA、注册或电量监测。固件上一次已显示版本保存在 NVS；断电后屏幕保留画面，确认丢失时重发。
+- 首版为文本面板，支持六种标题颜色，不包含图片上传、图像抖动、深睡眠、OTA 或注册。固件上一次已显示版本保存在 NVS；断电后屏幕保留画面，确认丢失时重发。
 
 ## 自动测试
 
@@ -85,3 +85,18 @@ curl -sS http://127.0.0.1:18000/v1/devices/desk-01/desired \
 新增 `GET /v1/devices/{id}/history?cursor=<seq>&direction=latest|previous|next`，返回 `seq`、`version`、`created`。省略 cursor 时返回最新；首尾越界时返回原记录。bitmap 接口支持历史版本，ack 接受已保存的历史版本；desired 中 `version` 始终代表最新目标，`displayed_version` 可代表正在浏览的历史画面。
 
 升级时先在 Ubuntu 更新服务端代码，执行 `docker compose up --build -d`，再按《固件更新说明》编译并 USB 烧录新固件。不要删除原数据卷。验收：连续提交三条不同消息，后退两次、前进一次；浏览中提交第四条，确认停留；按刷新返回第四条。刷新期间按刷新键，再确认结束后最终回到最新。
+
+## 电池图标
+
+固件在右上角覆盖显示圆角电池进度图标（无数字），正常黑色，估算电量低于 20% 为黄色，低于 10% 为红色；恰好 20% 为黑色，恰好 10% 为黄色。图标使用白底，占用画面 x=714–775、y=22–55，上传图片时也会覆盖该区域。
+
+依据 [Seeed 官方电池接口说明](https://wiki.seeedstudio.com/reterminal_e10xx_with_arduino_peripherals/#battery-management-system)，GPIO21 高电平启用检测，等待 10ms 后通过 GPIO1 多次读取校准毫伏值，平均并乘 2，结束后关闭检测电路。电量由单节锂电池电压曲线估算，受负载、充电和电池老化影响，并非精确电量计。
+
+每次内容刷新都会更新电池图标；内容不变时每 15 分钟检测一次，仅当进度宽度或颜色变化时全屏刷新。已缓存的页面支持断网及浏览历史时更新电量；重启后需先联网取得页面。新固件首次启动会重画当前内容，确保加入图标。更新需重新 USB 烧录。
+
+电量换算和阈值检查：
+
+```sh
+c++ -std=c++11 -Ifirmware/include firmware/tests/battery_test.cpp -o /tmp/ink-battery-test
+/tmp/ink-battery-test
+```
