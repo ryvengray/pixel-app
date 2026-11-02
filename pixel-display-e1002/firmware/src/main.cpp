@@ -1,7 +1,11 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <HTTPClient.h>
-#include <PubSubClient.h>
+#include <esp_sleep.h>
+#include <driver/rtc_io.h>
+#include <sys/time.h>
+#include <time.h>
+#include "wake_schedule.h"
 #include <ArduinoJson.h>
 #include <Preferences.h>
 #include <SPI.h>
@@ -14,8 +18,11 @@ static constexpr int W=800, H=480, BYTES=W*H/2;
 SPIClass epdSPI(HSPI);
 GxEPD2_7C<GxEPD2_730c_GDEP073E01, 40> display(GxEPD2_730c_GDEP073E01(10,11,12,13));
 const uint16_t colors[] = {GxEPD_WHITE, GxEPD_BLACK, GxEPD_RED, GxEPD_YELLOW, GxEPD_GREEN, GxEPD_BLUE};
-WiFiClient net;
-PubSubClient mqtt(net);
+int wakeMinutes[24]={390,570,750,1110,1350};
+int wakeCount=5;
+bool scheduleChecked=false;
+bool otaChecked=false;
+unsigned long activeAt=0;
 Preferences prefs;
 uint8_t *bitmap = nullptr;
 String shown;
@@ -28,11 +35,8 @@ bool browsing=false;
 long cursor=0;
 String navigation="latest";
 bool refreshRequested = true;
-unsigned long lastPoll=0, lastWifi=0, lastMqtt=0, lastRefresh=0;
+unsigned long lastWifi=0, lastRefresh=0;
 bool hasRefreshed=false;
-bool bitmapValid=false;
-unsigned long lastBatteryCheck=0;
-int shownBattery=-1;
 int readBatteryPercent() {
   digitalWrite(21,HIGH);
   delay(10); // Seeed recommends settling before reading the divided voltage.
@@ -55,7 +59,58 @@ void renderDisplay(int percent);
 
 String base() { return String(API_BASE) + "/v1/devices/" + DEVICE_ID; }
 void headers(HTTPClient &h) { h.addHeader("Authorization", String("Bearer ")+API_TOKEN); }
-void notify(char*, byte*, unsigned int) { if(!browsing) refreshRequested=true; }
+#include "ota_client.h"
+
+bool decodeSchedule(const String &body, bool syncClock) {
+  DynamicJsonDocument doc(2048);
+  if(deserializeJson(doc,body) || doc["timezone"].as<String>()!="Asia/Shanghai") return false;
+  JsonArray minutes=doc["minutes"].as<JsonArray>();
+  if(minutes.size()<1 || minutes.size()>24) return false;
+  int next[24], count=0;
+  for(JsonVariant v:minutes) {
+    if(!v.is<int>()) return false;
+    int n=v.as<int>();
+    if(n<0 || n>=1440 || (count && n<=next[count-1])) return false;
+    next[count++]=n;
+  }
+  int64_t epoch=doc["server_time"].as<int64_t>();
+  if(syncClock && (epoch<1700000000LL || epoch>4102444800LL)) return false;
+  for(int i=0;i<count;++i) wakeMinutes[i]=next[i];
+  wakeCount=count;
+  if(syncClock) { struct timeval tv={}; tv.tv_sec=epoch; settimeofday(&tv,nullptr); }
+  return true;
+}
+void fetchSchedule() {
+  HTTPClient h; h.setTimeout(10000); h.begin(base()+"/schedule"); headers(h);
+  int code=h.GET(); String body=code==200 ? h.getString() : ""; h.end();
+  if(code==200 && decodeSchedule(body,true)) {
+    DynamicJsonDocument cached(2048); deserializeJson(cached,body);
+    cached.remove("server_time"); String stable; serializeJson(cached,stable);
+    if(prefs.getString("schedule","")!=stable) prefs.putString("schedule",stable);
+    Serial.println("wake schedule synchronized");
+  } else Serial.println("schedule unavailable; using cached/default times");
+}
+void sleepUntilNextWake() {
+  int64_t now=time(nullptr);
+  uint64_t seconds=now>=1700000000LL ? secondsUntilWake(now,wakeMinutes,wakeCount) : 3600;
+  // Exclude held keys to avoid an immediate wake loop.
+  uint64_t mask=0;
+  for(int pin=3;pin<=5;++pin) {
+    if(digitalRead(pin)==HIGH) {
+      gpio_num_t gpio=static_cast<gpio_num_t>(pin);
+      rtc_gpio_init(gpio); rtc_gpio_set_direction(gpio,RTC_GPIO_MODE_INPUT_ONLY);
+      rtc_gpio_pullup_en(gpio); rtc_gpio_pulldown_dis(gpio);
+      mask|=1ULL<<pin;
+    }
+  }
+  if(mask) esp_sleep_enable_ext1_wakeup(mask,ESP_EXT1_WAKEUP_ANY_LOW);
+  if(prefs.getLong("cursor",0)!=cursor) prefs.putLong("cursor",cursor);
+  WiFi.disconnect(true); WiFi.mode(WIFI_OFF); display.hibernate();
+  digitalWrite(21,LOW);
+  esp_sleep_enable_timer_wakeup(seconds*1000000ULL);
+  Serial.printf("sleep for %llu seconds\n",(unsigned long long)seconds); Serial.flush();
+  esp_deep_sleep_start();
+}
 void ack(const String &version, const char *status) {
   HTTPClient h; h.setTimeout(10000); h.begin(base()+"/ack"); headers(h); h.addHeader("Content-Type","application/json");
   String body = "{\"version\":\""+version+"\",\"status\":\""+status+"\"}";
@@ -83,9 +138,7 @@ void syncDisplay() {
   String version=doc["version"].as<String>(); if(version.length()!=64) return;
   if(version==shown && hasRefreshed) { cursor=selectedCursor; navigation="latest"; if(doc["displayed_version"].as<String>()!=shown) ack(shown,"displayed"); return; }
   if(hasRefreshed && millis()-lastRefresh < 60000UL) { refreshRequested=true; return; }
-  bitmapValid=false;
   if(!download(version)) { Serial.println("download or SHA-256 failed"); ack(version,"failed"); return; }
-  bitmapValid=true;
   renderDisplay(readBatteryPercent());
   cursor=selectedCursor; navigation="latest"; shown=version; prefs.putString("shown",shown); ack(version,"displayed");
   Serial.println("displayed "+shown);
@@ -107,43 +160,48 @@ void renderDisplay(int percent) {
     ++page;
   } while(display.nextPage());
   display.hibernate();
-  shownBattery=percent; hasRefreshed=true; lastRefresh=millis(); lastBatteryCheck=millis();
+  hasRefreshed=true; lastRefresh=millis();
 }
 
 void setup() {
   Serial.begin(115200); delay(200);
+  Serial.println(FIRMWARE_MARKER);
   pinMode(21,OUTPUT); digitalWrite(21,LOW);
   analogReadResolution(12); analogSetPinAttenuation(1,ADC_11db);
+  for(int pin=3;pin<=5;++pin) rtc_gpio_deinit(static_cast<gpio_num_t>(pin));
   pinMode(3,INPUT_PULLUP); pinMode(4,INPUT_PULLUP); pinMode(5,INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(3),key0,FALLING);
   attachInterrupt(digitalPinToInterrupt(4),key1,FALLING);
   attachInterrupt(digitalPinToInterrupt(5),key2,FALLING);
   bitmap=(uint8_t*)ps_malloc(BYTES); if(!bitmap) bitmap=(uint8_t*)malloc(BYTES); if(!bitmap) { Serial.println("frame allocation failed"); while(true) delay(1000); }
   prefs.begin("pixel",false); shown=prefs.getString("shown","");
+  decodeSchedule(prefs.getString("schedule",""),false);
+  // Resume navigation relative to the page retained on the e-paper panel.
+  if(esp_sleep_get_wakeup_cause()==ESP_SLEEP_WAKEUP_EXT1) {
+    cursor=prefs.getLong("cursor",0);
+    uint64_t keys=esp_sleep_get_ext1_wakeup_status();
+    if(keys & (1ULL<<5)) keyEvent[2]=true;
+    else if(keys & (1ULL<<3)) keyEvent[0]=true;
+    else if(keys & (1ULL<<4)) keyEvent[1]=true;
+  }
   epdSPI.begin(7,-1,9,-1); display.epd2.selectSPI(epdSPI,SPISettings(2000000,MSBFIRST,SPI_MODE0)); display.init(0);
   WiFi.mode(WIFI_STA); WiFi.begin(WIFI_SSID,WIFI_PASSWORD);
-  mqtt.setServer(MQTT_HOST,MQTT_PORT); mqtt.setCallback(notify); mqtt.setBufferSize(512);
+  activeAt=millis();
 }
 void loop() {
   unsigned long now=millis();
-  // Refresh the cached page even offline or while browsing history.
-  if(bitmapValid && now-lastBatteryCheck>=900000UL && now-lastRefresh>=60000UL) {
-    lastBatteryCheck=now;
-    int percent=readBatteryPercent();
-    if(batteryFillWidth(percent)!=batteryFillWidth(shownBattery) || batteryBand(percent)!=batteryBand(shownBattery)) renderDisplay(percent);
-    now=millis();
-  }
+  // Network failures are bounded; never leave Wi-Fi running indefinitely.
+  if(now-activeAt>=120000UL) sleepUntilNextWake();
+  if(scheduleChecked && !refreshRequested && now-activeAt>=30000UL) sleepUntilNextWake();
+  if(keyEvent[0] || keyEvent[1] || keyEvent[2]) activeAt=now;
   if(keyEvent[2]) { keyEvent[0]=keyEvent[1]=keyEvent[2]=false; browsing=false; navigation="latest"; refreshRequested=true; }
   else if(keyEvent[0] || keyEvent[1]) { navigation=keyEvent[0] ? "previous" : "next"; keyEvent[0]=keyEvent[1]=false; browsing=true; refreshRequested=true; }
   if(WiFi.status()!=WL_CONNECTED) {
     if(now-lastWifi>15000) { lastWifi=now; WiFi.disconnect(); WiFi.begin(WIFI_SSID,WIFI_PASSWORD); }
     delay(50); return;
   }
-  if(!mqtt.connected() && now-lastMqtt>5000) {
-    lastMqtt=now; String id=String("pixel-")+DEVICE_ID;
-    if(mqtt.connect(id.c_str())) { String topic=String("pixel/v1/devices/")+DEVICE_ID+"/notify"; mqtt.subscribe(topic.c_str(),1); if(!browsing) refreshRequested=true; }
-  }
-  mqtt.loop();
-  if(refreshRequested || (!browsing && now-lastPoll>=POLL_INTERVAL_MS)) { refreshRequested=false; lastPoll=now; syncDisplay(); if(refreshRequested) delay(100); }
+  if(!scheduleChecked) { fetchSchedule(); scheduleChecked=true; }
+  if(refreshRequested) { refreshRequested=false; syncDisplay(); }
+  if(!otaChecked && !refreshRequested) { otaChecked=true; checkFirmwareUpdate(); activeAt=millis(); }
   delay(20);
 }

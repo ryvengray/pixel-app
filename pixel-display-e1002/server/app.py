@@ -1,10 +1,11 @@
 import hashlib, io, json, os, re, sqlite3, time, uuid
 from pathlib import Path
 from contextlib import asynccontextmanager
+import ota
 import paho.mqtt.client as mqtt
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from PIL import Image, ImageDraw, ImageFont
 
 DATA = Path(os.getenv('DATA_DIR', '/data')); DATA.mkdir(parents=True, exist_ok=True)
@@ -27,6 +28,8 @@ client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id='pixel-api-' + 
 @asynccontextmanager
 async def lifespan(app):
     with db() as c:
+        ota.init(c)
+        c.execute('CREATE TABLE IF NOT EXISTS schedules (device_id TEXT PRIMARY KEY, times TEXT NOT NULL)')
         c.execute('CREATE TABLE IF NOT EXISTS devices (id TEXT PRIMARY KEY, version TEXT, bitmap BLOB, updated INTEGER, displayed_version TEXT, last_seen INTEGER, status TEXT)')
         c.execute('CREATE TABLE IF NOT EXISTS history (seq INTEGER PRIMARY KEY AUTOINCREMENT, device_id TEXT NOT NULL, version TEXT NOT NULL, bitmap BLOB NOT NULL, created INTEGER NOT NULL)')
         c.execute('INSERT INTO history(device_id,version,bitmap,created) SELECT id,version,bitmap,updated FROM devices d WHERE version IS NOT NULL AND NOT EXISTS (SELECT 1 FROM history h WHERE h.device_id=d.id)')
@@ -36,6 +39,7 @@ async def lifespan(app):
     client.loop_stop(); client.disconnect()
 
 app = FastAPI(title='Pixel Display v1', lifespan=lifespan)
+ota.register(app, db, auth, check_id)
 class DisplayRequest(BaseModel):
     title: str = Field(default='', max_length=80)
     body: str = Field(default='', max_length=1000)
@@ -43,6 +47,38 @@ class DisplayRequest(BaseModel):
 class Ack(BaseModel):
     version: str = Field(max_length=64)
     status: str = Field(pattern='^(displayed|failed)$')
+
+DEFAULT_WAKE_TIMES = ['06:30', '09:30', '12:30', '18:30', '22:30']
+class WakeSchedule(BaseModel):
+    times: list[str] = Field(min_length=1, max_length=24)
+
+    @field_validator('times')
+    @classmethod
+    def valid_times(cls, values):
+        if any(not re.fullmatch(r'(?:[01][0-9]|2[0-3]):[0-5][0-9]', v) for v in values):
+            raise ValueError('times must be HH:MM in Asia/Shanghai')
+        if len(set(values)) != len(values):
+            raise ValueError('duplicate wake times')
+        return sorted(values)
+
+@app.get('/v1/devices/{device_id}/schedule', dependencies=[Depends(auth)])
+def get_schedule(device_id: str):
+    check_id(device_id)
+    with db() as c:
+        row = c.execute('SELECT times FROM schedules WHERE device_id=?', (device_id,)).fetchone()
+    times = json.loads(row['times']) if row else DEFAULT_WAKE_TIMES
+    return {'timezone': 'Asia/Shanghai', 'times': times,
+            'minutes': [int(t[:2])*60 + int(t[3:]) for t in times],
+            'server_time': int(time.time())}
+
+@app.put('/v1/devices/{device_id}/schedule', dependencies=[Depends(auth)])
+def put_schedule(device_id: str, req: WakeSchedule):
+    check_id(device_id)
+    with db() as c:
+        c.execute('INSERT INTO schedules(device_id,times) VALUES(?,?) '
+                  'ON CONFLICT(device_id) DO UPDATE SET times=excluded.times',
+                  (device_id, json.dumps(req.times)))
+    return get_schedule(device_id)
 
 def font(size):
     return ImageFont.truetype(os.getenv('FONT_PATH', '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc'), size)

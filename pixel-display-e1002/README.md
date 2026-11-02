@@ -2,13 +2,13 @@
 
 首次操作请按 [一步一步操作手册](操作手册.md) 执行。烧录及修改代码后的更新步骤见 [固件更新说明](固件更新说明.md)。
 
-此版本适用于 Seeed reTerminal E1002 7.3 英寸六色电子纸，包含 Ubuntu Docker Compose 服务端、MQTT、文本渲染、设备固件及 pixel-app 调用示例。当前版本为首次实机验证准备的原型：尚未完成固件编译、烧录或真实屏幕联调。
+此版本适用于 Seeed reTerminal E1002 7.3 英寸六色电子纸，包含 Ubuntu Docker Compose 服务端、MQTT、文本渲染、设备固件及 pixel-app 调用示例。当前版本为首次实机验证准备的原型：定时休眠版本已使用示例配置编译成功，尚未烧录或完成真实屏幕联调。
 
 ## 硬件与工作方式
 
 官方资料：800×480、GDEP073E01 面板、ED2208 控制器，原生黑、白、红、黄、绿、蓝六色。官方示例使用 `GxEPD2_7C<GxEPD2_730c_GDEP073E01>`，SPI SCK 7、MOSI 9、CS 10、DC 11、RST 12、BUSY 13、2 MHz。本项目采用 [Seeed_GxEPD2](https://github.com/Seeed-Projects/Seeed_GxEPD2) 和 [Seeed E1002 示例](https://wiki.seeedstudio.com/cn/reterminal_e10xx_with_arduino/)。官方规格表写刷新约 15–20 秒，示例写约 25–30 秒；实测时间可能不同。E1002 不支持局部刷新。[型号对比](https://wiki.seeedstudio.com/cn/reterminal_e10xx_main_page/)
 
-服务端将文字渲染为六色图片；设备接收 MQTT 通知后通过 HTTP 获取最新版本、校验 SHA-256、全屏刷新并确认。断线后每 60 秒轮询恢复。设备限制上一次刷新完成后至少 60 秒才启动下一次，频繁提交只保证最终画面。固件保持 Wi-Fi 在线，适合 USB 常供电，不能按官方低功耗固件续航估算。重启后的刷新间隔不会保留。
+服务端将文字渲染为六色图片；设备按每日时间表唤醒，通过 HTTP 查询时间表、校时、获取最新版本、校验 SHA-256、全屏刷新并确认，然后断开 Wi-Fi 深度睡眠。默认拉取时间为北京时间 06:30、09:30、12:30、18:30、22:30，可在 FastAPI 中为每台设备修改。服务端保留 MQTT 供旧固件使用，新固件不再订阅。设备同次唤醒内限制两次刷新间隔至少 60 秒；实际续航需实测。
 
 ## Ubuntu 服务端
 
@@ -53,7 +53,7 @@ curl -sS http://127.0.0.1:18000/v1/devices/desk-01/desired \
   -H "Authorization: Bearer $TOKEN"
 ```
 
-`display` 返回的 `version` 是画面 SHA-256，表示服务端已保存，不代表屏幕已更新。等待刷新，串口输出 `displayed <version>`，再查询 desired：`displayed_version` 与 `version` 相同且 `status` 为 `displayed`。确认只是程序执行了刷新，不能证明屏幕视觉显示正确。测试断线恢复时，先断开设备网络、提交新内容，再联网；下次连接或轮询应获取最新版本。`last_seen` 是确认时间，不是心跳。提交新版本后旧状态可能保留，应始终比较版本。
+`display` 返回的 `version` 是画面 SHA-256，表示服务端已保存，不代表屏幕已更新。等待刷新，串口输出 `displayed <version>`，再查询 desired：`displayed_version` 与 `version` 相同且 `status` 为 `displayed`。确认只是程序执行了刷新，不能证明屏幕视觉显示正确。测试断线恢复时，先断开设备网络、提交新内容，再联网；下次定时或手动唤醒连接时应获取最新版本。`last_seen` 是确认时间，不是心跳。提交新版本后旧状态可能保留，应始终比较版本。
 
 如失败，检查 IP、网络、令牌、MQTT/HTTP 端口，查看 `docker compose logs api mosquitto` 和串口。颜色顺序、画面方向和刷新行为需通过实体屏幕确认。镜像和库下载需要网络。
 
@@ -67,8 +67,8 @@ curl -sS http://127.0.0.1:18000/v1/devices/desk-01/desired \
 - `POST /v1/devices/{id}/display` 接受 JSON `title`、`body`、`title_color`。`GET /v1/devices/{id}/desired` 返回目标和已确认版本；首次无目标时返回 `version: null`。
 - `GET /v1/devices/{id}/bitmap?version=<sha256>` 返回当前版本，未保存的版本返回 404。HTTP body 固定 192,000 字节，800×480，按行排列，每字节高半字节为左像素、低半字节为右像素。索引 0 白、1 黑、2 红、3 黄、4 绿、5 蓝；6–15 保留。SHA-256 对完整 body 计算。这是本项目传输格式，不是面板寄存器颜色编码。
 - `POST /v1/devices/{id}/ack` 接受 `{"version":"...","status":"displayed"}` 或 `failed`；版本未保存时返回 409。
-- MQTT topic `pixel/v1/devices/<id>/notify`，QoS 1、非 retained，消息为 `{"version":"..."}`。它仅触发检查；可靠性依赖 HTTP 轮询。`mqtt_queued` 表示客户端接受发布请求，不保证设备收到。
-- 首版为文本面板，支持六种标题颜色，不包含图片上传、图像抖动、深睡眠、OTA 或注册。固件上一次已显示版本保存在 NVS；断电后屏幕保留画面，确认丢失时重发。
+- MQTT topic `pixel/v1/devices/<id>/notify`，QoS 1、非 retained，消息为 `{"version":"..."}`。供旧版常连固件触发检查；定时休眠固件不订阅。`mqtt_queued` 表示客户端接受发布请求，不保证设备收到。
+- 首版为文本面板，支持六种标题颜色，支持 OTA（需先 USB 烧录一次），不包含注册。固件上一次已显示版本保存在 NVS；断电后屏幕保留画面，确认丢失时重发。
 
 ## 自动测试
 
@@ -80,7 +80,7 @@ curl -sS http://127.0.0.1:18000/v1/devices/desk-01/desired \
 
 按键默认 KEY0/GPIO3 后退、KEY1/GPIO4 前进、KEY2/GPIO5 返回最新，采用上拉、低电平按下和防抖。引脚参考 [Seeed 官方外设说明](https://wiki.seeedstudio.com/reterminal_e10xx_with_arduino_peripherals/)，实物图标顺序仍需按键验证。
 
-浏览历史时不会被 MQTT 或轮询的新消息打断，到达首尾时停留；刷新键退出浏览并重新查询最新记录。若内容与已显示画面一致，不重复闪屏。刷新键事件在屏幕刷新期间也会记录，物理刷新完成后处理；屏幕最小 60 秒刷新间隔仍然有效，不能立即中断正在刷新的画面。离线时需要恢复网络才能从服务端获取历史或最新画面，重启后默认回到最新。
+唤醒操作窗口内浏览历史时不会被新消息打断，到达首尾时停留；刷新键退出浏览并重新查询最新记录。若内容与已显示画面一致，不重复闪屏。刷新键事件在屏幕刷新期间也会记录，物理刷新完成后处理；屏幕最小 60 秒刷新间隔仍然有效，不能立即中断正在刷新的画面。离线时需要恢复网络才能从服务端获取历史或最新画面，重启后默认回到最新。
 
 新增 `GET /v1/devices/{id}/history?cursor=<seq>&direction=latest|previous|next`，返回 `seq`、`version`、`created`。省略 cursor 时返回最新；首尾越界时返回原记录。bitmap 接口支持历史版本，ack 接受已保存的历史版本；desired 中 `version` 始终代表最新目标，`displayed_version` 可代表正在浏览的历史画面。
 
@@ -92,7 +92,7 @@ curl -sS http://127.0.0.1:18000/v1/devices/desk-01/desired \
 
 依据 [Seeed 官方电池接口说明](https://wiki.seeedstudio.com/reterminal_e10xx_with_arduino_peripherals/#battery-management-system)，GPIO21 高电平启用检测，等待 10ms 后通过 GPIO1 多次读取校准毫伏值，平均并乘 2，结束后关闭检测电路。电量由单节锂电池电压曲线估算，受负载、充电和电池老化影响，并非精确电量计。
 
-每次内容刷新都会更新电池图标；内容不变时每 15 分钟检测一次，仅当进度宽度或颜色变化时全屏刷新。已缓存的页面支持断网及浏览历史时更新电量；重启后需先联网取得页面。新固件首次启动会重画当前内容，确保加入图标。更新需重新 USB 烧录。
+每次定时或手动唤醒拉取内容时更新电池图标，休眠期间保留画面，不再每 15 分钟唤醒检测。每次启动需联网取得页面后重画。更新需重新 USB 烧录。
 
 电量换算和阈值检查：
 
@@ -100,3 +100,24 @@ curl -sS http://127.0.0.1:18000/v1/devices/desk-01/desired \
 c++ -std=c++11 -Ifirmware/include firmware/tests/battery_test.cpp -o /tmp/ink-battery-test
 /tmp/ink-battery-test
 ```
+
+## 每日定时拉取与深度睡眠
+
+固件默认每天北京时间（Asia/Shanghai，UTC+8）06:30、09:30、12:30、18:30、22:30 唤醒。每次启动先连接 Wi-Fi，查询时间表并用服务端时间校时，再拉取最新内容、刷新电池图标；完成后结束 Wi-Fi 连接并深度睡眠。启动后保留约 30 秒操作窗口，按键操作会延长窗口，单次联网失败约两分钟后也会休眠。休眠保留屏幕画面，不接收 MQTT 推送。
+
+FastAPI 为每台设备提供持久化时间表（使用现有 Bearer 令牌认证）：
+
+- `GET /v1/devices/{device_id}/schedule`：返回 `times`、`minutes`、固定 `timezone` 和当前 Unix 秒 `server_time`。
+- `PUT /v1/devices/{device_id}/schedule`：提交 `{"times":["06:30","09:30","12:30","18:30","22:30"]}`。允许 1～24 个互不重复的 `HH:MM`，自动排序，存入 SQLite；重启服务后保留。可直接通过 FastAPI `/docs` 的接口表单配置（authorization 参数填 `Bearer 你的令牌`）。
+
+设备每次醒来都会检查时间表并缓存到 NVS，配置变化后按新表计算下一次唤醒。已睡眠的设备只能在旧表的下一次唤醒时获取修改；三个功能键均可提前唤醒：KEY0（GPIO3）上一页、KEY1（GPIO4）下一页、KEY2（GPIO5）刷新最新内容。休眠前保存当前页面位置，上一页/下一页会相对屏幕保留的页面导航。按键硬件效果需在设备上验证。
+
+服务不可用时使用已缓存的时间表（无缓存则使用默认表）；RTC 时间有效时照常计算下一次唤醒。完全断电且无法从服务器校时时，每小时重试一次，避免一直开着 Wi-Fi。设备时钟有漂移，拉取时间为近似时间，每次成功请求会重新校准。服务器应保持系统时间准确。
+
+部署需更新 FastAPI 服务并重新 USB 烧录固件；若只更新固件而服务尚无 schedule 接口，会使用本地默认时间表和回退逻辑。新版固件不再使用 `POLL_INTERVAL_MS` 或 MQTT 配置；服务端仍保留 MQTT 以兼容旧固件。
+
+本次验证：接口测试 3 项通过，电量与唤醒时间计算的 C++ 检查通过，ESP32-S3 固件使用示例配置编译成功。接口测试在本机使用可用的 Pillow 13 和系统字体，部署仍使用 requirements.txt 中的版本；驱动 Git 下载失败后，编译使用同一官方仓库的源码压缩包。实际联网、定时唤醒和三个功能键唤醒仍需设备验证。
+
+## Wi-Fi 固件更新
+
+已加入每次唤醒检查固件更新、单设备发布和校验后安装，发布改为在 Ubuntu 执行 `python3 scripts/release_firmware.py`（自动读取设备名并递增版本号），不提供上传或发布 HTTP 接口。详见 [OTA 更新说明](OTA更新说明.md)。首次仍需 USB 烧录启用 OTA。
