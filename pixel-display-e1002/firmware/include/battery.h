@@ -15,3 +15,15 @@ inline int batteryFillWidth(int percent) {
   return percent<=0 ? 0 : (percent*40+99)/100;
 }
 inline int batteryBand(int percent) { return percent<10 ? 2 : percent<20 ? 1 : 0; }
+
+
+// SY6974B: REG08 charge state [4:3], power-good [2]; REG0A bus-good [7].
+// Never infer external power from the battery's voltage estimate.
+enum class PowerStatus { Unknown, Battery, Connected, Charging, Full };
+inline PowerStatus decodePowerStatus(unsigned char status, unsigned char input) {
+  if(!(input & 0x80)) return PowerStatus::Battery;
+  if(!(status & 0x04)) return PowerStatus::Connected;
+  int charge=(status>>3)&3;
+  if(charge==1 || charge==2) return PowerStatus::Charging;
+  return charge==3 ? PowerStatus::Full : PowerStatus::Connected;
+}

@@ -13,6 +13,7 @@
 #include <mbedtls/sha256.h>
 #include "config.h"
 #include "battery.h"
+#include <Wire.h>
 
 static constexpr int W=800, H=480, BYTES=W*H/2;
 SPIClass epdSPI(HSPI);
@@ -45,9 +46,40 @@ int readBatteryPercent() {
   digitalWrite(21,LOW);
   return batteryPercent((sum*2+8)/16);
 }
+// E1002 v1.2 charger bus; read-only access leaves charging configuration untouched.
+TwoWire chargerBus(1);
+PowerStatus shownPower=PowerStatus::Unknown;
+bool readChargerRegister(uint8_t reg, uint8_t &value) {
+  chargerBus.beginTransmission(0x6B); chargerBus.write(reg);
+  if(chargerBus.endTransmission(false)!=0) return false;
+  if(chargerBus.requestFrom(uint8_t(0x6B),uint8_t(1))!=1) return false;
+  value=chargerBus.read(); return true;
+}
+PowerStatus readPowerStatus() {
+  uint8_t id,status,input;
+  if(!readChargerRegister(0x0B,id) || (id & 0x78)!=0x40 ||
+     !readChargerRegister(0x08,status) || !readChargerRegister(0x0A,input)) {
+    Serial.println("charger status unavailable; keeping battery-only indicator");
+    return PowerStatus::Unknown;
+  }
+  PowerStatus state=decodePowerStatus(status,input);
+  Serial.printf("power status=%d REG08=%02x REG0A=%02x\n",int(state),status,input);
+  return state;
+}
 void drawBattery(int percent) {
   // Opaque backing keeps the icon legible on uploaded pictures too.
-  display.fillRoundRect(714,22,62,34,5,GxEPD_WHITE);
+  bool powered=shownPower==PowerStatus::Charging || shownPower==PowerStatus::Connected || shownPower==PowerStatus::Full;
+  display.fillRoundRect(powered ? 680 : 714,22,powered ? 96 : 62,34,5,GxEPD_WHITE);
+  if(powered) {
+    display.setTextColor(GxEPD_BLACK); display.setTextSize(1); display.setTextWrap(false);
+    display.setCursor(687,36);
+    display.print(shownPower==PowerStatus::Charging ? "CHG" : "USB");
+    // A lightning bolt distinguishes active charging from connected power.
+    if(shownPower==PowerStatus::Charging) {
+      display.fillTriangle(709,27,703,38,709,38,GxEPD_BLACK);
+      display.fillTriangle(706,36,712,36,706,48,GxEPD_BLACK);
+    }
+  }
   uint16_t color=percent<10 ? GxEPD_RED : percent<20 ? GxEPD_YELLOW : GxEPD_BLACK;
   display.fillRoundRect(720,27,48,24,5,color);
   display.fillRoundRect(722,29,44,20,3,GxEPD_WHITE);
@@ -144,6 +176,7 @@ void syncDisplay() {
   Serial.println("displayed "+shown);
 }
 void renderDisplay(int percent) {
+  shownPower=readPowerStatus();
   display.setRotation(0); display.setFullWindow(); display.firstPage();
   int page = 0;
   do {
@@ -166,6 +199,7 @@ void renderDisplay(int percent) {
 void setup() {
   Serial.begin(115200); delay(200);
   Serial.println(FIRMWARE_MARKER);
+  chargerBus.begin(39,40,100000); chargerBus.setTimeOut(100);
   pinMode(21,OUTPUT); digitalWrite(21,LOW);
   analogReadResolution(12); analogSetPinAttenuation(1,ADC_11db);
   for(int pin=3;pin<=5;++pin) rtc_gpio_deinit(static_cast<gpio_num_t>(pin));

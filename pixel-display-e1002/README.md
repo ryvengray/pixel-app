@@ -121,3 +121,12 @@ FastAPI 为每台设备提供持久化时间表（使用现有 Bearer 令牌认�
 ## Wi-Fi 固件更新
 
 已加入每次唤醒检查固件更新、单设备发布和校验后安装，发布改为在 Ubuntu 执行 `python3 scripts/release_firmware.py`（自动读取设备名并递增版本号），不提供上传或发布 HTTP 接口。详见 [OTA 更新说明](OTA更新说明.md)。首次仍需 USB 烧录启用 OTA。
+
+
+### 充电与外接电源标识
+
+固件在刷新画面时只读 SY6974B（I²C1 SDA39 / SCL40，地址 0x6B）状态寄存器：充电时电池左侧显示 `CHG` 和闪电，充满或接电但未充电时显示 `USB`，电池模式维持原电量进度条。读取失败或旧版主板无此芯片时，只显示电量，不猜测充电状态；串口输出 `charger status unavailable`。不修改芯片充电配置、不改变现有睡眠或 OTA 策略。
+
+硬件依据：[Seeed v1.2 原理图](https://files.seeedstudio.com/wiki/reterminal_e10xx/res/202004321_reTerminal_E1002_V1_2_SCH_251120.pdf)，寄存器位参考 [Zephyr SY6974B 驱动](https://github.com/zephyrproject-rtos/zephyr/blob/main/drivers/charger/charger_sy6974b.c)。旧版 ETA6003 主板不支持该读取方式。插拔电源不会唤醒当前深睡固件，状态在下一次定时/按键唤醒并刷新时更新；充满与未充电统一显示“已接电源”的 USB 标识。
+
+验收：拔线按刷新，应只有电量；插线按刷新，未满电时应显示 CHG + 闪电；充满后刷新显示 USB；状态与串口 `power status` 对照。使用现有 OTA 发布脚本发布新固件，无需更新两个 FastAPI 服务。
