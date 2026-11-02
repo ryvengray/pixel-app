@@ -63,6 +63,24 @@ def save(raw):
 def photos():
     return sorted(p for p in directory().iterdir() if not p.is_symlink() and p.is_file() and p.suffix.lower() in {'.jpg','.jpeg','.png','.webp'})
 
+def preview_background():
+    """Read the current rotation photo without advancing the rotation."""
+    candidates = photos()
+    with state_db() as db:
+        previous = db.execute('SELECT photo FROM rotation WHERE device=?',
+                              (os.getenv('INK_DEVICE_ID', 'desk-01'),)).fetchone()
+    if previous:
+        candidates.sort(key=lambda photo: photo.name != previous[0])
+    for photo in candidates:
+        try:
+            if photo.stat().st_size > 15 * 1024 * 1024:
+                continue
+            return base64.b64encode(normalize(photo.read_bytes())).decode()
+        except (OSError, HTTPException):
+            continue
+    return ''
+
+
 def slot_at(now):
     now=now.astimezone(ZoneInfo('Asia/Shanghai'))
     hours=[hour for hour in (6,14,20) if hour<=now.hour]
