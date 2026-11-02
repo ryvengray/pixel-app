@@ -33,11 +33,12 @@ public final class NewsSubscriptionsActivity extends ToolActivity {
         status=text("正在读取订阅…",13);status.setTextColor(muted);status.setPadding(0,dp(12),0,dp(12));status.setOnClickListener(v->load());root.addView(status);
         ScrollView scroll=new ScrollView(this);list=new LinearLayout(this);list.setOrientation(LinearLayout.VERTICAL);scroll.addView(list);root.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));setContentView(root);render();load();
     }
-    private JSONObject find(String topic){for(int i=0;i<subscriptions.length();i++){JSONObject r=subscriptions.optJSONObject(i);if(r!=null&&topic.equals(r.optString("topic")))return r;}return null;}
+    private JSONObject find(String topic){for(int i=0;i<subscriptions.length();i++){JSONObject r=subscriptions.optJSONObject(i);if(r!=null&&"topic".equals(r.optString("kind","topic"))&&topic.equals(r.optString("topic")))return r;}return null;}
     private void render(){list.removeAllViews();
         for(int i=0;i<presets.length;i++)card(presets[i],descriptions[i],find(presets[i]));
-        for(int i=0;i<subscriptions.length();i++){JSONObject r=subscriptions.optJSONObject(i);if(r!=null&&!Arrays.asList(presets).contains(r.optString("topic")))card(r.optString("topic"),"自定义关注方向",r);}
+        for(int i=0;i<subscriptions.length();i++){JSONObject r=subscriptions.optJSONObject(i);if(r!=null&&"topic".equals(r.optString("kind","topic"))&&!Arrays.asList(presets).contains(r.optString("topic")))card(r.optString("topic"),"自定义关注方向",r);}
         Button add=new Button(this);add.setText("＋ 添加自定义主题");add.setEnabled(loaded&&!busy);add.setOnClickListener(v->addTopic());list.addView(add);
+        Button sources=new Button(this);sources.setText("新闻源与 X 账号 →");sources.setOnClickListener(v->startActivity(new Intent(this,NewsSourcesActivity.class)));list.addView(sources);
         TextView note=text("每天可选 08:00–22:00，通常在所选时间后几分钟送达。简报基于新闻标题整理，附来源链接；暂不支持突发新闻实时提醒。系统通知需已配对服务并授予通知权限。",13);note.setTextColor(muted);note.setPadding(0,dp(14),0,dp(20));list.addView(note);
         Button settings=new Button(this);settings.setText("连接服务与通知权限");settings.setOnClickListener(v->startActivity(new Intent(this,AssistantSettingsActivity.class)));list.addView(settings);
     }

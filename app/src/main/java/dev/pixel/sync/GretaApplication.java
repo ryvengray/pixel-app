@@ -11,6 +11,7 @@ public final class GretaApplication extends Application {
     @Override public void onCreate(){
         super.onCreate();
         CalendarUpdates.changed(this);
+        XNotificationSync.schedule(this,false);
         registerActivityLifecycleCallbacks(new ActivityLifecycleCallbacks(){
             private final IdentityHashMap<Activity,ViewTreeObserver.OnGlobalLayoutListener> listeners=new IdentityHashMap<>();
             @Override public void onActivityPostCreated(Activity activity,Bundle state){

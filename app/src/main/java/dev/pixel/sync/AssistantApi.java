@@ -121,6 +121,17 @@ public final class AssistantApi {
     public static void subscribeNews(Context context,String topic,int hour,String zone)throws Exception{
         requireNewsConnection(context);post(serverUrl(context)+"/v1/news/subscriptions",secret(context,"device_token"),new JSONObject().put("topic",topic).put("hour",hour).put("timezone",zone));
     }
+    public static JSONObject xNotificationRequest(Context context,String action,JSONObject data)throws Exception{
+        requireNewsConnection(context);return new JSONObject(post(serverUrl(context)+"/v1/news/x-notifications/"+action,secret(context,"device_token"),data));
+    }
+    public static JSONObject newsSources(Context context)throws Exception{
+        requireNewsConnection(context);
+        HttpURLConnection connection=(HttpURLConnection)new URL(serverUrl(context)+"/v1/news/sources").openConnection();connection.setConnectTimeout(10000);connection.setReadTimeout(15000);connection.setRequestProperty("Authorization","Bearer "+secret(context,"device_token"));
+        try{int code=connection.getResponseCode();if(code<200||code>=300)throw new IOException("请求失败（"+code+"）");return new JSONObject(read(connection.getInputStream()));}finally{connection.disconnect();}
+    }
+    public static void subscribeNewsSource(Context context,String name,String kind,String locator,int hour,String zone)throws Exception{
+        requireNewsConnection(context);post(serverUrl(context)+"/v1/news/subscriptions",secret(context,"device_token"),new JSONObject().put("topic",name).put("kind",kind).put("locator",locator).put("hour",hour).put("timezone",zone));
+    }
     public static void cancelNews(Context context,String id)throws Exception{
         requireNewsConnection(context);post(serverUrl(context)+"/v1/news/subscriptions/"+URLEncoder.encode(id,"UTF-8")+"/cancel",secret(context,"device_token"),new JSONObject());
     }
