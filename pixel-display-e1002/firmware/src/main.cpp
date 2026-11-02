@@ -170,9 +170,10 @@ void setup() {
   analogReadResolution(12); analogSetPinAttenuation(1,ADC_11db);
   for(int pin=3;pin<=5;++pin) rtc_gpio_deinit(static_cast<gpio_num_t>(pin));
   pinMode(3,INPUT_PULLUP); pinMode(4,INPUT_PULLUP); pinMode(5,INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(3),key0,FALLING);
+  // Physical refresh is GPIO3; logical key2 exits history browsing.
+  attachInterrupt(digitalPinToInterrupt(3),key2,FALLING);
   attachInterrupt(digitalPinToInterrupt(4),key1,FALLING);
-  attachInterrupt(digitalPinToInterrupt(5),key2,FALLING);
+  attachInterrupt(digitalPinToInterrupt(5),key0,FALLING);
   bitmap=(uint8_t*)ps_malloc(BYTES); if(!bitmap) bitmap=(uint8_t*)malloc(BYTES); if(!bitmap) { Serial.println("frame allocation failed"); while(true) delay(1000); }
   prefs.begin("pixel",false); shown=prefs.getString("shown","");
   decodeSchedule(prefs.getString("schedule",""),false);
