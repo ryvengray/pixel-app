@@ -114,6 +114,16 @@ public final class AssistantApi {
         JSONArray turns=new JSONArray();for(AssistantStore.Message m:messages)turns.put(new JSONObject().put("role",m.role).put("content",m.content));
         return new JSONObject(post(url+"/v1/home",token,new JSONObject().put("messages",turns).put("timezone",java.util.TimeZone.getDefault().getID()))).optString("content","");
     }
+    private static void requireNewsConnection(Context context)throws Exception{
+        if(serverUrl(context).isEmpty()||secret(context,"device_token").isEmpty())throw new IOException("请先在助理设置中配对服务，再管理新闻订阅");
+    }
+    public static JSONArray newsSubscriptions(Context context)throws Exception{requireNewsConnection(context);return getArray(context,"/v1/news/subscriptions");}
+    public static void subscribeNews(Context context,String topic,int hour,String zone)throws Exception{
+        requireNewsConnection(context);post(serverUrl(context)+"/v1/news/subscriptions",secret(context,"device_token"),new JSONObject().put("topic",topic).put("hour",hour).put("timezone",zone));
+    }
+    public static void cancelNews(Context context,String id)throws Exception{
+        requireNewsConnection(context);post(serverUrl(context)+"/v1/news/subscriptions/"+URLEncoder.encode(id,"UTF-8")+"/cancel",secret(context,"device_token"),new JSONObject());
+    }
     public static JSONArray topics(Context context)throws Exception{if(serverUrl(context).isEmpty()||secret(context,"device_token").isEmpty())throw new IOException("连接助理服务后才能整理重要话题");return getArray(context,"/v1/topics");}
     public static JSONObject updateTopic(Context context,String id,JSONObject change)throws Exception{
         String token=secret(context,"device_token");if(serverUrl(context).isEmpty()||token.isEmpty())throw new IOException("尚未配对服务，修改已保存在本机");

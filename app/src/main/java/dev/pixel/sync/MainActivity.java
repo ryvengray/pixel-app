@@ -102,6 +102,7 @@ public class MainActivity extends Activity {
   TextView heading=text("功能与设置",23);heading.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));heading.setTextColor(foreground);sheet.addView(heading);
   TextView subtitle=text("选择你想做的事",13);subtitle.setTextColor(secondary);subtitle.setPadding(0,dp(3),0,dp(17));sheet.addView(subtitle);
   menuSection(sheet,"GRETA");
+  sheet.addView(menuAction("◈   新闻订阅","AI 新进展、国际大事与社会热点",()->{menu.dismiss();startActivity(new Intent(this,NewsSubscriptionsActivity.class).putExtra("dark",dark));}));
   sheet.addView(menuAction("◌   重要话题","她记住的事，以及下次关心的时间",()->{menu.dismiss();startActivity(DecisionActions.intent(this,"open_topics",new org.json.JSONObject()));}));
   sheet.addView(menuAction("✦   和 Greta 聊聊","继续这段对话",()->{menu.dismiss();home.focusInput();}));
   sheet.addView(menuAction("▤   历史记录","查看完整聊天历史",()->{menu.dismiss();home.showHistory();}));
