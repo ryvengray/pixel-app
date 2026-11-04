@@ -118,19 +118,36 @@ async def rotate(now=None, force=False):
             return {**result,'background':photo.name}
         return {'skipped':'no valid photos'}
 
-async def loop():
+# Reminder writers can run in worker threads.
+import threading
+_content_changed = threading.Event()
+
+
+def notify_content_changed():
+    _content_changed.set()
+
+
+async def refresh_content():
     from . import ink
-    previous_todos = None
+    if not os.getenv('INK_API_BASE') or not os.getenv('INK_TOKEN'):
+        return
+    data = await ink.today_data()
+    data.background = await asyncio.to_thread(preview_background)
+    rendered = await asyncio.to_thread(ink.render_today, data)
+    await ink.forward(os.getenv('INK_DEVICE_ID', 'desk-01'), rendered)
+
+
+async def loop():
     while True:
+        changed = _content_changed.is_set()
+        _content_changed.clear()
         try:
             result = await rotate()
-            if os.getenv('INK_API_BASE') and os.getenv('INK_TOKEN'):
-                data = await ink.today_data()
-                todos = tuple(data.todos)
-                if result.get('skipped') and todos != previous_todos:
-                    data.background = await asyncio.to_thread(preview_background)
-                    rendered = await asyncio.to_thread(ink.render_today, data)
-                    await ink.forward(os.getenv('INK_DEVICE_ID', 'desk-01'), rendered)
-                previous_todos = todos
-        except Exception:log.exception('Ink rotation failed; retrying in 60 seconds')
-        await asyncio.sleep(60)
+            if changed and result.get('skipped'):
+                await refresh_content()
+        except Exception:
+            if changed:
+                _content_changed.set()
+            log.exception('Ink update failed; retrying in 60 seconds')
+            await asyncio.sleep(60)
+        await asyncio.to_thread(_content_changed.wait, 60)
