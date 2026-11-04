@@ -142,8 +142,8 @@ def render_today(data):
     text(398,119,data.weather,17,ink,width=355,max_lines=1)
     advice=data.clothing or '穿衣建议待天气更新。'
     text(398,151,advice,16,muted,width=355,max_lines=2)
-    text(398,234,'今日待办',18,ink,width=260,max_lines=1)
-    for i,item in enumerate((data.todos or ['今天暂无待办'])[:3]):
+    text(398,234,'待办',18,ink,width=260,max_lines=1)
+    for i,item in enumerate((data.todos or ['暂无待办'])[:3]):
         y=269+i*29
         draw.rounded_rectangle((399,y+4,410,y+15),3,outline=muted,width=1)
         text(422,y,item,17,ink,width=330,max_lines=1)
@@ -255,8 +255,14 @@ async def today_data():
     data=Today()
     day=datetime.now(ZoneInfo('Asia/Shanghai')).date()
     with connect() as db:
-        rows=db.execute("SELECT title,due_at FROM reminder WHERE state='pending' ORDER BY due_at").fetchall()
-    data.todos=[r['title'][:160] for r in rows if datetime.fromisoformat(r['due_at']).astimezone(ZoneInfo('Asia/Shanghai')).date()==day][:8]
+        rows=db.execute("SELECT title,due_at FROM reminder WHERE state IN ('pending','fired') ORDER BY due_at").fetchall()
+    data.todos=[]
+    for row in rows:
+        due=datetime.fromisoformat(row['due_at']).astimezone(ZoneInfo('Asia/Shanghai'))
+        delta=(due.date()-day).days
+        label='今天' if delta==0 else '明天' if delta==1 else due.strftime('%m/%d')
+        data.todos.append(f"{label} {due:%H:%M} {row['title']}"[:160])
+        if len(data.todos)>=8:break
     sayings=[('Make today count.','让今天过得有意义。'),('One step at a time.','一步一步来。'),('Every day is a new beginning.','每天都是新的开始。')]
     data.english,data.translation=sayings[day.toordinal()%len(sayings)]
     data.quote=['千里之行，始于足下。——《道德经》','学而时习之，不亦说乎？——《论语》','知之者不如好之者。——《论语》'][day.toordinal()%3]

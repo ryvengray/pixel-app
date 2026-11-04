@@ -119,7 +119,18 @@ async def rotate(now=None, force=False):
         return {'skipped':'no valid photos'}
 
 async def loop():
+    from . import ink
+    previous_todos = None
     while True:
-        try:await rotate()
+        try:
+            result = await rotate()
+            if os.getenv('INK_API_BASE') and os.getenv('INK_TOKEN'):
+                data = await ink.today_data()
+                todos = tuple(data.todos)
+                if result.get('skipped') and todos != previous_todos:
+                    data.background = await asyncio.to_thread(preview_background)
+                    rendered = await asyncio.to_thread(ink.render_today, data)
+                    await ink.forward(os.getenv('INK_DEVICE_ID', 'desk-01'), rendered)
+                previous_todos = todos
         except Exception:log.exception('Ink rotation failed; retrying in 60 seconds')
         await asyncio.sleep(60)
