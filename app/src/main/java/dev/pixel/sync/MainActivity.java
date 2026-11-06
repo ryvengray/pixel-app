@@ -1,7 +1,10 @@
 package dev.pixel.sync;
 import android.app.Activity;
 import android.app.Dialog;
+import android.content.BroadcastReceiver;
 import android.content.ClipData;
+import android.content.Context;
+import android.content.IntentFilter;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.res.Configuration;
@@ -24,7 +27,11 @@ public class MainActivity extends Activity {
  private FrameLayout overlay;
  private FrameLayout root;
  private TextView title,menuButton,petTouch;
- private ImageButton historyButton;
+ private ImageButton historyButton,notificationButton;
+ private View unreadDot;
+ private final BroadcastReceiver pushArrived=new BroadcastReceiver(){
+  @Override public void onReceive(Context context,Intent intent){home.syncInbox();}
+ };
  private Dialog menu;
  private Dialog fileActionDialog;
  private int foreground,secondary;
@@ -40,7 +47,19 @@ public class MainActivity extends Activity {
   scene=new PetScene(this);scene.setTheme(dark);scene.setMoving(!preferences.getBoolean("reduceMotion",false));
   root.addView(scene,new FrameLayout.LayoutParams(-1,-1));overlay=new FrameLayout(this);root.addView(overlay,new FrameLayout.LayoutParams(-1,-1));
   title=text("Greta",23);title.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));
-  FrameLayout.LayoutParams header=new FrameLayout.LayoutParams(-2,-2,Gravity.TOP|Gravity.LEFT);header.leftMargin=dp(28);header.topMargin=dp(26);overlay.addView(title,header);
+  FrameLayout.LayoutParams header=new FrameLayout.LayoutParams(-2,-2,Gravity.TOP|Gravity.LEFT);header.leftMargin=dp(74);header.topMargin=dp(26);overlay.addView(title,header);
+  FrameLayout bell=new FrameLayout(this);bell.setElevation(dp(16));
+  FrameLayout.LayoutParams bellPosition=new FrameLayout.LayoutParams(dp(48),dp(48),Gravity.TOP|Gravity.LEFT);
+  bellPosition.leftMargin=dp(20);bellPosition.topMargin=dp(MENU_TOP_DP);overlay.addView(bell,bellPosition);
+  notificationButton=new ImageButton(this);notificationButton.setTag("home_notifications");
+  notificationButton.setImageResource(R.drawable.ic_notification_bell);notificationButton.setPadding(dp(13),dp(13),dp(13),dp(13));
+  notificationButton.setTooltipText("通知");notificationButton.setOnClickListener(v->home.showNotifications());
+  bell.addView(notificationButton,new FrameLayout.LayoutParams(-1,-1));
+  unreadDot=new View(this);unreadDot.setTag("home_notification_unread");
+  unreadDot.setBackground(surface(Color.parseColor("#D74D54"),4));
+  unreadDot.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+  FrameLayout.LayoutParams dotPosition=new FrameLayout.LayoutParams(dp(8),dp(8),Gravity.TOP|Gravity.RIGHT);
+  dotPosition.topMargin=dp(8);dotPosition.rightMargin=dp(8);bell.addView(unreadDot,dotPosition);
   menuButton=text("•••",22);menuButton.setGravity(Gravity.CENTER);menuButton.setElevation(dp(16));menuButton.setContentDescription("打开功能和外观菜单");menuButton.setOnClickListener(v->showMenu());
   FrameLayout.LayoutParams button=new FrameLayout.LayoutParams(dp(MENU_WIDTH_DP),dp(MENU_HEIGHT_DP),Gravity.TOP|Gravity.RIGHT);button.topMargin=dp(MENU_TOP_DP);button.rightMargin=dp(MENU_RIGHT_DP);overlay.addView(menuButton,button);
   historyButton=new ImageButton(this);historyButton.setImageResource(R.drawable.ic_chat_history);historyButton.setPadding(dp(13),dp(13),dp(13),dp(13));
@@ -52,6 +71,10 @@ public class MainActivity extends Activity {
   petTouch.setOnLongClickListener(v->{showMenu();return true;});
   home=new HomeConversationView(this,()->scene.react(),waiting->{scene.setThinking(waiting);petTouch.setContentDescription(waiting?"Greta 正在想，稍等一下":"玉绿色宠物，点击打个招呼，长按打开菜单");});home.setElevation(dp(14));
   overlay.addView(home,new FrameLayout.LayoutParams(-1,-1));
+  home.observeUnread(unread->{
+   unreadDot.setVisibility(unread?View.VISIBLE:View.GONE);
+   notificationButton.setContentDescription(unread?"通知，有未读消息":"通知");
+  });
   home.mountPet(petTouch,this::updatePetPlacement);
   scene.addOnLayoutChangeListener((v,l,t,r,b,ol,ot,or,ob)->updatePetPlacement());
   root.setOnApplyWindowInsetsListener((v,insets)->{applyInputInsets(insets,!imeAnimating);return insets;});
@@ -88,6 +111,8 @@ public class MainActivity extends Activity {
   root.setBackgroundColor(Color.parseColor(dark?"#070D1B":"#F0F5E9"));
   title.setTextColor(foreground);menuButton.setTextColor(foreground);
   historyButton.setImageTintList(android.content.res.ColorStateList.valueOf(foreground));historyButton.setBackground(surface(Color.parseColor(dark?"#263D33":"#DDE8DC"),24));
+  notificationButton.setImageTintList(android.content.res.ColorStateList.valueOf(foreground));
+  notificationButton.setBackground(surface(Color.parseColor(dark?"#263D33":"#DDE8DC"),24));
   menuButton.setBackground(surface(Color.parseColor(dark?"#263D33":"#DDE8DC"),24));scene.setTheme(dark);home.setTheme(dark);
   WindowInsetsController controller=getWindow().getInsetsController();if(controller!=null){
    int appearance=WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS|WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;
@@ -182,7 +207,12 @@ public class MainActivity extends Activity {
  private void menuSection(LinearLayout sheet,String title){TextView label=text(title,11);label.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));label.setTextColor(secondary);label.setPadding(dp(4),dp(13),0,dp(8));sheet.addView(label);}
  private View menuAction(String label,String detail,Runnable action){LinearLayout card=new LinearLayout(this);card.setOrientation(LinearLayout.VERTICAL);card.setPadding(dp(15),dp(10),dp(15),dp(10));card.setBackground(new android.graphics.drawable.RippleDrawable(android.content.res.ColorStateList.valueOf(Color.parseColor(dark?"#406651":"#CADBC7")),surface(Color.parseColor(dark?"#294536":"#E3ECDC"),15),null));TextView name=text(label,15);name.setTextColor(foreground);name.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));card.addView(name);TextView sub=text(detail,12);sub.setTextColor(secondary);sub.setPadding(dp(27),dp(2),0,0);card.addView(sub);LinearLayout.LayoutParams cp=new LinearLayout.LayoutParams(-1,-2);cp.bottomMargin=dp(6);card.setLayoutParams(cp);card.setOnClickListener(v->action.run());return card;}
  @Override protected void onNewIntent(Intent intent){super.onNewIntent(intent);setIntent(intent);handleIncomingFile(intent);home.syncInbox();}
- @Override public void onResume(){super.onResume();LifeSync.schedule(this);if(preferences.getInt("theme",0)==0)dark=systemDark();scene.resumeScene();applyColors();home.resume();home.openIncoming(getIntent().getStringExtra("message_id"));getIntent().removeExtra("message_id");}
- @Override public void onPause(){home.pause();scene.pauseScene();super.onPause();}
+ @Override public void onResume(){super.onResume();LifeSync.schedule(this);if(preferences.getInt("theme",0)==0)dark=systemDark();scene.resumeScene();applyColors();
+  registerReceiver(pushArrived,new IntentFilter(GretaFirebaseMessagingService.INBOX_CHANGED),Context.RECEIVER_NOT_EXPORTED);
+  home.resume();
+  String messageId=getIntent().getStringExtra("message_id");getIntent().removeExtra("message_id");
+  home.openIncoming(messageId);
+ }
+ @Override public void onPause(){unregisterReceiver(pushArrived);home.pause();scene.pauseScene();super.onPause();}
  @Override public void onDestroy(){DecisionActions.cancelPending(this);if(menu!=null)menu.dismiss();if(fileActionDialog!=null)fileActionDialog.dismiss();home.shutdown();super.onDestroy();}
 }
