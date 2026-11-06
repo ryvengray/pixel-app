@@ -25,6 +25,12 @@ import java.util.concurrent.*;
 
 /** Real IME and delayed HTTP reply checks. Run only in the development emulator. */
 final class HomeInteractionChecks {
+    private static final String BRIEFING = "## 今日重点\n\n"
+            + "- **模型发布**：示例模型新增视觉理解能力。\n"
+            + "- **开发者工具**：示例工具更新了本地调试流程。\n\n"
+            + "## 为什么值得关注\n\n> 示例简报根据公开标题整理。\n\n"
+            + "| 来源 | 状态 |\n| --- | --- |\n| 官方博客 | 已发布 |\n\n"
+            + "## 来源与发布时间\n\n- [官方动态](https://example.org/news)";
     private final Instrumentation test;
     private Activity activity;
     private HomeConversationView home;
@@ -50,7 +56,7 @@ final class HomeInteractionChecks {
             new SecureStore(context).put("device_token","home-ui-test-token");
             check("legacyInboxMigratesWithoutPollutingChat",()->checkLegacyInbox(context));
             try(AssistantStore store=new AssistantStore(context)){
-                for(int i=0;i<16;i++){
+                for(int i=0;i<32;i++){
                     store.addMessage("user","旧用户消息 "+i,fixture,"sent",null,i*2);
                     store.addMessage("assistant","旧助手回复 "+i,fixture,"sent",null,i*2+1);
                 }
@@ -66,7 +72,7 @@ final class HomeInteractionChecks {
                 await(()->dot.getVisibility()==View.VISIBLE,"unread dot did not appear");
                 ui(()->{
                     expect(!conversation.canScrollVertically(1),"restored chat did not start at the latest message");
-                    expect(findMessage("推送测试")==null,"notification leaked into chat");
+                    expect(findMessage(BRIEFING)==null,"notification leaked into chat");
                     bell.performClick();
                 });
                 java.lang.reflect.Field detail=HomeConversationView.class.getDeclaredField("detail");
@@ -83,10 +89,13 @@ final class HomeInteractionChecks {
                     expect(briefing!=null,"notification detail did not open");
                     await(briefing::hasWindowFocus,"notification detail did not receive focus");
                     ui(()->{
-                        expect("推送测试".equals(briefing.getIntent().getStringExtra("body")),"wrong notification detail");
+                        expect(BRIEFING.equals(briefing.getIntent().getStringExtra("body")),"wrong notification detail");
                         expect(dot.getVisibility()==View.GONE,"unread dot did not clear");
-                        briefing.finish();
                     });
+                    android.webkit.WebView reader=findType(briefing.getWindow().getDecorView(),android.webkit.WebView.class);
+                    await(()->reader.getContentHeight()>100,"Markdown article did not render");
+                    capture("home-briefing.png");
+                    ui(briefing::finish);
                     await(()->notificationDialog.getWindow().getDecorView().hasWindowFocus(),"notification list did not regain focus");
                     ui(notificationDialog::dismiss);
                 }finally{test.removeMonitor(monitor);}
@@ -94,6 +103,34 @@ final class HomeInteractionChecks {
                     expect(store.notifications().stream().anyMatch(item->item.id.equals(fixture)&&item.read),"read status was not saved");
                 }
                 await(()->activity.hasWindowFocus(),"home did not regain focus");
+            });
+            check("olderChatLoadsInPagesWithoutMovingAnchor",()->{
+                ui(()->expect(conversation.getCount()==21,"expected 20 initial messages and the status footer"));
+                for(int count:new int[]{41,61,65}){
+                    ui(()->conversation.setSelectionFromTop(0,0));
+                    await(()->!conversation.canScrollVertically(-1),"could not reach the top of the loaded page");
+                    long[] anchor=new long[1];int[] offset=new int[1];
+                    ui(()->{
+                        anchor[0]=conversation.getItemIdAtPosition(0);
+                        offset[0]=conversation.getChildAt(0).getTop();
+                    });
+                    if(count==61)ui(this::scrollOlderWithMouse);else pullOlderChat();
+                    await(()->conversation.getCount()==count&&conversation.getFirstVisiblePosition()>0,
+                            "scrolling up did not add the expected page");
+                    ui(()->{
+                        expect(conversation.getItemIdAtPosition(conversation.getFirstVisiblePosition())==anchor[0],
+                                "prepending moved the visible message");
+                        expect(conversation.getChildAt(0).getTop()==offset[0],"prepending moved the visible offset");
+                    });
+                }
+                ui(()->conversation.setSelectionFromTop(0,0));
+                await(()->!conversation.canScrollVertically(-1),"could not reach the earliest message");
+                pullOlderChat();
+                ui(()->{
+                    expect(conversation.getCount()==65,"reaching the oldest message added duplicates");
+                    conversation.setSelectionFromTop(conversation.getCount()-2,0);
+                });
+                await(()->!conversation.canScrollVertically(1),"could not return to the latest message");
             });
             check("earlyFalseInsetsKeepEditor",()->ui(()->{
                 home.focusInput();home.onKeyboard(false);
@@ -248,6 +285,36 @@ final class HomeInteractionChecks {
             expect(!Rect.intersects(screenBounds(slot),petAt),"side content overlaps the pet anchor");
         }
     }
+    private void scrollOlderWithMouse(){
+        MotionEvent.PointerProperties pointer=new MotionEvent.PointerProperties();
+        pointer.id=0;pointer.toolType=MotionEvent.TOOL_TYPE_MOUSE;
+        MotionEvent.PointerCoords coords=new MotionEvent.PointerCoords();
+        coords.setAxisValue(MotionEvent.AXIS_VSCROLL,1);
+        long now=SystemClock.uptimeMillis();
+        MotionEvent event=MotionEvent.obtain(now,now,MotionEvent.ACTION_SCROLL,1,
+                new MotionEvent.PointerProperties[]{pointer},new MotionEvent.PointerCoords[]{coords},
+                0,0,1,1,0,0,android.view.InputDevice.SOURCE_MOUSE,0);
+        try{conversation.onGenericMotionEvent(event);}finally{event.recycle();}
+    }
+    private void pullOlderChat(){
+        int[] start=new int[2];
+        ui(()->{
+            conversation.getLocationOnScreen(start);
+            start[0]+=conversation.getWidth()/2;
+            start[1]+=conversation.getHeight()/3;
+        });
+        long down=SystemClock.uptimeMillis();
+        sendPointer(down,MotionEvent.ACTION_DOWN,start[0],start[1]);
+        SystemClock.sleep(30);
+        sendPointer(down,MotionEvent.ACTION_MOVE,start[0],start[1]+60);
+        SystemClock.sleep(180);
+        sendPointer(down,MotionEvent.ACTION_UP,start[0],start[1]+60);
+        test.waitForIdleSync();
+    }
+    private void sendPointer(long down,int action,float x,float y){
+        MotionEvent event=MotionEvent.obtain(down,SystemClock.uptimeMillis(),action,x,y,0);
+        try{test.sendPointerSync(event);}finally{event.recycle();}
+    }
     private void tapPet(){
         int[] location=new int[2];ui(()->{View target=activity.findViewById(android.R.id.content).findViewWithTag("home_pet_touch");target.getLocationOnScreen(location);location[0]+=target.getWidth()/2;location[1]+=target.getHeight()/2;});
         long now=SystemClock.uptimeMillis();MotionEvent down=MotionEvent.obtain(now,now,MotionEvent.ACTION_DOWN,location[0],location[1],0),up=MotionEvent.obtain(now,now+40,MotionEvent.ACTION_UP,location[0],location[1],0);
@@ -256,7 +323,7 @@ final class HomeInteractionChecks {
     private interface Check{void run()throws Exception;}
     private interface Condition{boolean get();}
     private void check(String name,Check work)throws Exception{
-        Bundle report=new Bundle();report.putString("class",getClass().getName());report.putString("test",name);report.putInt("numtests",11);report.putInt("current",passed+1);test.sendStatus(1,report);
+        Bundle report=new Bundle();report.putString("class",getClass().getName());report.putString("test",name);report.putInt("numtests",12);report.putInt("current",passed+1);test.sendStatus(1,report);
         try{work.run();passed++;test.sendStatus(0,report);}catch(Throwable error){report.putString("stack",android.util.Log.getStackTraceString(error));test.sendStatus(-2,report);throw error;}
     }
     private void await(Condition condition,String message){
@@ -298,7 +365,7 @@ final class HomeInteractionChecks {
             if(chat){JSONObject request=new JSONObject(new String(body,StandardCharsets.UTF_8));requestIds.add(request.getString("client_message_id"));received.release();if(!release.tryAcquire(10,TimeUnit.SECONDS))return;status=fail?503:200;response=fail?"{}":"{\"content\":\"收到这条测试消息。\",\"memory_changes\":[],\"tool_results\":[{\"summary\":\"聊天工具测试\"}]}";}
             else if(path.equals("/v1/inbox?after_sequence=0")){
                 response=new org.json.JSONArray().put(new JSONObject().put("id",fixture).put("sequence",1)
-                        .put("title","推送标题").put("body","推送测试")).toString();
+                        .put("title","AI 新进展 · 今日简报").put("body",BRIEFING)).toString();
             }
             else if(path.equals("/v1/home"))response="{\"content\":\"\"}";
             byte[] bytes=response.getBytes(StandardCharsets.UTF_8);OutputStream out=connection.getOutputStream();

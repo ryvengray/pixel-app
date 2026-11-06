@@ -84,6 +84,36 @@ class NewsTests(unittest.TestCase):
         with main.connect() as db:
             self.assertEqual(db.execute("SELECT count(*) FROM inbox_message WHERE id LIKE 'news:%'").fetchone()[0], 1)
 
+    def test_ai_can_use_official_feed_when_search_fails(self):
+        now = datetime(2026, 11, 6, 10, tzinfo=timezone.utc)
+        data = b"<rss><channel><item><title>Model update</title><link>https://openai.com/news/example</link><pubDate>Tue, 03 Nov 2026 08:00:00 GMT</pubDate></item></channel></rss>"
+        feed = AsyncMock(side_effect=[data, ValueError('offline')])
+        with patch.object(news, 'fetch_provider_feed', feed), patch.object(news, 'fetch_topic_feed', AsyncMock(side_effect=ValueError('offline'))):
+            items = asyncio.run(news.fetch_items(main.connect, {'topic': 'AI 新进展'}, now))
+        self.assertEqual([item['source'] for item in items], ['OpenAI 官方动态'])
+
+    def test_ai_empty_morning_check_retries_and_publishes_later(self):
+        now = datetime.now(timezone.utc)
+        zone = f'Etc/GMT{(now.hour-12):+d}'
+        sid = news.run(main.connect, 'subscribe_news', {'topic': 'AI 新进展', 'hour': 8, 'timezone': zone}, None)['id']
+        items = [{'title': 'News [beta]', 'url': 'https://example.com/a', 'published': now.isoformat()}]
+        fetch = AsyncMock(side_effect=[[], items])
+        model = AsyncMock(return_value={'content': '## 今日重点\n- **新模型**'})
+        with patch.object(news, 'fetch_items', fetch):
+            asyncio.run(news.tick(main.connect, model, main.enqueue_push))
+            with main.connect() as db:
+                row = db.execute('SELECT last_day,last_error,retry_at FROM news_subscription WHERE id=?', (sid,)).fetchone()
+                self.assertIsNone(row['last_day'])
+                self.assertIn('暂未发现', row['last_error'])
+                self.assertIsNotNone(row['retry_at'])
+                db.execute('UPDATE news_subscription SET retry_at=NULL WHERE id=?', (sid,))
+            asyncio.run(news.tick(main.connect, model, main.enqueue_push))
+        self.assertEqual(fetch.await_count, 2)
+        self.assertEqual(model.await_count, 1)
+        with main.connect() as db:
+            body = db.execute('SELECT body FROM inbox_message').fetchone()[0]
+            self.assertIn(r'[News \[beta\]](<https://example.com/a>)', body)
+
     def test_rss_and_x_sources_api(self):
         client = TestClient(main.app)
         with main.connect() as db:

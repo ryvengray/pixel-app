@@ -13,7 +13,12 @@ public final class XNotificationRulesTest {
         check("karpathy".equals(accept("com.twitter.android","social",false,false,false,"tweets","Andrej Karpathy (@karpathy)","New paper")));
         check(accept("com.other.app","social",false,false,false,"tweets","Elon Musk","text")==null);
         check(accept("com.twitter.android","msg",false,false,false,"tweets","Elon Musk","text")==null);
-        check(accept("com.twitter.android",null,false,false,false,"tweets","Elon Musk","text")==null);
+        check("elonmusk".equals(accept("com.twitter.android",null,false,false,false,"tweets","Elon Musk","text")));
+        check("karpathy".equals(accept("com.twitter.android",null,false,false,false,"unknown","Andrej Karpathy 发布了一条新推文","text")));
+        check("karpathy".equals(accept("com.twitter.android","social",false,false,false,"unknown","Andrej Karpathy (@karpathy) posted","text")));
+        check(accept("com.twitter.android",null,false,false,false,"unknown","Elon Musk","text")==null);
+        check(accept("com.twitter.android",null,false,false,false,"direct_messages","Elon Musk posted","text")==null);
+        check(accept("com.twitter.android",null,false,true,false,"tweets","Elon Musk posted","text")==null);
         check(accept("com.twitter.android","social",true,false,false,"tweets","Elon Musk","text")==null);
         check(accept("com.twitter.android","social",false,true,false,"tweets","Elon Musk","text")==null);
         check(accept("com.twitter.android","social",false,false,true,"tweets","Elon Musk","text")==null);
@@ -25,6 +30,8 @@ public final class XNotificationRulesTest {
         check(accept("com.twitter.android","social",false,false,false,"tweets","Elon Musk","  ")==null);
         check(accept("com.twitter.android","social",false,false,false,"tweets",null,"text")==null);
         check("karpathy".equals(accept("com.twitter.android","social",false,false,false,"tweets","@Karpathy","text")));
+        check(accept("com.twitter.android","social",false,false,false,"tweets","Elon Musk sent a message","hello")==null);
+        check(XNotificationRules.privateText("Andrej Karpathy messaged you"));
         System.out.println(checks+" notification filter checks passed");
     }
 }

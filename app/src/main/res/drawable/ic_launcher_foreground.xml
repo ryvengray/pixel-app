@@ -1,0 +1,24 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108"
+    android:tint="#174EA6">
+
+    <!-- Assistant bubble with two transparent eyes. -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:fillType="evenOdd"
+        android:pathData="M42,42 H54 Q58,42 61,46 L64,50 Q66,53 70,53 H73 Q76,53 76,56 V60
+            C76,68 70,73 62,73 H47 L38,79 Q35,81 35,77 V72 C30,70 28,66 28,60 V56
+            C28,48 34,42 42,42 Z
+            M47,57 A3.5,3.5 0,1 0,40 57 A3.5,3.5 0,1 0,47 57 Z
+            M64,57 A3.5,3.5 0,1 0,57 57 A3.5,3.5 0,1 0,64 57 Z" />
+
+    <!-- Four-point spark. -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M70,27 Q71,24 72,27 L74,32 Q75,34 77,35 L82,37 Q85,38 82,39
+            L77,41 Q75,42 74,44 L72,49 Q71,52 70,49 L68,44 Q67,42 65,41 L60,39
+            Q57,38 60,37 L65,35 Q67,34 68,32 Z" />
+</vector>

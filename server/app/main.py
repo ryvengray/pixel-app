@@ -609,10 +609,13 @@ async def reminder_loop() -> None:
         await asyncio.sleep(15)
 
 
-async def news_loop():
+async def briefing_loop(tick, *args):
     while True:
-        await news.tick(connect, deepseek, enqueue_push)
-        await x_notifications.tick(connect, deepseek)
+        try:
+            await tick(*args)
+        except sqlite3.OperationalError:
+            # Retry temporary database locks on the next scheduled check.
+            pass
         await asyncio.sleep(300)
 
 
@@ -626,15 +629,16 @@ async def lifespan(_: FastAPI):
             (utc_now(),),
         )
     task = asyncio.create_task(reminder_loop())
-    news_task = asyncio.create_task(news_loop())
+    news_task = asyncio.create_task(briefing_loop(news.tick, connect, deepseek, enqueue_push))
+    x_task = asyncio.create_task(briefing_loop(x_notifications.tick, connect, deepseek))
     topic_task = asyncio.create_task(topics.worker())
     ink_task = asyncio.create_task(ink_gallery.loop())
     try:
         yield
     finally:
-        news_task.cancel()
+        news_task.cancel(); x_task.cancel()
         task.cancel(); topic_task.cancel(); ink_task.cancel()
-        await asyncio.gather(task, news_task, topic_task, ink_task, return_exceptions=True)
+        await asyncio.gather(task, news_task, x_task, topic_task, ink_task, return_exceptions=True)
 
 
 app = FastAPI(title="Greta private service", lifespan=lifespan)

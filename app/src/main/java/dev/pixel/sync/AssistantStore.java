@@ -67,12 +67,24 @@ public final class AssistantStore extends SQLiteOpenHelper {
     public List<Message> messagesBefore(long before,int count){return messagesBefore(before,count,"");}
     public List<Message> chatBefore(long before,int count){return messagesBefore(before,count,CHAT_MESSAGES);}
     private List<Message> messagesBefore(long before,int count,String filter){
-        ArrayList<Message> result=new ArrayList<>();
-        try(Cursor c=getReadableDatabase().rawQuery("SELECT id,role,content,created_at,group_id,status FROM message WHERE id < ?"
-                +filter+" ORDER BY id DESC LIMIT ?",new String[]{String.valueOf(before),String.valueOf(count)})){
+        List<Message> result=readMessages("id < ?"+filter+" ORDER BY id DESC LIMIT ?",
+                String.valueOf(before),String.valueOf(count));
+        Collections.reverse(result);
+        return result;
+    }
+    List<Message> chatAfter(long after){
+        return readMessages("id > ?"+CHAT_MESSAGES+" ORDER BY id",String.valueOf(after));
+    }
+    Message latestChatMessage(String role){
+        List<Message> result=readMessages("role=?"+CHAT_MESSAGES+" ORDER BY id DESC LIMIT 1",role);
+        return result.isEmpty()?null:result.get(0);
+    }
+    private List<Message> readMessages(String selection,String... args){
+        List<Message> result=new ArrayList<>();
+        try(Cursor c=getReadableDatabase().rawQuery(
+                "SELECT id,role,content,created_at,group_id,status FROM message WHERE "+selection,args)){
             while(c.moveToNext())result.add(new Message(c.getLong(0),c.getString(1),c.getString(2),c.getLong(3),c.getString(4),c.getString(5)));
         }
-        Collections.reverse(result);
         return result;
     }
     public List<Message> conversation(int count){

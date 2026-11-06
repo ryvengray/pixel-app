@@ -15,7 +15,7 @@ import java.util.concurrent.*;
 public final class NewsSubscriptionsActivity extends ToolActivity {
     private final ExecutorService network=Executors.newSingleThreadExecutor();
     private final String[] presets={"AI 新进展","国际大事","社会热点"};
-    private final String[] descriptions={"模型发布、研究突破、AI 产品与应用进展","影响广泛的国际事件与全球局势变化","值得关注的公共事件、民生与社会议题"};
+    private final String[] descriptions={"模型发布、研究突破和 AI 产品进展 · 官方动态与新闻搜索","影响广泛的国际事件与全球局势变化","值得关注的公共事件、民生与社会议题"};
     private JSONArray subscriptions=new JSONArray();
     private LinearLayout list;
     private TextView status;
@@ -48,6 +48,9 @@ public final class NewsSubscriptionsActivity extends ToolActivity {
         TextView desc=text(description,14);desc.setTextColor(muted);card.addView(desc);
         int hour=row==null?9:row.optInt("hour",9);String zone=row==null?TimeZone.getDefault().getID():row.optString("timezone");
         TextView delivery=text(row==null?"尚未订阅 · 开启后选择时间":String.format(Locale.CHINA,"每天 %02d:00 · %s",hour,zone),13);delivery.setPadding(0,dp(8),0,0);card.addView(delivery);
+        if(row!=null&&!row.optString("last_error").isEmpty()&&!row.isNull("last_error")){
+            TextView check=text(row.optString("last_error"),13);check.setTextColor(muted);card.addView(check);
+        }
         toggle.setOnCheckedChangeListener((button,checked)->{toggle.setChecked(row!=null);if(checked)choose(topic,hour,zone);else mutate(()->AssistantApi.cancelNews(this,row.optString("id")));});
         if(row!=null){Button time=new Button(this);time.setText("调整推送时间");time.setEnabled(!busy);time.setOnClickListener(v->choose(topic,hour,zone));card.addView(time);}
         LinearLayout.LayoutParams params=new LinearLayout.LayoutParams(-1,-2);params.bottomMargin=dp(14);list.addView(card,params);

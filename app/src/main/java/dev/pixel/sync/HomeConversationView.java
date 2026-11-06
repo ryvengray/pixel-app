@@ -17,6 +17,7 @@ import java.util.concurrent.*;
 
 /** Conversation history, input and notification access on the home screen. */
 public final class HomeConversationView extends FrameLayout {
+    private static final int CHAT_PAGE_SIZE = 20;
     private final Activity activity;
     private final AssistantStore store;
     private final SharedPreferences prefs;
@@ -44,6 +45,7 @@ public final class HomeConversationView extends FrameLayout {
     private long generation, lastInteraction, pausedAt;
     private float touchStartX, touchStartY;
     private boolean greetingEvaluated;
+    private boolean hasOlderChat, olderChatScheduled, prependingChat;
     private String requestedMessageId;
     private String pendingGroup, inFlightGroup, resultText = "";
     private final Runnable dispatch = this::dispatch;
@@ -69,8 +71,22 @@ public final class HomeConversationView extends FrameLayout {
                 boolean atEnd=children>0&&getLastVisiblePosition()==getCount()-1
                         &&getChildAt(children-1).getBottom()<=oldHeight-getListPaddingBottom();
                 super.onSizeChanged(width,height,oldWidth,oldHeight);
-                if(height>0&&(oldHeight==0||atEnd)&&chatRows.getCount()>0){
+                if(!prependingChat&&height>0&&(oldHeight==0||atEnd)&&chatRows.getCount()>0){
                     setSelectionFromTop(chatRows.getCount()-1,0);
+                }
+            }
+            @Override public boolean onGenericMotionEvent(MotionEvent event){
+                boolean handled=super.onGenericMotionEvent(event);
+                if(event.getActionMasked()==MotionEvent.ACTION_SCROLL&&event.getAxisValue(MotionEvent.AXIS_VSCROLL)>0){
+                    scheduleOlderChat();
+                }
+                return handled;
+            }
+            @Override protected void layoutChildren(){
+                super.layoutChildren();
+                if(prependingChat){
+                    prependingChat=false;
+                    setTranscriptMode(AbsListView.TRANSCRIPT_MODE_NORMAL);
                 }
             }
         };
@@ -88,6 +104,16 @@ public final class HomeConversationView extends FrameLayout {
         state.setOnClickListener(v->retry());
         conversation.addFooterView(state,null,false);
         conversation.setAdapter(chatRows);
+        conversation.setOnScrollListener(new AbsListView.OnScrollListener(){
+            private boolean scrolling;
+            @Override public void onScrollStateChanged(AbsListView view,int state){
+                scrolling=state!=SCROLL_STATE_IDLE;
+                if(scrolling)scheduleOlderChat();
+            }
+            @Override public void onScroll(AbsListView view,int first,int visible,int total){
+                if(scrolling&&first==0)scheduleOlderChat();
+            }
+        });
         conversation.setOnItemClickListener((parent,row,position,id)->{
             AssistantStore.Message message=chatRows.getItem(position);
             showText(speaker(message),message.content);
@@ -165,22 +191,38 @@ public final class HomeConversationView extends FrameLayout {
         send.setTextColor(Color.parseColor(dark?"#102019":"#FFFFFF"));send.setBackground(surface(Color.parseColor(dark?"#8BCB9A":"#327C4E"),22));
         render();
     }
+    private List<AssistantStore.Message> chatPage(long before){
+        List<AssistantStore.Message> page=store.chatBefore(before,CHAT_PAGE_SIZE+1);
+        hasOlderChat=page.size()>CHAT_PAGE_SIZE;
+        if(hasOlderChat)page.remove(0);
+        return page;
+    }
+    private void scheduleOlderChat(){
+        if(!active||!hasOlderChat||olderChatScheduled||prependingChat||conversation.canScrollVertically(-1))return;
+        olderChatScheduled=true;
+        main.post(()->{
+            olderChatScheduled=false;
+            if(!active||closed||conversation.canScrollVertically(-1)||conversation.getChildCount()==0)return;
+            List<AssistantStore.Message> older=chatPage(chatRows.getItemId(0));
+            if(older.isEmpty())return;
+            int top=conversation.getChildAt(0).getTop()-conversation.getListPaddingTop();
+            // Keep the same message at the same offset when its adapter position shifts.
+            prependingChat=true;
+            conversation.setTranscriptMode(AbsListView.TRANSCRIPT_MODE_DISABLED);
+            chatRows.add(0,older);
+            conversation.setSelectionFromTop(older.size(),top);
+        });
+    }
     private void restore(){
-        List<AssistantStore.Message> messages=store.chatBefore(Long.MAX_VALUE,100);
+        int count=chatRows.getCount();
+        chatRows.add(count,count==0?chatPage(Long.MAX_VALUE):store.chatAfter(chatRows.getItemId(count-1)));
         if(resultText.isEmpty()){
-            for(int i=messages.size()-1;i>=0;i--){
-                AssistantStore.Message message=messages.get(i);
-                if(message.role.equals("tool")){resultText=message.content;break;}
-            }
+            AssistantStore.Message tool=store.latestChatMessage("tool");
+            if(tool!=null)resultText=tool.content;
         }
-        pendingGroup=null;
-        for(int i=messages.size()-1;i>=0;i--){
-            AssistantStore.Message message=messages.get(i);
-            if(!message.role.equals("user"))continue;
-            if(!message.status.equals("sent")&&!message.groupId.equals(inFlightGroup))pendingGroup=message.groupId;
-            break;
-        }
-        chatRows.replace(messages);
+        AssistantStore.Message latestUser=store.latestChatMessage("user");
+        pendingGroup=latestUser!=null&&!latestUser.status.equals("sent")&&!latestUser.groupId.equals(inFlightGroup)
+                ?latestUser.groupId:null;
         render();
     }
     private String speaker(AssistantStore.Message message){
@@ -191,16 +233,11 @@ public final class HomeConversationView extends FrameLayout {
     private int muted(){return Color.parseColor(dark?"#A5B9AA":"#59715F");}
 
     private final class ChatRows extends BaseAdapter {
-        private List<AssistantStore.Message> messages=Collections.emptyList();
-        void replace(List<AssistantStore.Message> updated){
-            boolean changed=messages.size()!=updated.size();
-            for(int i=0;!changed&&i<updated.size();i++){
-                changed=messages.get(i).id!=updated.get(i).id;
-            }
-            if(changed){
-                messages=updated;
-                notifyDataSetChanged();
-            }
+        private final List<AssistantStore.Message> messages=new ArrayList<>();
+        void add(int position,List<AssistantStore.Message> page){
+            if(page.isEmpty())return;
+            messages.addAll(position,page);
+            notifyDataSetChanged();
         }
         @Override public int getCount(){return messages.size();}
         @Override public AssistantStore.Message getItem(int position){return messages.get(position);}
