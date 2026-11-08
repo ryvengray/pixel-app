@@ -17,7 +17,7 @@ import httpx
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
-from . import topics, ink, ink_gallery, news, x_notifications
+from . import topics, ink, ink_gallery, news, x_notifications, phone_control
 from .decision import Decision, DecisionRequest, apply_policy, fallback, non_action, informational, record_requested
 from jsonschema import Draft202012Validator, FormatChecker
 
@@ -633,6 +633,8 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="Greta private service", lifespan=lifespan)
+app.include_router(phone_control.router)
+app.add_api_route("/esp32-screen", phone_control.page, methods=["GET"], include_in_schema=False)
 app.include_router(topics.router, dependencies=[Depends(require_device)])
 app.include_router(ink.auth_router)
 app.include_router(ink.router, dependencies=[Depends(ink.require_ink_access)])
