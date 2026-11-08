@@ -128,3 +128,62 @@ python -m pytest tests/test_phone_control.py
 当前现场联调地址为 ESP32 `192.168.0.210`、网关 `192.168.0.1`：原 `.106` 的MAC与板子不同，
 换址后已验证连续心跳；建议在路由器中为板子MAC保留 `.210`，避免DHCP后续重分配。
 固件0.1.1修复已配对重连时的本地通知标志，并检查通知API结果；已通过Android getevent验证数字1/2/3的DOWN/UP事件。
+
+
+## 手机画面、点击与滑动
+
+`/esp32-screen` 现在显示手机截图，画面约每秒更新。在电脑页面勾选「允许点击与滑动」后，
+点击预览可点按手机，按住拖动可滑动，也可使用「向上滑动」「向下滑动」按钮。
+点击/滑动由 Ubuntu 无线 ADB 执行；原有文字输入仍由 ESP32 蓝牙键盘执行。
+ADB 预览控制独立于 ESP32 的 BOOT 开关；蓝牙文字输入仍需板子 ARMED。
+
+Ubuntu 宿主机运行截图桥接进程（服务容器不需要内置 ADB）：
+
+```bash
+python3 server/phone_bridge.py --env-file server/.env bridge \
+  --serial adb-48121FDAP00574-fqmAsw._adb-tls-connect._tcp \
+  --adb /home/leigang/Android/Sdk/platform-tools/adb --interval 1
+```
+
+进程从 dotenv 只读取管理员令牌，不输出令牌。部署的用户服务名为 `pixel-phone-bridge.service`，
+可使用 `systemctl --user status pixel-phone-bridge`、`journalctl --user -u pixel-phone-bridge -n 30` 检查。
+用户服务按现有 Linux 用户会话生命周期运行；系统启动后无人登录时是否启动取决于用户的 linger 设置。
+
+页面每隔一段时间向 `POST /v1/phone-control/screen/watch` 续租，租期15秒；
+没有可见页面继续续租时，桥接进程停止抓图，但保留心跳。
+`POST /bridge/poll` 仅接受管理员 Bearer 令牌，浏览器 Cookie 不能冒充执行进程。
+`POST /touch` 接收 `{id,version,action}`，action为tap或swipe；`GET /touch/{id}` 查询结果。
+
+网页按图片实际显示尺寸换算原始像素坐标，拖动时保持画面不变。
+服务保留近期帧元信息，只接受5秒内且与当前画面尺寸一致的操作；执行前再截图核对尺寸，
+避免手机旋转后按旧坐标点击。受保护内容可能无法截图，显示的是截图预览而非视频流。
+操作单次下发，超时或进程重启不自动重放，网页可查询原操作ID。
+输入成功仅代表ADB完成指令，实际应用状态仍需通过更新后的手机画面确认。
+
+
+## 实时视频与持续触控
+
+调试页已切换为 scrcpy 3.3.4 硬件H.264 → WebRTC，目标30 FPS、长边1280、2Mbps；
+服务器直接打包转发编码视频，不做逐帧JPEG上传，也不重新编码。页面显示实际解码帧率和控制通道RTT；
+RTT不是端到端视频延迟，静止画面的帧率可能低于目标值。
+
+按下、移动、松开通过RTC DataChannel持续传输，不再等待拖动结束后提交一条ADB swipe。
+移动事件上限约30次/秒，网络积压时丢弃多余移动事件，断线、取消、窗口失焦、旋转或暂停会释放触点。
+严格检查视频尺寸、方向epoch、坐标、事件顺序；不重放已发送动作。
+当前单个实时查看会话，新页面连接会接管旧会话；旧页面可手动重新连接。
+
+独立网关使用 `server/realtime-requirements.txt`，只监听Ubuntu本机127.0.0.1:8788，
+由主服务 `/v1/phone-control/realtime/offer` 和 `/close/{id}` 通过现有管理员登录代理信令。
+浏览器不会获得网关令牌。视频/触控使用局域网WebRTC UDP直连，无外部STUN/TURN；
+跨公网不属于当前配置，若连接失败请检查局域网UDP与无线ADB。
+
+用户服务 `pixel-phone-realtime.service` 按需推送临时scrcpy服务并运行，关闭页面后清理手机端进程和ADB转发。
+独立虚拟环境：`~/.local/share/pixel-realtime/venv`。
+官方组件：https://github.com/Genymobile/scrcpy/releases/tag/v3.3.4
+scrcpy-server-v3.3.4 SHA256：8588238c9a5a00aa542906b6ec7e6d5541d9ffb9b5d0f6e1bc0e365e2303079e。
+该文件是临时ADB服务，不是安装到手机的常驻APK。固定协议实现参考官方doc/develop.md与ControlMessageReader。
+
+原截图/触控接口及pixel-phone-bridge服务保留兼容，但实时页不再向screen/watch续租。
+ESP32蓝牙键盘和BOOT控制保持原有方式。
+测试：常规pytest覆盖信令权限、参数及二进制协议；网关虚拟环境中运行
+`PYTHONPATH=server python tests/realtime_gateway_checks.py` 验证触点生命周期。

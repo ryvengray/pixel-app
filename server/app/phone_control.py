@@ -9,6 +9,7 @@ import secrets
 import sqlite3
 import time
 import warnings
+import httpx
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Annotated, Literal, Union
@@ -19,6 +20,27 @@ from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 router = APIRouter(prefix='/v1/phone-control', tags=['phone-control'])
+
+
+class RealtimeOffer(BaseModel):
+    sdp: str = Field(min_length=1,max_length=200000)
+    type: Literal['offer']
+
+
+async def realtime_request(method, path, payload=None):
+    key=os.getenv('PHONE_CONTROL_ADMIN_TOKEN','')
+    try:
+        async with httpx.AsyncClient(timeout=25,trust_env=False) as client:
+            response=await client.request(method,'http://127.0.0.1:8788'+path,json=payload,headers={'Authorization':'Bearer '+key})
+            if response.status_code!=200:
+                raise HTTPException(503,'实时连接未建立，请确认手机已解锁且无线调试在线')
+            return response.json()
+    except httpx.HTTPError:
+        raise HTTPException(503,'实时视频网关未连接，请稍后重试')
+
+
+# These routes use the same persistent operator login as the control page.
+# The browser never receives the gateway Bearer token.
 
 
 def auth(env: str, authorization: str | None) -> None:
@@ -43,6 +65,27 @@ def device(authorization: str | None = Header(default=None)) -> None:
     auth('PHONE_CONTROL_DEVICE_TOKEN', authorization)
 
 
+def bridge_access(authorization: str | None = Header(default=None)) -> None:
+    auth('PHONE_CONTROL_ADMIN_TOKEN', authorization)
+
+
+@router.post('/realtime/offer',dependencies=[Depends(admin)])
+async def realtime_offer(request:RealtimeOffer):
+    return await realtime_request('POST','/offer',request.model_dump())
+
+
+@router.post('/realtime/close/{session_id}',dependencies=[Depends(admin)])
+async def realtime_close(session_id:str):
+    if len(session_id)!=32 or any(char not in '0123456789abcdef' for char in session_id):
+        raise HTTPException(422,'Invalid realtime session id')
+    return await realtime_request('POST','/close/'+session_id)
+
+
+@router.get('/realtime/status',dependencies=[Depends(admin)])
+async def realtime_status():
+    return await realtime_request('GET','/status')
+
+
 @contextmanager
 def connect():
     default = Path(os.getenv('DATABASE_PATH', str(Path(__file__).parents[1] / 'data/greta.db'))).parent / 'phone-control.db'
@@ -64,6 +107,16 @@ def connect():
             id INTEGER PRIMARY KEY CHECK(id=1), version TEXT NOT NULL,
             received REAL NOT NULL, width INTEGER NOT NULL, height INTEGER NOT NULL,
             content BLOB NOT NULL);
+          CREATE TABLE IF NOT EXISTS screen_frame (
+            version TEXT PRIMARY KEY, received REAL NOT NULL, width INTEGER NOT NULL, height INTEGER NOT NULL);
+          CREATE TABLE IF NOT EXISTS screen_view (id INTEGER PRIMARY KEY CHECK(id=1), until REAL NOT NULL);
+          CREATE TABLE IF NOT EXISTS adb_bridge (
+            id INTEGER PRIMARY KEY CHECK(id=1), boot_id TEXT NOT NULL, seen REAL NOT NULL, status TEXT NOT NULL);
+          CREATE TABLE IF NOT EXISTS touch_command (
+            id TEXT PRIMARY KEY, boot_id TEXT NOT NULL, action TEXT NOT NULL,
+            width INTEGER NOT NULL, height INTEGER NOT NULL, version TEXT NOT NULL,
+            state TEXT NOT NULL, created REAL NOT NULL, expires REAL NOT NULL,
+            dispatched REAL, completed REAL, result TEXT);
         ''')
         yield db
         db.commit()
@@ -141,6 +194,108 @@ class Status(Strict):
     firmware: str = Field(default='', max_length=32)
     logs: list[Annotated[str, Field(max_length=100)]] = Field(default_factory=list, max_length=6)
     ack: Ack | None = None
+
+
+class BridgeStatus(Strict):
+    boot_id: str = Field(min_length=1, max_length=64)
+    connected: bool
+    error: str = Field(default='', max_length=200)
+    ack: Ack | None = None
+
+
+class Tap(Strict):
+    type: Literal['tap']
+    x: int = Field(ge=0, le=10000)
+    y: int = Field(ge=0, le=10000)
+
+
+class Swipe(Strict):
+    type: Literal['swipe']
+    x1: int = Field(ge=0, le=10000)
+    y1: int = Field(ge=0, le=10000)
+    x2: int = Field(ge=0, le=10000)
+    y2: int = Field(ge=0, le=10000)
+    duration_ms: int = Field(default=400, ge=100, le=1500)
+
+
+class TouchRequest(Strict):
+    id: str = Field(min_length=8, max_length=64, pattern=r'^[A-Za-z0-9_-]+$')
+    version: str = Field(pattern=r'^[a-f0-9]{64}$')
+    action: Annotated[Union[Tap, Swipe], Field(discriminator='type')]
+
+
+def expire_touch(db, now):
+    db.execute("UPDATE touch_command SET state=CASE WHEN state='queued' THEN 'expired' ELSE 'unknown' END WHERE state IN ('queued','dispatched') AND expires<?", (now,))
+
+
+@router.post('/screen/watch', dependencies=[Depends(admin)])
+def watch():
+    with connect() as db:
+        db.execute('INSERT INTO screen_view VALUES(1,?) ON CONFLICT(id) DO UPDATE SET until=excluded.until', (time.time()+15,))
+    return {'watch_seconds': 15}
+
+
+@router.post('/bridge/poll', dependencies=[Depends(bridge_access)])
+def bridge_poll(status: BridgeStatus):
+    now=time.time()
+    with connect() as db:
+        db.execute('BEGIN IMMEDIATE')
+        old=db.execute('SELECT boot_id FROM adb_bridge WHERE id=1').fetchone()
+        if old and old['boot_id']!=status.boot_id:
+            db.execute("UPDATE touch_command SET state=CASE WHEN state='queued' THEN 'cancelled' ELSE 'unknown' END WHERE state IN ('queued','dispatched')")
+        db.execute('INSERT INTO adb_bridge VALUES(1,?,?,?) ON CONFLICT(id) DO UPDATE SET boot_id=excluded.boot_id,seen=excluded.seen,status=excluded.status',
+                   (status.boot_id,now,status.model_dump_json(exclude={'ack'})))
+        if status.ack:
+            db.execute("UPDATE touch_command SET state=?,result=?,completed=? WHERE id=? AND boot_id=? AND state IN ('dispatched','unknown')",
+                       ('succeeded' if status.ack.result=='ok' else 'failed',status.ack.result,now,status.ack.id,status.boot_id))
+        expire_touch(db,now)
+        if not status.connected:
+            db.execute("UPDATE touch_command SET state='cancelled' WHERE state='queued'")
+        active=db.execute("SELECT 1 FROM touch_command WHERE state='dispatched'").fetchone()
+        command=None
+        if status.connected and not active:
+            row=db.execute("SELECT * FROM touch_command WHERE state='queued' AND boot_id=? ORDER BY created,id LIMIT 1",(status.boot_id,)).fetchone()
+            if row:
+                db.execute("UPDATE touch_command SET state='dispatched',dispatched=? WHERE id=?",(now,row['id']))
+                command={'id':row['id'],'action':json.loads(row['action']),'width':row['width'],'height':row['height']}
+        viewer=db.execute('SELECT until FROM screen_view WHERE id=1').fetchone()
+    return {'command':command,'capture':bool(viewer and viewer['until']>now)}
+
+
+@router.post('/touch', dependencies=[Depends(admin)])
+def touch(request: TouchRequest):
+    now=time.time();action=request.action.model_dump();payload=json.dumps(action,sort_keys=True)
+    with connect() as db:
+        db.execute('BEGIN IMMEDIATE');expire_touch(db,now)
+        old=db.execute('SELECT * FROM touch_command WHERE id=?',(request.id,)).fetchone()
+        if old:
+            if old['action']!=payload or old['version']!=request.version:
+                raise HTTPException(409,'指令 ID 已用于其他操作')
+            return {'id':old['id'],'state':old['state']}
+        bridge=db.execute('SELECT * FROM adb_bridge WHERE id=1').fetchone()
+        if not bridge or now-bridge['seen']>5 or not json.loads(bridge['status'])['connected']:
+            raise HTTPException(409,'手机 ADB 未连接，请检查 Ubuntu 截图桥接服务')
+        frame=db.execute('SELECT * FROM screen_frame WHERE version=?',(request.version,)).fetchone()
+        latest=db.execute('SELECT width,height FROM screenshot WHERE id=1').fetchone()
+        if not frame or now-frame['received']>5 or not latest or (latest['width'],latest['height'])!=(frame['width'],frame['height']):
+            raise HTTPException(409,'画面已过期或方向已变化，请等待新画面后重试')
+        points=[(action['x'],action['y'])] if action['type']=='tap' else [(action['x1'],action['y1']),(action['x2'],action['y2'])]
+        if any(x>=frame['width'] or y>=frame['height'] for x,y in points):
+            raise HTTPException(422,'操作坐标超出手机屏幕范围')
+        if db.execute("SELECT count(*) FROM touch_command WHERE state IN ('queued','dispatched')").fetchone()[0]>=5:
+            raise HTTPException(429,'操作队列已满，请等待前一操作完成')
+        db.execute("INSERT INTO touch_command(id,boot_id,action,width,height,version,state,created,expires) VALUES(?,?,?,?,?,?,'queued',?,?)",
+                   (request.id,bridge['boot_id'],payload,frame['width'],frame['height'],request.version,now,now+8))
+    return {'id':request.id,'state':'queued'}
+
+
+@router.get('/touch/{command_id}', dependencies=[Depends(admin)])
+def touch_status(command_id: str):
+    with connect() as db:
+        expire_touch(db,time.time())
+        row=db.execute('SELECT * FROM touch_command WHERE id=?',(command_id,)).fetchone()
+        if not row:raise HTTPException(404,'操作不存在')
+        result=dict(row);result['action']=json.loads(result['action']);return result
 
 
 def expire(db, now):
@@ -222,7 +377,9 @@ def type_text(request: TypeRequest):
 
 
 def page():
-    return HTMLResponse(Path(__file__).with_name('esp32_screen.html').read_text(encoding='utf-8'),
+    html=Path(__file__).with_name('esp32_screen.html').read_text(encoding='utf-8')
+    html=html.replace('/* PHONE_SCREEN_SCRIPT */',Path(__file__).with_name('phone_screen.js').read_text(encoding='utf-8'))
+    return HTMLResponse(html,
                         headers={'Cache-Control': 'no-store'})
 
 
@@ -241,10 +398,15 @@ def get_status():
         row = db.execute('SELECT * FROM controller WHERE id=1').fetchone()
         screen = db.execute('SELECT version,received,width,height FROM screenshot WHERE id=1').fetchone()
         recent = [dict(r) for r in db.execute('SELECT id,state,created,result FROM command ORDER BY created DESC LIMIT 20')]
+        bridge=db.execute('SELECT * FROM adb_bridge WHERE id=1').fetchone()
+        expire_touch(db,now)
+        touches=[dict(r) for r in db.execute('SELECT id,state,created,result FROM touch_command ORDER BY created DESC LIMIT 8')]
     return {'online': bool(row and now-row['seen'] <= 5),
             'last_seen': row['seen'] if row else None,
             'device': json.loads(row['status']) if row else None,
-            'screenshot': dict(screen) if screen else None, 'commands': recent}
+            'screenshot': dict(screen) if screen else None, 'commands': recent,
+            'bridge':{'online':bool(bridge and now-bridge['seen']<=5),'device':json.loads(bridge['status']) if bridge else None},
+            'touch_commands':touches}
 
 
 @router.post('/screenshots', dependencies=[Depends(admin)])
@@ -273,6 +435,8 @@ async def upload(file: UploadFile = File(...)):
     with connect() as db:
         db.execute('INSERT INTO screenshot VALUES(1,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET version=excluded.version,received=excluded.received,width=excluded.width,height=excluded.height,content=excluded.content',
                    (version, now, width, height, content))
+        db.execute('INSERT INTO screen_frame VALUES(?,?,?,?) ON CONFLICT(version) DO UPDATE SET received=excluded.received', (version,now,width,height))
+        db.execute('DELETE FROM screen_frame WHERE received<?',(now-30,))
     return {'version': version, 'received': now, 'width': width, 'height': height}
 
 
