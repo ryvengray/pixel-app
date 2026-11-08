@@ -11,6 +11,7 @@ import com.google.firebase.messaging.RemoteMessage;
 
 /** Receives Greta's reminder payloads and keeps the server token current. */
 public class GretaFirebaseMessagingService extends FirebaseMessagingService {
+    static final String INBOX_CHANGED = "dev.pixel.sync.INBOX_CHANGED";
     private static final String CHANNEL = "greta_reminders";
     @Override public void onNewToken(String token) { FcmManager.register(this, token); }
     @Override public void onMessageReceived(RemoteMessage message) {
@@ -20,6 +21,7 @@ public class GretaFirebaseMessagingService extends FirebaseMessagingService {
         if (title == null || title.isEmpty()) title = "Greta";
         if (body == null || body.isEmpty()) body = "你有一条新的 Greta 消息";
         showNotification(title, body, message.getData().get("message_id"));
+        sendBroadcast(new Intent(INBOX_CHANGED).setPackage(getPackageName()));
     }
     private void showNotification(String title, String body, String messageId) {
         NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);

@@ -39,7 +39,10 @@ public final class XNotificationStore extends SQLiteOpenHelper {
     }
     static synchronized void configure(Context c,boolean enabled,int hour,String raw,boolean purge){
         authors(raw);SharedPreferences p=prefs(c);
-        if(enabled&&!p.getBoolean("enabled",false))p.edit().putLong("enabled_since",System.currentTimeMillis()).commit();
+        if(enabled&&!p.getBoolean("enabled",false)){
+            p.edit().putLong("enabled_since",System.currentTimeMillis())
+                    .remove("last_seen").remove("last_match").remove("capture_state").commit();
+        }
         p.edit().putBoolean("enabled",enabled).putInt("hour",hour).putString("authors",raw).putBoolean("purge",purge)
             .putLong("revision",Math.max(System.currentTimeMillis(),p.getLong("revision",0)+1)).commit();
         try(XNotificationStore db=new XNotificationStore(c)){if(!enabled||purge)db.getWritableDatabase().delete("excerpt",null,null);else db.pruneAuthors(authors(raw).keySet());}
@@ -53,8 +56,16 @@ public final class XNotificationStore extends SQLiteOpenHelper {
         CharSequence title=extra.getCharSequence(Notification.EXTRA_TITLE);
         CharSequence content=extra.getCharSequence(Notification.EXTRA_BIG_TEXT);if(content==null||content.length()==0)content=extra.getCharSequence(Notification.EXTRA_TEXT);
         String text=content==null?null:content.toString().trim();
-        String author=XNotificationRules.accept(packageName,notification.category,(notification.flags&Notification.FLAG_GROUP_SUMMARY)!=0,
-            extra.containsKey(Notification.EXTRA_MESSAGES)||extra.containsKey(Notification.EXTRA_HISTORIC_MESSAGES),reply,notification.getChannelId(),title==null?null:title.toString(),text,allowed);
+        CharSequence expanded=extra.getCharSequence(Notification.EXTRA_TITLE_BIG);
+        if(XNotificationRules.privateText(title)||XNotificationRules.privateText(expanded))return null;
+        boolean summary=(notification.flags&Notification.FLAG_GROUP_SUMMARY)!=0;
+        boolean messages=extra.containsKey(Notification.EXTRA_MESSAGES)||extra.containsKey(Notification.EXTRA_HISTORIC_MESSAGES);
+        String author=XNotificationRules.accept(packageName,notification.category,summary,messages,reply,
+                notification.getChannelId(),title==null?null:title.toString(),text,allowed);
+        if(author==null&&expanded!=null){
+            author=XNotificationRules.accept(packageName,notification.category,summary,messages,reply,
+                    notification.getChannelId(),expanded.toString(),text,allowed);
+        }
         if(author==null)return null;
         if(text.length()>2000)text=text.substring(0,2000);
         byte[] hash=MessageDigest.getInstance("SHA-256").digest((author+"\n"+text).getBytes(StandardCharsets.UTF_8));StringBuilder id=new StringBuilder();for(byte b:hash)id.append(String.format(Locale.ROOT,"%02x",b&255));
@@ -62,9 +73,28 @@ public final class XNotificationStore extends SQLiteOpenHelper {
     }
     static synchronized boolean capture(Context c,String pkg,Notification n,long posted){
         if(!enabled(c)||!access(c)||posted<prefs(c).getLong("enabled_since",Long.MAX_VALUE)||posted>System.currentTimeMillis()+300000)return false;
-        try{JSONObject item=extract(pkg,n,posted,authors(prefs(c).getString("authors",DEFAULT_AUTHORS)));if(item==null)return false;
-            try(XNotificationStore store=new XNotificationStore(c)){store.prune();ContentValues values=new ContentValues();values.put("id",item.getString("id"));values.put("author",item.getString("author"));values.put("text",item.getString("text"));values.put("posted_at",posted);boolean added=store.getWritableDatabase().insertWithOnConflict("excerpt",null,values,SQLiteDatabase.CONFLICT_IGNORE)!=-1;store.prune();return added;}
-        }catch(Exception ignored){return false;}
+        SharedPreferences.Editor status=prefs(c).edit().putLong("last_seen",System.currentTimeMillis());
+        try{
+            JSONObject item=extract(pkg,n,posted,authors(prefs(c).getString("authors",DEFAULT_AUTHORS)));
+            if(item==null){
+                status.putString("capture_state","已看到 X 通知，作者或通知类型未匹配").apply();
+                return false;
+            }
+            try(XNotificationStore store=new XNotificationStore(c)){
+                store.prune();
+                ContentValues values=new ContentValues();
+                values.put("id",item.getString("id"));values.put("author",item.getString("author"));
+                values.put("text",item.getString("text"));values.put("posted_at",posted);
+                boolean added=store.getWritableDatabase().insertWithOnConflict("excerpt",null,values,SQLiteDatabase.CONFLICT_IGNORE)!=-1;
+                store.prune();
+                status.putString("capture_state",added?"已收集一条发帖通知":"已识别重复的发帖通知")
+                        .putLong("last_match",System.currentTimeMillis()).apply();
+                return added;
+            }
+        }catch(Exception ignored){
+            status.putString("capture_state","收到 X 通知，但本机保存失败").apply();
+            return false;
+        }
     }
     void prune(){getWritableDatabase().delete("excerpt","posted_at<?",new String[]{Long.toString(System.currentTimeMillis()-7L*86400000)});getWritableDatabase().execSQL("DELETE FROM excerpt WHERE id IN (SELECT id FROM excerpt ORDER BY posted_at DESC LIMIT -1 OFFSET 500)");}
     JSONArray pending()throws Exception{prune();JSONArray out=new JSONArray();try(Cursor rows=getReadableDatabase().rawQuery("SELECT id,author,text,posted_at FROM excerpt WHERE uploaded=0 ORDER BY posted_at LIMIT 50",null)){while(rows.moveToNext())out.put(new JSONObject().put("id",rows.getString(0)).put("author",rows.getString(1)).put("text",rows.getString(2)).put("posted_at",java.time.Instant.ofEpochMilli(rows.getLong(3)).toString()));}return out;}

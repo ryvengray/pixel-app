@@ -354,6 +354,7 @@ def create_reminder(title: str, due_at: str, operation_id: str | None = None) ->
         if existing:
             return {"ok": "true", "id": reminder_id, "title": existing["title"], "due_at": existing["due_at"]}
         db.execute("INSERT INTO reminder(id,title,due_at,created_at) VALUES(?,?,?,?)", (reminder_id, title, due.astimezone(timezone.utc).isoformat(), utc_now()))
+    ink_gallery.notify_content_changed()
     return {"ok": "true", "id": reminder_id, "title": title, "due_at": due.isoformat()}
 
 
@@ -399,7 +400,8 @@ async def run_tool(name: str, arguments: dict[str, Any], operation_id: str | Non
                 return {"ok": False, "error": "Unknown action"}
             db.execute("UPDATE push_outbox SET state='cancelled' WHERE message_id IN (SELECT id FROM inbox_message WHERE id LIKE ?)", (f"reminder:{row['id']}:%",))
             updated = dict(db.execute("SELECT * FROM reminder WHERE id=?", (row["id"],)).fetchone())
-            return {"ok": True, "reminder": updated}
+        ink_gallery.notify_content_changed()
+        return {"ok": True, "reminder": updated}
     return {"ok": False, "error": "unknown tool"}
 
 
@@ -562,6 +564,9 @@ def fire_due_reminders() -> None:
             enqueue_push(db, message_id)
             db.execute("UPDATE reminder SET state='fired',fired_at=? WHERE id=?", (now, row["id"]))
 
+    if due:
+        ink_gallery.notify_content_changed()
+
 
 def deliver_pushes() -> None:
     service_file = os.getenv("FIREBASE_SERVICE_ACCOUNT_FILE", "")
@@ -604,10 +609,13 @@ async def reminder_loop() -> None:
         await asyncio.sleep(15)
 
 
-async def news_loop():
+async def briefing_loop(tick, *args):
     while True:
-        await news.tick(connect, deepseek, enqueue_push)
-        await x_notifications.tick(connect, deepseek)
+        try:
+            await tick(*args)
+        except sqlite3.OperationalError:
+            # Retry temporary database locks on the next scheduled check.
+            pass
         await asyncio.sleep(300)
 
 
@@ -621,15 +629,16 @@ async def lifespan(_: FastAPI):
             (utc_now(),),
         )
     task = asyncio.create_task(reminder_loop())
-    news_task = asyncio.create_task(news_loop())
+    news_task = asyncio.create_task(briefing_loop(news.tick, connect, deepseek, enqueue_push))
+    x_task = asyncio.create_task(briefing_loop(x_notifications.tick, connect, deepseek))
     topic_task = asyncio.create_task(topics.worker())
     ink_task = asyncio.create_task(ink_gallery.loop())
     try:
         yield
     finally:
-        news_task.cancel()
+        news_task.cancel(); x_task.cancel()
         task.cancel(); topic_task.cancel(); ink_task.cancel()
-        await asyncio.gather(task, news_task, topic_task, ink_task, return_exceptions=True)
+        await asyncio.gather(task, news_task, x_task, topic_task, ink_task, return_exceptions=True)
 
 
 app = FastAPI(title="Greta private service", lifespan=lifespan)
@@ -755,6 +764,7 @@ async def reminder_action(reminder_id: str, action: ReminderAction) -> dict[str,
             db.execute("UPDATE reminder SET state='pending',due_at=?,fired_at=NULL WHERE id=?", (due, reminder_id))
         # Do not deliver old retries after the user has acted on this reminder.
         db.execute("UPDATE push_outbox SET state='cancelled' WHERE message_id IN (SELECT id FROM inbox_message WHERE id LIKE ?)", (f"reminder:{reminder_id}:%",))
+    ink_gallery.notify_content_changed()
     return {"ok": True}
 
 

@@ -47,3 +47,8 @@ Run the isolated harness tests with `PYTHONPATH=server python -m unittest discov
 ## Important topics
 
 Successful keyed chat responses enqueue an evidence-backed extraction job in the same transaction as the response cache. The separate topic worker does not delay the reply. It creates time-bounded topics without follow-up permission. GET /v1/topics and POST /v1/topics/{id} expose a revisioned projection and idempotent user edits. A specific future time and explicit consent are required for one follow-up; push additionally requires notify=true. Expiry, pause, resolution and forgetting stop future follow-ups. See [implementation details](../docs/greta-important-topics.md). Run all tests using `PYTHONPATH=server python -m unittest discover -s tests -p "test_*.py"`.
+
+
+## Pixel / ESP32 control
+
+Screenshot upload, ESP32 status polling, and an acknowledged HID command queue are integrated into this service. Setup, wireless ADB capture, and test commands: [phone-control guide](../docs/phone-control.md). This first version provides the transport; vision planning and Chinese IME input are not yet implemented.

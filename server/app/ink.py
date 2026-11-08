@@ -267,6 +267,7 @@ async def today_data():
     for row in rows:
         due=datetime.fromisoformat(row['due_at']).astimezone(ZoneInfo('Asia/Shanghai'))
         delta=(due.date()-day).days
+        if delta<0:continue
         label='今天' if delta==0 else '明天' if delta==1 else due.strftime('%m/%d')
         data.todos.append(f"{label} {due:%H:%M} {row['title']}"[:160])
         if len(data.todos)>=8:break

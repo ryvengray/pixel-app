@@ -53,6 +53,9 @@ android {
     }
 }
 dependencies {
+    implementation 'org.commonmark:commonmark:0.32.0'
+    implementation 'org.commonmark:commonmark-ext-autolink:0.32.0'
+    implementation 'org.commonmark:commonmark-ext-gfm-tables:0.32.0'
     implementation 'com.google.android.gms:play-services-code-scanner:16.1.0'
     implementation platform('com.google.firebase:firebase-bom:34.19.0')
     implementation 'com.google.firebase:firebase-messaging'

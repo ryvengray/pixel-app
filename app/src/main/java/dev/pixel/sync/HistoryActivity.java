@@ -25,7 +25,7 @@ public final class HistoryActivity extends Activity {
         more=new TextView(this);more.setText("查看更早的记录");more.setTextColor(foreground);more.setGravity(Gravity.CENTER);more.setPadding(0,dp(15),0,dp(15));more.setOnClickListener(v->load());records.addView(more);
         setContentView(root);load();scroll.post(()->scroll.fullScroll(ScrollView.FOCUS_DOWN));
     }
-    private void load(){List<AssistantStore.Message> page=store.messagesBefore(before,50);if(page.isEmpty()){more.setText(before==Long.MAX_VALUE?"还没有聊天记录":"已经是最早的记录");more.setEnabled(false);return;}
+    private void load(){List<AssistantStore.Message> page=store.chatBefore(before,50);if(page.isEmpty()){more.setText(before==Long.MAX_VALUE?"还没有聊天记录":"已经是最早的记录");more.setEnabled(false);return;}
         before=page.get(0).id;int index=1;SimpleDateFormat date=new SimpleDateFormat("MM-dd HH:mm",Locale.getDefault());
         for(AssistantStore.Message m:page){TextView row=new TextView(this);row.setTextColor(foreground);row.setTextSize(15);row.setTextIsSelectable(true);row.setPadding(dp(15),dp(12),dp(15),dp(12));
             String who=m.role.equals("user")?"我":m.role.equals("tool")?"工具与结果":"Greta";
