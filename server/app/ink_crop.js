@@ -14,11 +14,9 @@ function drawCrop(guides = true) {
   cropContext.drawImage(cropImage, cropX, cropY, cropImage.width * cropScale, cropImage.height * cropScale);
   if (guides && document.getElementById('crop-guides').checked) {
     cropContext.fillStyle = 'rgba(255,255,255,.78)';
-    cropContext.fillRect(376, 24, 400, 184); cropContext.fillRect(376, 220, 400, 236);
-    cropContext.fillRect(24, 24, 328, 76); cropContext.fillRect(24, 350, 328, 106);
+    cropContext.fillRect(0, 428, 800, 52);
     cropContext.fillStyle = '#172c24'; cropContext.font = '20px sans-serif';
-    cropContext.fillText('天气与穿衣建议', 400, 60); cropContext.fillText('待办与每日英语', 400, 258);
-    cropContext.fillText('日期', 44, 65); cropContext.fillText('每日名言', 44, 390);
+    cropContext.fillText('完整裁剪结果将缩放到来信插图区域；文字在照片外。', 24, 461);
   }
 }
 function resetCrop() {

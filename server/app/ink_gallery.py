@@ -81,9 +81,25 @@ def preview_background():
     return ''
 
 
+def refresh_hours():
+    """One daily delivery by default; optionally retain the old photo schedule."""
+    try:
+        hours = sorted({int(value.strip()) for value in os.getenv('INK_REFRESH_HOURS', '6').split(',')})
+        if not hours or any(hour < 0 or hour > 23 for hour in hours):
+            raise ValueError
+        return hours
+    except ValueError:
+        log.warning('Invalid INK_REFRESH_HOURS; using 06:00')
+        return [6]
+
+
+def schedule():
+    return [f'{hour:02d}:00' for hour in refresh_hours()]
+
+
 def slot_at(now):
     now=now.astimezone(ZoneInfo('Asia/Shanghai'))
-    hours=[hour for hour in (6,14,20) if hour<=now.hour]
+    hours=[hour for hour in refresh_hours() if hour<=now.hour]
     return f'{now:%Y-%m-%d}T{max(hours):02d}:00' if hours else None
 
 async def rotate(now=None, force=False):
@@ -99,24 +115,29 @@ async def rotate(now=None, force=False):
         with state_db() as db:
             previous=db.execute('SELECT slot,photo FROM rotation WHERE device=?',(device,)).fetchone()
         if previous and previous[0]==slot and not force:return {'skipped':'already sent'}
-        candidates=photos()
+        data=await ink.today_data()
+        candidates=photos() if (force or data.use_gallery) else []
         if previous:
             names=[p.name for p in candidates]
             if previous[1] in names:
                 start=(names.index(previous[1])+1)%len(names);candidates=candidates[start:]+candidates[:start]
+        selected, raw = previous[1] if previous else '', None
         for photo in candidates:
             try:
                 if photo.stat().st_size>15*1024*1024:continue
                 raw=await asyncio.to_thread(normalize,photo.read_bytes())
             except (OSError,HTTPException):
                 log.warning('Skipping invalid ink background: %s',photo.name);continue
-            data=await ink.today_data();data.background=base64.b64encode(raw).decode()
-            rendered=await asyncio.to_thread(ink.render_today,data)
-            result=await ink.forward(device,rendered)
-            with state_db() as db:
-                db.execute('INSERT INTO rotation VALUES(?,?,?) ON CONFLICT(device) DO UPDATE SET slot=excluded.slot,photo=excluded.photo',(device,slot,photo.name))
-            return {**result,'background':photo.name}
-        return {'skipped':'no valid photos'}
+            selected = photo.name
+            break
+        # A letter must still arrive when the family has not uploaded photographs.
+        if raw is not None and (force or data.use_gallery):
+            data.background=base64.b64encode(raw).decode()
+        rendered=await asyncio.to_thread(ink.render_today,data)
+        result=await ink.forward(device,rendered)
+        with state_db() as db:
+            db.execute('INSERT INTO rotation VALUES(?,?,?) ON CONFLICT(device) DO UPDATE SET slot=excluded.slot,photo=excluded.photo',(device,slot,selected))
+        return {**result,'background':selected if data.background else ''}
 
 # Reminder writers can run in worker threads.
 import threading
@@ -132,7 +153,8 @@ async def refresh_content():
     if not os.getenv('INK_API_BASE') or not os.getenv('INK_TOKEN'):
         return
     data = await ink.today_data()
-    data.background = await asyncio.to_thread(preview_background)
+    if data.use_gallery:
+        data.background = await asyncio.to_thread(preview_background)
     rendered = await asyncio.to_thread(ink.render_today, data)
     await ink.forward(os.getenv('INK_DEVICE_ID', 'desk-01'), rendered)
 
@@ -143,7 +165,7 @@ async def loop():
         _content_changed.clear()
         try:
             result = await rotate()
-            if changed and result.get('skipped'):
+            if changed and result.get('skipped') and os.getenv('INK_REFRESH_ON_REMINDER', 'false').lower() == 'true':
                 await refresh_content()
         except Exception:
             if changed:

@@ -6,8 +6,10 @@ import time
 import base64
 import io
 import os
+from contextlib import closing, contextmanager
 from pathlib import Path
-from datetime import datetime
+from datetime import date, datetime
+from typing import Literal
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -15,6 +17,7 @@ from fastapi import APIRouter, HTTPException, Request, Header
 from fastapi.responses import Response, HTMLResponse
 from pydantic import BaseModel, Field
 from PIL import Image, ImageDraw, ImageFont, ImageOps, ImageFilter
+from .ink_letter import Letter, daily_letter
 
 router = APIRouter(prefix='/v1/ink', tags=['ink-screen'])
 
@@ -86,6 +89,9 @@ async def require_ink_access(request: Request, authorization: str | None = Heade
     return await require_device(authorization)
 
 class Today(BaseModel):
+    # None preserves old saved JSON and integrations using the original dashboard.
+    letter: Letter | None = None
+    use_gallery: bool = True
     background: str = Field(default='', max_length=12000000)
     location: str = Field(default='', max_length=40)
     weather: str = Field(default='天气暂未更新', max_length=80)
@@ -98,6 +104,9 @@ class Today(BaseModel):
     quote: str = Field(default='千里之行，始于足下。——《道德经》', max_length=120)
 
 def render_today(data):
+    if data.letter is not None:
+        from .ink_letter_render import render_letter
+        return render_letter(data)
     image=Image.new('RGB',(800,480),'#d8e0d6')
     if data.background:
         from .ink_gallery import normalize
@@ -226,7 +235,7 @@ async def displayed_image(device_id: str):
 
 @router.post('/today/preview.png')
 def preview(data: Today):
-    if not data.background:
+    if not data.background and data.use_gallery:
         from .ink_gallery import preview_background
         data = data.model_copy(update={'background': preview_background()})
     return Response(render_today(data),media_type='image/png',headers={'Cache-Control':'no-store'})
@@ -239,19 +248,23 @@ async def today(device_id: str, data: Today):
         try:raw=base64.b64decode(data.background.split(',')[-1],validate=True)
         except ValueError as exc:raise HTTPException(400,'背景图片无效') from exc
         await asyncio.to_thread(ink_gallery.save,raw)
+    elif data.use_gallery:
+        from .ink_gallery import preview_background
+        data = data.model_copy(update={'background': preview_background()})
     return await forward(device_id,render_today(data))
 
 # Public shell contains no credentials or personal data; all data calls require auth.
 
 def page():
     return r'''<!doctype html><html lang="zh"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>今日水墨屏</title>
-<style>*{box-sizing:border-box}body{font:15px system-ui;background:#f3f2ed;color:#243b30;max-width:1040px;margin:40px auto;padding:24px}h1{font-size:32px;letter-spacing:-1px;margin-bottom:8px}input,textarea,button{font:inherit;padding:12px;margin:5px 0;border:1px solid #d6ddd4;border-radius:12px;background:#fff}input{margin-right:8px}textarea{width:100%;height:220px;line-height:1.6}img{width:100%;border-radius:20px;box-shadow:0 16px 44px #273c3020}button{cursor:pointer;padding:12px 22px;margin-right:8px}#send{background:#294c3b;color:white;border:0}p{color:#607166;line-height:1.8}.upload{display:block;background:white;border:1px dashed #a1b6a5;border-radius:16px;padding:20px;margin:24px 0}.upload small{display:block;color:#607166;margin-top:8px}details{margin:20px 0}#status{min-height:28px}#crop-canvas{width:100%;height:auto;aspect-ratio:5/3;touch-action:none;cursor:grab;border-radius:16px;background:#ddd}#crop-canvas:active{cursor:grabbing}#crop-editor{padding:20px;background:#e6ebe3;border-radius:20px;margin:20px 0}#crop-zoom{vertical-align:middle;width:200px}</style>
-<p>FAMILY DAILY · 家里的今日看板</p><h1>把每一天，放进喜欢的照片里。</h1><p>为六色电子纸定制：照片抖动还原，纯白卡片、清晰黑字，让天气与小事一眼可读。</p>
+<style>*{box-sizing:border-box}body{font:15px system-ui;background:#f3f2ed;color:#243b30;max-width:1040px;margin:40px auto;padding:24px}h1{font-size:32px;letter-spacing:-1px;margin-bottom:8px}input,textarea,button,select{font:inherit;padding:12px;margin:5px 0;border:1px solid #d6ddd4;border-radius:12px;background:#fff}input{margin-right:8px}textarea{width:100%;height:220px;line-height:1.6}img{width:100%;border-radius:20px;box-shadow:0 16px 44px #273c3020}button{cursor:pointer;padding:12px 22px;margin-right:8px}#send{background:#294c3b;color:white;border:0}p{color:#607166;line-height:1.8}.upload{display:block;background:white;border:1px dashed #a1b6a5;border-radius:16px;padding:20px;margin:24px 0}.upload small{display:block;color:#607166;margin-top:8px}details{margin:20px 0}#status{min-height:28px}#crop-canvas{width:100%;height:auto;aspect-ratio:5/3;touch-action:none;cursor:grab;border-radius:16px;background:#ddd}#crop-canvas:active{cursor:grabbing}#crop-editor{padding:20px;background:#e6ebe3;border-radius:20px;margin:20px 0}#crop-zoom{vertical-align:middle;width:200px}</style>
+<p>LETTERS FROM SPACE · 每日宇宙来信</p><h1>书桌上，每天一点新发现。</h1><p>给二年级小探险家的太空谜题、动物想象和音乐游戏。一天一封信，昨天的谜底今天见。</p>
 <form id="login-form"><input id="token" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" placeholder="6 位 TOTP 验证码"><button type="submit">登录</button><span id="login-state">一次验证，长期保持登录</span></form><input id="device" placeholder="水墨屏设备 ID" value="desk-01">
-<label class="upload">选择小朋友的照片作为背景<input id="background" type="file" accept="image/*"><small>建议横向照片，人物靠左；右侧显示信息。预览为实际六色转换结果；发送后照片也会加入背景图库，每日 6、14、20 点轮换。</small></label><section id="crop-editor" hidden><h2>裁剪背景 · 800 × 480</h2><p>拖动照片调整位置，人物尽量放在左侧。卡片参考线不会上传。</p><canvas id="crop-canvas" width="800" height="480" aria-label="背景裁剪区域，可拖动照片"></canvas><label>缩放 <input id="crop-zoom" type="range" min="1" max="4" step="0.01" value="1"></label><label><input id="crop-guides" type="checkbox" checked>显示内容遮挡区域</label><button id="crop-reset">重置位置</button><button id="crop-confirm">确认裁剪</button></section><details><summary>编辑今日内容</summary>
+<label class="upload">选择孩子的画作或家庭照片<input id="background" type="file" accept="image/*"><small>照片会完整缩放到插图区域，文字保持白底黑字。确认裁剪后可预览；发送也会加入图库。平日默认主题插图，周末默认家庭照片。</small></label><section id="crop-editor" hidden><h2>裁剪背景 · 800 × 480</h2><p>拖动、缩放，保留你最喜欢的部分。整张裁剪结果会放进来信的插图区域，说明条不会上传。</p><canvas id="crop-canvas" width="800" height="480" aria-label="背景裁剪区域，可拖动照片"></canvas><label>缩放 <input id="crop-zoom" type="range" min="1" max="4" step="0.01" value="1"></label><label><input id="crop-guides" type="checkbox" checked>显示裁剪说明</label><button id="crop-reset">重置位置</button><button id="crop-confirm">确认裁剪</button></section><label>版式 <select id="letter-layout"><option value="auto">每日自动轮换</option><option value="orbit">星球轨道 · 插图在左</option><option value="postcard">宇宙明信片 · 插图在右</option><option value="notebook">灵感手记 · 留白与线条</option></select></label> <label><input id="use-gallery" type="checkbox">使用图库照片</label><button id="clear-photo">使用主题插图</button><p id="letter-summary" aria-live="polite">加载今日内容，查看今天的来信。</p><div id="letter-feedback"><span>家长反馈：</span><button type="button" data-rating="like">喜欢</button><button type="button" data-rating="easy">太简单</button><button type="button" data-rating="skip">没兴趣</button><small id="feedback-status" role="status">加载来信后可记录；供后续调整内容。</small></div><details><summary>编辑来信 JSON（高级）</summary>
 <textarea id="data">{"location":"","weather":"天气暂未更新","todos":[],"english":"Make today count.","translation":"让今天过得有意义。","quote":"千里之行，始于足下。——《道德经》"}</textarea></details>
-<p>背景图库每天 06:00、14:00、20:00（上海时间）自动轮换。可直接往宿主机图库目录放入 JPG、PNG、WebP 图片。</p><button id="save-photo">只加入图库</button><button id="rotate">立即轮换</button><button id="load">加载今日内容</button><button id="preview">预览今日画面</button><button id="send">发送到水墨屏</button><p id="status" role="status"></p><p id="preview-hint">登录后将自动加载设备已确认显示的画面。</p><img id="screen" alt="今日水墨屏预览" hidden>
-<script>const apiPrefix=location.pathname.replace(/\/ink-screen\/?$/,'');let previous,background='',dataLoaded=false,dataEdited=false;const loginForm=document.getElementById('login-form'),loginState=document.getElementById('login-state');function showLogin(ok){document.getElementById('token').hidden=ok;loginForm.querySelector('button').hidden=ok;loginState.textContent=ok?'已登录 · 长期保持登录':'请使用 6 位验证码登录 · 长期保持登录';}async function inkFetch(url,options={}){const r=await fetch(url,{...options,credentials:'same-origin'});if(r.status===401){showLogin(false);throw Error('请先登录，或登录已过期');}return r;}loginForm.onsubmit=async event=>{event.preventDefault();try{const r=await fetch(apiPrefix+'/v1/ink/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',body:JSON.stringify({code:document.getElementById('token').value.trim()})});if(!r.ok)throw Error('验证码无效或已过期');document.getElementById('token').value='';showLogin(true);dataLoaded=false;await loadDisplayed();}catch(e){loginState.textContent=e.message;}};fetch(apiPrefix+'/v1/ink/auth/session',{credentials:'same-origin'}).then(async r=>{showLogin(r.ok);if(r.ok)await loadDisplayed();}).catch(()=>showLogin(false));async function loadDisplayed(){try{statusEl.textContent='正在读取水墨屏实际画面…';const r=await inkFetch(apiPrefix+'/v1/ink/devices/'+encodeURIComponent(document.getElementById('device').value)+'/displayed.png');if(!r.ok){const error=await r.json();throw Error(error.detail||'读取画面失败');}if(previous)URL.revokeObjectURL(previous);previous=URL.createObjectURL(await r.blob());document.getElementById('screen').src=previous;}catch(e){document.getElementById('screen').hidden=true;previewHint.hidden=false;previewHint.textContent=e.message;statusEl.textContent=e.message;}}async function loadToday(){const r=await inkFetch(apiPrefix+'/v1/ink/today/data',{});if(!r.ok)throw Error(await r.text());const fresh=await r.json();document.getElementById('data').value=JSON.stringify(fresh,null,2);dataLoaded=true;dataEdited=false;return fresh;}document.getElementById('token').addEventListener('change',()=>{dataLoaded=false;});document.getElementById('data').addEventListener('input',()=>{dataEdited=true;dataLoaded=true;});async function run(send){try{if(cropPending)throw Error('请先确认照片裁剪');statusEl.textContent='正在加载天气和今日内容…';if(!dataLoaded||(!send&&!dataEdited))await loadToday();const payload=JSON.parse(document.getElementById('data').value);payload.background=background;const body=JSON.stringify(payload);const r=await inkFetch(apiPrefix+(send?'/v1/ink/devices/'+encodeURIComponent(document.getElementById('device').value)+'/today':'/v1/ink/today/preview.png'),{method:'POST',headers:{'Content-Type':'application/json'},body});if(!r.ok)throw Error(await r.text());if(send){const result=await r.json();statusEl.textContent='已提交，等待屏幕刷新 · '+result.version;}else{if(previous)URL.revokeObjectURL(previous);previous=URL.createObjectURL(await r.blob());document.getElementById('screen').src=previous;statusEl.textContent='正在加载预览…';}}catch(e){statusEl.textContent=e.message;}}const statusEl=document.getElementById('status');const screenEl=document.getElementById('screen'),previewHint=document.getElementById('preview-hint');screenEl.onload=()=>{screenEl.hidden=false;previewHint.hidden=true;statusEl.textContent='预览已更新';};screenEl.onerror=()=>{screenEl.hidden=true;previewHint.hidden=false;previewHint.textContent='预览加载失败，请点击「预览今日画面」重试。';};document.getElementById('load').onclick=async()=>{try{statusEl.textContent='正在加载今日内容…';const fresh=await loadToday();statusEl.textContent='今日内容已加载 · '+fresh.weather;}catch(e){statusEl.textContent=e.message;}};document.getElementById('save-photo').onclick=async()=>{try{if(cropPending)throw Error('请先确认照片裁剪');const file=croppedPhoto;if(!file)throw Error('请先选择照片并确认裁剪');const r=await inkFetch(apiPrefix+'/v1/ink/backgrounds',{method:'POST',body:file});if(!r.ok)throw Error(await r.text());statusEl.textContent='已加入图库，将参与定时轮换';}catch(e){statusEl.textContent=e.message;}};document.getElementById('rotate').onclick=async()=>{try{statusEl.textContent='正在轮换…';const r=await inkFetch(apiPrefix+'/v1/ink/rotate',{method:'POST',});if(!r.ok)throw Error(await r.text());const result=await r.json();statusEl.textContent=result.skipped?'本次未发送：'+result.skipped:'已轮换并提交，等待屏幕刷新';}catch(e){statusEl.textContent=e.message;}};document.getElementById('device').addEventListener('change',()=>loadDisplayed());document.getElementById('preview').onclick=()=>run(false);document.getElementById('send').onclick=()=>run(true);
+<p>默认每天 06:00（上海时间）准备新来信，设备下次唤醒时获取；实际刷新时间取决于设备。支持在服务端配置更新时间。图库可放 JPG、PNG、WebP 图片。</p><button id="save-photo">只加入图库</button><button id="rotate">立即轮换</button><button id="load">加载今日内容</button><button id="preview">预览今日画面</button><button id="send">发送到水墨屏</button><p id="status" role="status"></p><p id="preview-hint">登录后将自动加载设备已确认显示的画面。</p><img id="screen" alt="今日水墨屏预览" hidden>
+<script>const apiPrefix=location.pathname.replace(/\/ink-screen\/?$/,'');let previous,background='',dataLoaded=false,galleryChoice=null;const loginForm=document.getElementById('login-form'),loginState=document.getElementById('login-state');function showLogin(ok){document.getElementById('token').hidden=ok;loginForm.querySelector('button').hidden=ok;loginState.textContent=ok?'已登录 · 长期保持登录':'请使用 6 位验证码登录 · 长期保持登录';}async function inkFetch(url,options={}){const r=await fetch(url,{...options,credentials:'same-origin'});if(r.status===401){showLogin(false);throw Error('请先登录，或登录已过期');}return r;}loginForm.onsubmit=async event=>{event.preventDefault();try{const r=await fetch(apiPrefix+'/v1/ink/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',body:JSON.stringify({code:document.getElementById('token').value.trim()})});if(!r.ok)throw Error('验证码无效或已过期');document.getElementById('token').value='';showLogin(true);dataLoaded=false;await loadDisplayed();}catch(e){loginState.textContent=e.message;}};fetch(apiPrefix+'/v1/ink/auth/session',{credentials:'same-origin'}).then(async r=>{showLogin(r.ok);if(r.ok)await loadDisplayed();}).catch(()=>showLogin(false));async function loadDisplayed(){try{statusEl.textContent='正在读取水墨屏实际画面…';const r=await inkFetch(apiPrefix+'/v1/ink/devices/'+encodeURIComponent(document.getElementById('device').value)+'/displayed.png');if(!r.ok){const error=await r.json();throw Error(error.detail||'读取画面失败');}if(previous)URL.revokeObjectURL(previous);previous=URL.createObjectURL(await r.blob());document.getElementById('screen').src=previous;}catch(e){document.getElementById('screen').hidden=true;previewHint.hidden=false;previewHint.textContent=e.message;statusEl.textContent=e.message;}}async function loadToday(){const r=await inkFetch(apiPrefix+'/v1/ink/today/data',{});if(!r.ok)throw Error(await r.text());const fresh=await r.json();document.getElementById('data').value=JSON.stringify(fresh,null,2);dataLoaded=true;document.getElementById('use-gallery').checked=galleryChoice??fresh.use_gallery;document.getElementById('letter-summary').textContent=fresh.letter?fresh.letter.category+' · '+fresh.letter.title+' / '+fresh.letter.day:'今日看板';return fresh;}document.getElementById('token').addEventListener('change',()=>{dataLoaded=false;});document.getElementById('data').addEventListener('input',()=>{dataLoaded=true;});async function run(send){try{if(cropPending)throw Error('请先确认照片裁剪');statusEl.textContent='正在加载天气和今日内容…';if(!dataLoaded)await loadToday();const payload=JSON.parse(document.getElementById('data').value);payload.background=background;payload.use_gallery=document.getElementById('use-gallery').checked;const chosenLayout=document.getElementById('letter-layout').value;if(payload.letter&&chosenLayout!=='auto')payload.letter.layout=chosenLayout;const body=JSON.stringify(payload);const r=await inkFetch(apiPrefix+(send?'/v1/ink/devices/'+encodeURIComponent(document.getElementById('device').value)+'/today':'/v1/ink/today/preview.png'),{method:'POST',headers:{'Content-Type':'application/json'},body});if(!r.ok)throw Error(await r.text());if(send){const result=await r.json();statusEl.textContent='已提交，等待屏幕刷新 · '+result.version;}else{if(previous)URL.revokeObjectURL(previous);previous=URL.createObjectURL(await r.blob());document.getElementById('screen').src=previous;statusEl.textContent='正在加载预览…';}}catch(e){statusEl.textContent=e.message;}}const statusEl=document.getElementById('status');const screenEl=document.getElementById('screen'),previewHint=document.getElementById('preview-hint');screenEl.onload=()=>{screenEl.hidden=false;previewHint.hidden=true;statusEl.textContent='预览已更新';};screenEl.onerror=()=>{screenEl.hidden=true;previewHint.hidden=false;previewHint.textContent='预览加载失败，请点击「预览今日画面」重试。';};document.getElementById('load').onclick=async()=>{try{statusEl.textContent='正在加载今日内容…';const fresh=await loadToday();statusEl.textContent='今日内容已加载 · '+fresh.weather;}catch(e){statusEl.textContent=e.message;}};document.getElementById('save-photo').onclick=async()=>{try{if(cropPending)throw Error('请先确认照片裁剪');const file=croppedPhoto;if(!file)throw Error('请先选择照片并确认裁剪');const r=await inkFetch(apiPrefix+'/v1/ink/backgrounds',{method:'POST',body:file});if(!r.ok)throw Error(await r.text());statusEl.textContent='已加入图库，将参与定时轮换';}catch(e){statusEl.textContent=e.message;}};document.getElementById('rotate').onclick=async()=>{try{statusEl.textContent='正在轮换…';const r=await inkFetch(apiPrefix+'/v1/ink/rotate',{method:'POST',});if(!r.ok)throw Error(await r.text());const result=await r.json();statusEl.textContent=result.skipped?'本次未发送：'+result.skipped:'已轮换并提交，等待屏幕刷新';}catch(e){statusEl.textContent=e.message;}};document.getElementById('device').addEventListener('change',()=>loadDisplayed());document.getElementById('use-gallery').onchange=event=>{galleryChoice=event.target.checked;};document.getElementById('clear-photo').onclick=()=>{galleryChoice=false;background='';croppedPhoto=null;cropPending=false;document.getElementById('background').value='';document.getElementById('crop-editor').hidden=true;document.getElementById('use-gallery').checked=false;statusEl.textContent='已选择主题插图，点击预览查看';};document.getElementById('preview').onclick=()=>run(false);document.getElementById('send').onclick=()=>run(true);
+for(const button of document.querySelectorAll('[data-rating]'))button.onclick=async()=>{const hint=document.getElementById('feedback-status');try{if(!dataLoaded)await loadToday();const letter=JSON.parse(document.getElementById('data').value).letter;if(!letter)throw Error('请先加载一封宇宙来信');const r=await inkFetch(apiPrefix+'/v1/ink/letters/'+encodeURIComponent(letter.day)+'/feedback',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({rating:button.dataset.rating})});if(!r.ok)throw Error(await r.text());hint.textContent=letter.day+' 已记录：'+button.textContent+'。供后续调整内容。';}catch(e){hint.textContent=e.message;}};
 __CROP_SCRIPT__
 </script></html>'''.replace('__CROP_SCRIPT__',Path(__file__).with_name('ink_crop.js').read_text(encoding='utf-8'))
 
@@ -259,8 +272,8 @@ __CROP_SCRIPT__
 @router.get('/today/data')
 async def today_data():
     from .main import connect
-    data=Today()
     day=datetime.now(ZoneInfo('Asia/Shanghai')).date()
+    data=Today(letter=daily_letter(day), use_gallery=day.weekday() >= 5)
     with connect() as db:
         rows=db.execute("SELECT title,due_at FROM reminder WHERE state IN ('pending','fired') ORDER BY due_at").fetchall()
     data.todos=[]
@@ -298,7 +311,7 @@ async def today_data():
 @router.get('/backgrounds')
 def backgrounds():
     from . import ink_gallery
-    return {'photos':[p.name for p in ink_gallery.photos()], 'schedule':['06:00','14:00','20:00'], 'timezone':'Asia/Shanghai'}
+    return {'photos':[p.name for p in ink_gallery.photos()], 'schedule':ink_gallery.schedule(), 'timezone':'Asia/Shanghai'}
 
 
 @router.post('/backgrounds')
@@ -321,3 +334,30 @@ async def upload_background(request: Request, display: bool = False):
 async def rotate_now():
     from . import ink_gallery
     return await ink_gallery.rotate(force=True)
+
+
+class LetterFeedback(BaseModel):
+    rating: Literal['like', 'easy', 'skip']
+
+
+@contextmanager
+def feedback_db():
+    from .ink_gallery import state_db
+    with closing(state_db()) as db, db:
+        db.execute('CREATE TABLE IF NOT EXISTS letter_feedback (day TEXT PRIMARY KEY, rating TEXT NOT NULL)')
+        yield db
+
+
+@router.get('/letters/{day}/feedback')
+def get_letter_feedback(day: date):
+    with feedback_db() as db:
+        row = db.execute('SELECT rating FROM letter_feedback WHERE day=?', (day.isoformat(),)).fetchone()
+    return {'day': day, 'rating': row[0] if row else None}
+
+
+@router.post('/letters/{day}/feedback')
+def save_letter_feedback(day: date, data: LetterFeedback):
+    with feedback_db() as db:
+        db.execute('INSERT INTO letter_feedback(day,rating) VALUES(?,?) '
+                   'ON CONFLICT(day) DO UPDATE SET rating=excluded.rating', (day.isoformat(), data.rating))
+    return {'day': day, 'rating': data.rating}
