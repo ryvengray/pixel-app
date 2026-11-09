@@ -51,4 +51,4 @@ Successful keyed chat responses enqueue an evidence-backed extraction job in the
 
 ## Pixel / ESP32 control
 
-Screenshot upload, ESP32 status polling, and an acknowledged HID command queue are integrated into this service. Setup, wireless ADB capture, and test commands: [phone-control guide](../docs/phone-control.md). This first version provides the transport; vision planning and Chinese IME input are not yet implemented.
+Screenshot upload, ESP32 status polling, and an acknowledged HID command queue are integrated into this service. Setup, wireless ADB capture, and test commands: [phone-control guide](../docs/phone-control.md). Local Qwen3-VL grounding and explicitly confirmed ESP32 Bluetooth clicks are available; autonomous multi-step planning and Chinese IME input are not yet implemented. Model startup, runtime behavior, monitoring, and tests: [local vision operations](../docs/local-vision-operations.md).

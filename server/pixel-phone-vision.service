@@ -1,0 +1,16 @@
+[Unit]
+Description=Pixel local screenshot grounding service
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/leigang/projects/pixel-app
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/usr/bin/python3 /home/leigang/projects/pixel-app/server/phone_vision.py --env-file /home/leigang/projects/pixel-app/server/.env --adb /home/leigang/Android/Sdk/platform-tools/adb --serial adb-48121FDAP00574-fqmAsw._adb-tls-connect._tcp
+Restart=on-failure
+RestartSec=3
+MemoryMax=1G
+
+[Install]
+WantedBy=default.target

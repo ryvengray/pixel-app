@@ -86,6 +86,57 @@ async def realtime_status():
     return await realtime_request('GET','/status')
 
 
+class VisionLocate(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    target: str = Field(min_length=1, max_length=300)
+
+
+async def vision_request(method, path, payload=None):
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(260, connect=5), trust_env=False) as client:
+            response = await client.request(method, 'http://127.0.0.1:8789'+path,
+                json=payload, headers={'Authorization': 'Bearer '+os.getenv('PHONE_CONTROL_ADMIN_TOKEN', '')})
+        if response.status_code != 200:
+            try:
+                detail = response.json().get('detail', '本地识别失败')
+            except ValueError:
+                detail = '本地识别失败'
+            raise HTTPException(response.status_code, detail)
+        return response.json()
+    except httpx.TimeoutException:
+        raise HTTPException(504, '本地识别超时')
+    except httpx.HTTPError:
+        raise HTTPException(503, '本地视觉服务未连接')
+
+
+@router.get('/vision/status', dependencies=[Depends(admin)])
+async def vision_status():
+    return await vision_request('GET', '/health')
+
+
+@router.post('/vision/locate', dependencies=[Depends(admin)])
+async def vision_locate(request: VisionLocate):
+    return await vision_request('POST', '/locate', request.model_dump())
+
+
+class VisionClick(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    id: str = Field(pattern=r'^[a-f0-9]{32}$')
+    result_id: str = Field(pattern=r'^[a-f0-9]{32}$')
+
+
+@router.post('/vision/click', dependencies=[Depends(admin)])
+async def vision_click(request: VisionClick):
+    return await vision_request('POST', '/click', request.model_dump())
+
+
+@router.get('/vision/click/{job_id}', dependencies=[Depends(admin)])
+async def vision_click_status(job_id: str):
+    if len(job_id) != 32 or any(c not in '0123456789abcdef' for c in job_id):
+        raise HTTPException(422, '无效的点击任务 ID')
+    return await vision_request('GET', '/click/'+job_id)
+
+
 @contextmanager
 def connect():
     default = Path(os.getenv('DATABASE_PATH', str(Path(__file__).parents[1] / 'data/greta.db'))).parent / 'phone-control.db'

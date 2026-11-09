@@ -1,0 +1,90 @@
+import asyncio
+import importlib.util
+import io
+import json
+from pathlib import Path
+from types import SimpleNamespace
+
+import httpx
+import pytest
+from fastapi import FastAPI, HTTPException
+from fastapi.testclient import TestClient
+from PIL import Image
+from server.app import phone_control as pc
+
+spec = importlib.util.spec_from_file_location('phone_vision', Path(__file__).parents[1]/'server/phone_vision.py')
+vision = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(vision)
+A = {'Authorization': 'Bearer '+'a'*32}
+
+
+def test_coordinate_contract():
+    result = vision.parse_result(json.dumps({'found': True, 'box': [100,200,300,400]}), 1001,2001)
+    assert result['bounds'] == [100,400,300,800]
+    assert result['point'] == {'x':200,'y':600}
+    assert vision.parse_result('{"found":false}',100,100)['point'] is None
+    for box in ([0,0,1001,20],[10,20,5,30],[False,0,50,50],[0,0,float('nan'),50]):
+        with pytest.raises(HTTPException):
+            vision.parse_result(json.dumps({'found':True,'box':box}),100,100)
+
+
+def test_gateway_auth_and_real_image_mapping(monkeypatch):
+    monkeypatch.setenv('PHONE_CONTROL_ADMIN_TOKEN','a'*32)
+    monkeypatch.setattr(vision,'config',SimpleNamespace(model='test',ollama='http://ollama'))
+    monkeypatch.setattr(vision,'inference_lock',asyncio.Lock())
+    image=io.BytesIO();Image.new('RGB',(1001,2001),'white').save(image,'PNG')
+    async def capture():return image.getvalue()
+    monkeypatch.setattr(vision,'capture',capture)
+    class Client:
+        def __init__(self,**kwargs):pass
+        async def __aenter__(self):return self
+        async def __aexit__(self,*args):pass
+        async def post(self,url,json):
+            assert json['messages'][0]['images']
+            assert json['options']['num_ctx']==4096
+            return httpx.Response(200,json={'message':{'content':'{"found":true,"box":[100,200,300,400]}'}},request=httpx.Request('POST',url))
+    monkeypatch.setattr(vision.httpx,'AsyncClient',Client)
+    with TestClient(vision.app) as client:
+        assert client.post('/locate',json={'target':'设置'}).status_code==401
+        assert client.post('/locate',headers=A,json={'target':' '}).status_code==422
+        result=client.post('/locate',headers=A,json={'target':'设置'}).json()
+        assert result['point']=={'x':200,'y':600}
+        assert result['width']==1001 and result['height']==2001
+        assert result['input_executed'] is False
+        assert result['image_base64']
+
+
+def test_api_auth_and_no_input(monkeypatch):
+    monkeypatch.setenv('PHONE_CONTROL_ADMIN_TOKEN','a'*32)
+    monkeypatch.setenv('PHONE_CONTROL_DEVICE_TOKEN','b'*32)
+    calls=[]
+    async def request(method,path,payload=None):
+        calls.append((method,path,payload));return {'found':False,'input_executed':False}
+    monkeypatch.setattr(pc,'vision_request',request)
+    app=FastAPI();app.include_router(pc.router)
+    with TestClient(app) as client:
+        url='/v1/phone-control/vision/locate'
+        assert client.post(url,json={'target':'设置'}).status_code==401
+        assert client.post(url,headers={'Authorization':'Bearer '+'b'*32},json={'target':'设置'}).status_code==401
+        assert client.post(url,headers=A,json={'target':'设置','click':True}).status_code==422
+        assert client.post(url,headers=A,json={'target':'设置'}).json()['input_executed'] is False
+        assert calls==[('POST','/locate',{'target':'设置'})]
+
+
+def test_click_proxy_is_authenticated_and_rejects_client_coordinates(monkeypatch):
+    monkeypatch.setenv('PHONE_CONTROL_ADMIN_TOKEN','a'*32)
+    monkeypatch.setenv('PHONE_CONTROL_DEVICE_TOKEN','b'*32)
+    calls=[]
+    async def request(method,path,payload=None):
+        calls.append((method,path,payload));return {'state':'running','id':'c'*32}
+    monkeypatch.setattr(pc,'vision_request',request)
+    app=FastAPI();app.include_router(pc.router)
+    with TestClient(app) as client:
+        url='/v1/phone-control/vision/click';body={'id':'c'*32,'result_id':'d'*32}
+        assert client.post(url,json=body).status_code==401
+        assert client.post(url,headers={'Authorization':'Bearer '+'b'*32},json=body).status_code==401
+        assert client.post(url,headers=A,json={**body,'x':880,'y':1819}).status_code==422
+        assert client.post(url,headers=A,json=body).status_code==200
+        assert client.get(url+'/'+'c'*32,headers=A).status_code==200
+        assert client.get(url+'/invalid',headers=A).status_code==422
+        assert calls==[('POST','/click',body),('GET','/click/'+'c'*32,None)]

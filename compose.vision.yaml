@@ -1,0 +1,17 @@
+# Optional local CPU vision backend: docker compose -f compose.vision.yaml up -d
+services:
+  pixel-ollama:
+    image: ollama/ollama:latest
+    container_name: pixel-ollama
+    restart: unless-stopped
+    cpus: 6
+    environment:
+      OLLAMA_NUM_PARALLEL: "1"
+      OLLAMA_MAX_LOADED_MODELS: "1"
+    ports:
+      - "127.0.0.1:11434:11434"
+    volumes:
+      - pixel-ollama:/root/.ollama
+volumes:
+  pixel-ollama:
+    name: pixel-ollama

@@ -187,3 +187,92 @@ scrcpy-server-v3.3.4 SHA256：8588238c9a5a00aa542906b6ec7e6d5541d9ffb9b5d0f6e1bc
 ESP32蓝牙键盘和BOOT控制保持原有方式。
 测试：常规pytest覆盖信令权限、参数及二进制协议；网关虚拟环境中运行
 `PYTHONPATH=server python tests/realtime_gateway_checks.py` 验证触点生命周期。
+
+## 本地视觉定位（Ollama / Qwen3-VL）
+
+完整启动、运行、监控、排障和测试步骤见 [本地视觉模型运维手册](local-vision-operations.md)。
+
+在 Ubuntu 宿主机运行 `docker compose -f compose.vision.yaml up -d`，然后执行
+`docker exec pixel-ollama ollama pull qwen3-vl:2b-instruct`。
+模型数据存储在 `pixel-ollama` 卷，仅监听 `127.0.0.1:11434`；CPU 配额6核，单任务推理。
+首次下载需要联网，下载完成后截图识别在本地运行。
+
+宿主机视觉网关使用 Python 的 FastAPI、uvicorn、httpx、Pillow（依赖版本可参考
+`server/requirements.txt`），服务模板为 `server/pixel-phone-vision.service`。
+安装前按实际部署修改模板中的用户、仓库路径、ADB 路径和设备 serial。
+复制到 `~/.config/systemd/user/` 后执行：
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now pixel-phone-vision
+```
+
+网关只监听 `127.0.0.1:8789`，读取现有管理员令牌；通过主服务管理员认证代理：
+
+- `GET /v1/phone-control/vision/status`：模型下载和忙碌状态。
+- `POST /v1/phone-control/vision/locate`：`{"target":"屏幕右上角的设置按钮"}`。
+
+`/esp32-screen` 的「识别手机目标」可输入目标，查看截图、标注框及原始屏幕中心坐标。
+每次请求通过无线 ADB 抓取新截图，长边缩至1280像素送入模型；模型按0..1000归一化
+坐标返回边界，网关校验范围和非空边界后转换到原始手机尺寸。
+响应包含 `captured_at`、`version`、`width`、`height`、`bounds`、`point`、
+`elapsed_seconds`、`image_base64` 和 `input_executed:false`。
+目标缺失时返回 `found:false`。非法定位结果被拒绝，不会夹取越界值后执行。
+坐标只代表截图时刻，页面变化或旋转后必须重新识别；不保证模型识别准确。
+
+定位接口本身不发送输入。识别后可通过下述显式蓝牙点击接口执行一次点击。
+网关识别超时为240秒；CPU实际耗时取决于图片和目标，应以现场实测为准。
+
+检查：`journalctl --user -u pixel-phone-vision -n 30`、`docker logs --tail 30 pixel-ollama`。
+测试：`python -m pytest tests/test_phone_vision.py tests/test_phone_control.py tests/test_phone_screen.py`。
+
+2026-11-09 现场验证（i7-1260P / 32GB / CPU配额6核）：
+
+- 模型：`qwen3-vl:2b-instruct`（Ollama ID `afc393e3572c`），镜像配置 SHA256
+  `8d0356014a54ff18edb6c99e8ae18422790ffff537848e0bc07f5a04a3fd33d7`。
+- Pixel原始画面960×2142；“左上角返回箭头”得到框 `[42,176,84,231]`、
+  中心 `(63,203)`，与采集截图的位置核对一致，首次请求32.52秒。
+- 不存在的“香蕉支付”按钮返回 `found:false`、`point:null`，热运行28.40秒。
+- 首次推理时容器约2.8GiB内存、CPU约600%；本次测试不足以代表所有页面准确率或耗时。
+- 27项相关自动测试通过；识别请求均为 `input_executed:false`，未执行任何手机点击。
+- 服务器已启用 `Linger=yes`，用户视觉网关和Docker模型容器均配置自动启动。
+
+
+## 识别后的蓝牙点击
+
+在 `/esp32-screen` 输入“点赞按钮”并识别，检查红色目标框后，点击新增的
+「蓝牙点击识别目标」。需要 ESP32 在线、蓝牙已连接且 BOOT 处于 ARMED；
+无需更新0.1.1固件或重新配对。结果返回后90秒内可提交点击，截图总有效期不超过180秒。
+
+执行路径是 ESP32 BLE HID 鼠标；无线ADB仅负责截图、读取前台窗口和光标图层，
+没有通过ADB注入点击。服务读取 `dumpsys SurfaceFlinger` 中唯一的 `[BBQ] Sprite` 图层
+位置，并通过 `dumpsys input` 确认普通箭头光标（resolvedPointerType 1000）。
+首次操作自动向左上角移动，确定光标热点偏移；随后逐次发送相对位移，读取反馈修正，
+直到热点距离目标中心不超过3像素，才发送一次BLE左键点击。
+
+会检查ESP32启动ID和就绪状态、其他未结束键鼠命令、屏幕尺寸/方向、前台窗口、
+目标区域图像差异及定位有效期；不支持的光标/方向或无法得到唯一反馈时停止点击。
+当前实测适用于Pixel竖屏和普通箭头光标，其他Android版本的图层格式可能不同。
+目标区域比较在鼠标移入前进行；这些检查不能保证应用业务完成，点击后应查看新截图。
+
+新增的管理员接口：
+
+- `POST /v1/phone-control/vision/click`：`{"id":"32位十六进制任务ID","result_id":"定位返回的result_id"}`。
+- `GET /v1/phone-control/vision/click/{id}`：查询同一任务的进度及 `running/succeeded/failed/unknown`。
+
+坐标只从服务器保存的定位结果读取，不接受客户端另传坐标。同一定位只能提交一次任务，
+同一任务ID重复提交只查询现有状态。状态保存在宿主机
+`~/.local/share/pixel-vision/clicks.db`，重启后未完成任务标为unknown，不自动重放。
+蓝牙报告成功不等于已点赞，响应以 `report_sent:true`、`business_confirmed:false` 表明这个区别。
+网页断线时查询原ID，不另建点击；任务结束后需重新识别才能再次点击。
+
+相关测试：`python -m pytest tests/test_phone_bluetooth.py tests/test_phone_vision.py`
+及 `node tests/test_phone_vision_ui.cjs`，覆盖反馈收敛、过期、窗口变化、未知回执、
+任务去重、重启恢复和页面双击/丢失响应查询。
+
+
+2026-11-09 蓝牙点击现场验证：点赞目标 `(883,1829)`，点击前读取的真实光标热点
+`(881.97,1828.25)`，与目标相距约1.3像素。Pixel-Control Mouse 的输入设备记录到
+一次 `EV_KEY BTN_MOUSE DOWN/UP`；点击后截图中白色爱心变为橙红色。
+该实测确认本次点赞生效，不代表任意页面都能准确识别或点击。
+35项相关Python测试及页面交互测试通过。

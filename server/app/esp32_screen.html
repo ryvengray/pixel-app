@@ -14,7 +14,7 @@
 <section class="cards" aria-label="连接状态"><div class="card"><div class="label">板子在线</div><div class="value" id="online">—</div><div class="detail" id="seen">等待状态同步</div></div><div class="card"><div class="label">蓝牙 · Pixel</div><div class="value" id="bluetooth">—</div><div class="detail">Pixel-Control</div></div><div class="card"><div class="label">蓝牙控制开关</div><div class="value" id="armed">—</div><div class="detail">短按板子 BOOT 切换</div></div></section>
 <div class="layout"><div><section class="panel"><div class="panel-head"><h2>手机屏幕</h2><span class="step" id="adb-state">等待 ADB</span></div><p class="hint">实时视频通过 WebRTC 传输；按下、拖动、松开实时传到手机。</p><div class="phone-frame"><p id="screen-empty" class="empty">登录后显示手机画面</p><video id="phone-video" aria-label="Pixel 实时屏幕，可点击或拖动滑动" autoplay muted playsinline hidden></video></div><div class="row"><span class="hint" id="screen-size">等待画面</span><button id="screen-pause" type="button" class="secondary">暂停预览</button></div><label class="touch-toggle"><input id="touch-enabled" type="checkbox">允许点击与滑动</label><div class="screen-actions"><button id="swipe-up" type="button" class="secondary" disabled>↑ 向上滑动</button><button id="swipe-down" type="button" class="secondary" disabled>↓ 向下滑动</button><button id="screen-retry" type="button" hidden>检查操作结果</button></div><div id="screen-message" class="message" role="status" aria-live="polite">等待手机画面…</div></section>
 <section class="panel"><div class="panel-head"><h2>最近键盘指令</h2><span class="step">执行回执</span></div><div id="history-empty" class="empty">暂无指令</div><table id="history" hidden><thead><tr><th>状态</th><th>时间</th><th>指令 / 结果</th></tr></thead><tbody id="commands"></tbody></table></section></div>
-<aside><section class="panel"><div class="panel-head"><h2>输入到手机</h2><span class="step">蓝牙键盘</span></div><p class="hint">在电脑上打开本页，并在 Pixel 上点选目标输入框。</p><form id="type-form"><label for="content">输入内容</label><input id="content" type="text" maxlength="160" autocomplete="off" spellcheck="false" placeholder="例如：hello pixel" required aria-describedby="input-hint"><p class="hint" id="input-hint">目前支持单行英文、数字及英文标点。请先将手机输入法切为英文。</p><div class="row"><span class="hint" id="count">0 / 160</span><button id="type-button" disabled>确认并输入</button></div></form><div id="feedback" class="message" role="status" aria-live="polite">请先登录并连接板子。</div><p class="hint">不会自动追加回车，也不会点击手机的发送按钮。</p></section><section class="panel"><div class="panel-head"><h2>设备信息</h2><button type="button" class="secondary" id="refresh">刷新</button></div><div class="kv"><span>局域网 IP</span><span class="mono" id="ip">—</span><span>固件版本</span><span class="mono" id="firmware">—</span><span>运行时间</span><span id="uptime">—</span><span>空闲内存</span><span id="heap">—</span><span>最近同步</span><span id="last-seen">—</span></div></section><section class="panel"><div class="panel-head"><h2>板子日志</h2><span class="step">最近 6 条</span></div><pre id="logs">等待设备日志…</pre></section></aside></div>
+<aside><section class="panel"><div class="panel-head"><h2>识别手机目标</h2><span class="step">本地视觉模型</span></div><form id="vision-form"><label for="vision-target">需要找到什么</label><input id="vision-target" maxlength="300" required placeholder="例如：屏幕右上角的设置按钮"><div class="row"><span class="hint">分析当前画面，返回位置</span><button id="vision-button">识别位置</button></div></form><p id="vision-message" class="message" role="status" aria-live="polite">登录后可用。识别后会显示目标框，确认位置后可通过蓝牙点击。</p><canvas id="vision-preview" hidden style="width:100%;height:auto"></canvas><div class="row"><button id="vision-click" type="button" hidden disabled>蓝牙点击识别目标</button></div><p id="vision-click-hint" class="hint"></p></section><section class="panel"><div class="panel-head"><h2>输入到手机</h2><span class="step">蓝牙键盘</span></div><p class="hint">在电脑上打开本页，并在 Pixel 上点选目标输入框。</p><form id="type-form"><label for="content">输入内容</label><input id="content" type="text" maxlength="160" autocomplete="off" spellcheck="false" placeholder="例如：hello pixel" required aria-describedby="input-hint"><p class="hint" id="input-hint">目前支持单行英文、数字及英文标点。请先将手机输入法切为英文。</p><div class="row"><span class="hint" id="count">0 / 160</span><button id="type-button" disabled>确认并输入</button></div></form><div id="feedback" class="message" role="status" aria-live="polite">请先登录并连接板子。</div><p class="hint">不会自动追加回车，也不会点击手机的发送按钮。</p></section><section class="panel"><div class="panel-head"><h2>设备信息</h2><button type="button" class="secondary" id="refresh">刷新</button></div><div class="kv"><span>局域网 IP</span><span class="mono" id="ip">—</span><span>固件版本</span><span class="mono" id="firmware">—</span><span>运行时间</span><span id="uptime">—</span><span>空闲内存</span><span id="heap">—</span><span>最近同步</span><span id="last-seen">—</span></div></section><section class="panel"><div class="panel-head"><h2>板子日志</h2><span class="step">最近 6 条</span></div><pre id="logs">等待设备日志…</pre></section></aside></div>
 <footer><a id="ink-link" href="ink-screen">水墨屏控制台 ↗</a><span> · 状态每 2 秒更新 · 回执表示固件发送结果，实际输入请在手机上确认</span></footer>
 </main>
 <script>
@@ -24,12 +24,13 @@ const api=prefix+'/v1/phone-control';
 const $=id=>document.getElementById(id);
 $('ink-link').href=prefix+'/ink-screen';
 let authenticated=false,currentStatus=null,refreshing=false,busy=false,attempt=null;
+let visionResult=null,visionJobId=null,visionClickBusy=false,visionRecognizing=false,visionDrawVersion=0;
 const labels={queued:'等待领取',dispatched:'已下发',succeeded:'报告已发送',failed:'执行失败',expired:'已过期',unknown:'结果未知',cancelled:'已取消'};
 const errors={keyboard_notify_error:'蓝牙键盘通知发送失败，请检查手机蓝牙连接',mouse_notify_error:'鼠标通知发送失败',release_notify_error:'按键释放通知失败',not_ready:'板子暂停或蓝牙未连接',interrupted:'操作被中断',ascii_only:'目前只支持英文、数字和英文标点'};
 function say(text,error=false){$('feedback').textContent=text;$('feedback').classList.toggle('error',error);}
 function setAuth(ok){authenticated=ok;phoneScreen.auth(ok);$('login-panel').hidden=ok;if(!ok){currentStatus=null;$('connection-label').textContent='请先登录';$('connection-dot').className='dot';}updateButton();}
 function ready(){return authenticated&&currentStatus?.online&&currentStatus.device?.ble_connected&&currentStatus.device?.armed;}
-function updateButton(){const text=$('content').value;const valid=text.length>0&&text.length<=160&&/^[\x20-\x7e]+$/.test(text);$('type-button').disabled=busy||!authenticated||(!attempt&&(!ready()||!valid));$('type-button').textContent=busy?'处理中…':attempt?'检查提交结果':'确认并输入';$('content').readOnly=!!attempt;$('count').textContent=text.length+' / 160';}
+function updateButton(){updateVisionButton();const text=$('content').value;const valid=text.length>0&&text.length<=160&&/^[\x20-\x7e]+$/.test(text);$('type-button').disabled=busy||visionClickBusy||!authenticated||(!attempt&&(!ready()||!valid));$('type-button').textContent=busy?'处理中…':attempt?'检查提交结果':'确认并输入';$('content').readOnly=!!attempt;$('count').textContent=text.length+' / 160';}
 async function request(url,options={}){const response=await fetch(url,{...options,credentials:'same-origin',cache:'no-store'});if(response.status===401){setAuth(false);throw Error('登录已过期，请重新登录');}let data;try{data=await response.json();}catch{data={};}if(!response.ok){const error=Error(typeof data.detail==='string'?data.detail:'请求未完成，请检查内容和设备状态');error.status=response.status;throw error;}return data;}
 function clock(seconds){return seconds?new Date(seconds*1000).toLocaleTimeString('zh-CN',{hour12:false}):'—';}
 function duration(ms){const s=Math.floor((ms||0)/1000);return s<60?s+' 秒':s<3600?Math.floor(s/60)+' 分 '+s%60+' 秒':Math.floor(s/3600)+' 小时 '+Math.floor(s%3600/60)+' 分';}
@@ -48,5 +49,69 @@ $('refresh').addEventListener('click',refresh);
 $('login-form').addEventListener('submit',async event=>{event.preventDefault();$('login-button').disabled=true;$('login-error').textContent='';try{const response=await fetch(prefix+'/v1/ink/auth/login',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({code:$('code').value.trim()})});if(!response.ok)throw Error('验证码无效或已过期');$('code').value='';setAuth(true);await refresh();}catch(error){$('login-error').textContent=error.message;}finally{$('login-button').disabled=false;}});
 (async()=>{try{const response=await fetch(prefix+'/v1/ink/auth/session',{credentials:'same-origin',cache:'no-store'});setAuth(response.ok);if(response.ok)await refresh();}catch{setAuth(false);}})();
 setInterval(refresh,2000);
+function updateVisionButton(){
+ const button=$('vision-click'),hint=$('vision-click-hint');
+ $('vision-button').disabled=visionClickBusy||visionRecognizing;
+ button.hidden=!visionResult&&!visionJobId;
+ if(visionJobId){button.disabled=visionClickBusy;button.textContent=visionClickBusy?'正在执行蓝牙点击…':'查询点击结果';hint.textContent='正在执行或查询同一次任务，不会重复创建点击。';return;}
+ button.textContent='蓝牙点击识别目标';
+ const expired=visionResult&&Date.now()/1000>visionResult.expires_at;
+ button.disabled=!authenticated||!visionResult?.found||!visionResult?.result_id||!ready()||visionClickBusy||expired;
+ hint.textContent=expired?'定位已过期，请重新识别。':visionResult&&!ready()?'点击需要 ESP32 在线、蓝牙已连接，并按 BOOT 启用控制。':visionResult?'确认标注框正确后，点击上方按钮。操作后请核对手机实际结果。':'';
+ $('vision-button').disabled=visionClickBusy||visionRecognizing;
+}
+function drawVision(result){
+ const generation=++visionDrawVersion,image=new Image();
+ image.onload=()=>{if(!authenticated||generation!==visionDrawVersion)return;
+  const canvas=$('vision-preview');canvas.width=image.width;canvas.height=image.height;const ctx=canvas.getContext('2d');ctx.drawImage(image,0,0);
+  if(result.found){const [l,t,r,b]=result.bounds,sx=image.width/result.width,sy=image.height/result.height;ctx.strokeStyle='#ff3838';ctx.lineWidth=4;ctx.strokeRect(l*sx,t*sy,(r-l)*sx,(b-t)*sy);ctx.fillStyle='#ff3838';ctx.beginPath();ctx.arc(result.point.x*sx,result.point.y*sy,6,0,Math.PI*2);ctx.fill();}
+  canvas.hidden=false;
+ };
+ image.src='data:image/jpeg;base64,'+result.image_base64;
+}
+$('vision-form').addEventListener('submit',async event=>{
+ event.preventDefault();if(!authenticated){$('vision-message').textContent='请先登录';return;}if(visionClickBusy||visionRecognizing)return;
+ visionRecognizing=true;visionResult=null;visionJobId=null;updateVisionButton();$('vision-button').disabled=true;$('vision-preview').hidden=true;
+ $('vision-message').textContent='正在截图并识别，CPU 首次加载可能较慢…';
+ try{
+  const result=await request(api+'/vision/locate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({target:$('vision-target').value.trim()})});
+  if(!authenticated)return;
+  visionResult=result.found?result:null;
+  $('vision-message').textContent=(result.found?'目标中心：('+result.point.x+', '+result.point.y+')':'未找到目标')+' · '+result.elapsed_seconds+' 秒 · '+result.width+'×'+result.height+' · '+result.description.replace(/[。.!！]+$/,'')+'。'+(result.found?'确认标注框正确后，可通过蓝牙点击。':'');
+  drawVision(result);
+ }catch(error){$('vision-message').textContent=error.message;}finally{visionRecognizing=false;updateVisionButton();}
+});
+async function checkVisionClick(){
+ if(!visionJobId)return;visionClickBusy=true;updateButton();
+ try{
+  for(let i=0;i<240;i++){
+   const job=await request(api+'/vision/click/'+visionJobId);
+   $('vision-message').textContent=job.message;
+   if(job.state!=='running'){
+    if(job.result?.image_base64)drawVision({...job.result,found:false});
+    visionResult=null;visionJobId=null;return;
+   }
+   await new Promise(resolve=>setTimeout(resolve,500));
+  }
+  $('vision-message').textContent='任务仍在进行。点击「查询点击结果」查看原任务，不会再次点击。';
+ }catch(error){
+  $('vision-message').textContent=error.message+'。请检查手机，再查询原点击任务；不会自动重试点击。';
+  if(error.status===404){visionResult=null;visionJobId=null;}
+ }finally{visionClickBusy=false;updateButton();}
+}
+$('vision-click').addEventListener('click',async()=>{
+ if(visionClickBusy)return;
+ if(visionJobId){await checkVisionClick();return;}
+ if(!visionResult?.result_id||!ready())return;
+ visionJobId=newId();visionClickBusy=true;updateButton();
+ try{
+  const job=await request(api+'/vision/click',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:visionJobId,result_id:visionResult.result_id})});
+  $('vision-message').textContent=job.message;
+ }catch(error){
+  if(error.status===409||error.status===422||error.status===401){visionJobId=null;visionResult=null;visionClickBusy=false;$('vision-message').textContent=error.message;updateButton();return;}
+  $('vision-message').textContent='提交结果未确认，正在查询原点击任务…';
+ }
+ await checkVisionClick();
+});
 /* PHONE_SCREEN_SCRIPT */
 </script></body></html>
