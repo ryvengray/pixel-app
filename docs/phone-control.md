@@ -63,7 +63,7 @@ bash scripts/reconnect-wireless-ubuntu.sh
 
 ## ESP32 配置与联调
 
-固件在独立仓库目录 `/Users/ryven/Projects/ink-screen/esp32-screen`。
+固件位于本仓库 [ink-screen/esp32-screen](../ink-screen/esp32-screen/README.md)。
 烧录后用其中 `tools/configure.py` 写入 Wi-Fi、Ubuntu URL 和设备令牌。
 Pixel 蓝牙配对 `Pixel-Control`，确认键盘布局为美式英语；按板子 BOOT 使其 ARMED。
 

@@ -1,5 +1,19 @@
 # Greta
 
+## 仓库目录
+
+Android 应用、Pixel 后端和硬件项目统一在此仓库维护：
+
+| 目录 | 内容 |
+| --- | --- |
+| `app/` | Android 应用 |
+| `server/` | Pixel 后端、手机控制与视觉网关 |
+| [ink-screen/pixel-display-e1002/](ink-screen/pixel-display-e1002/README.md) | E1002 墨水屏固件、API、MQTT 与 OTA 发布工具 |
+| [ink-screen/esp32-screen/](ink-screen/esp32-screen/README.md) | ESP32 蓝牙键鼠控制器固件与配置工具 |
+
+原 `ink-screen` 仓库的代码及提交历史已合入 `ink-screen/`，后续在此提交修改。
+迁移说明、构建和测试入口见 [硬件项目说明](ink-screen/README.md)。
+
 ## 宠物首页
 
 首页是全屏动态背景和实时 3D 玉绿色圆润三角形宠物。宠物会呼吸、漂浮、眨眼、轻微扭动，轻触时弹跳并变换嘴型。右上角小圆钮或长按宠物可展开底部菜单，进入 Obsidian 同步、选择跟随系统/浅色/深色主题、开启减少动态效果。主题偏好会保留，离开首页时暂停渲染。顶部透明状态栏常驻显示，底部导航栏可从屏幕边缘滑动唤出。

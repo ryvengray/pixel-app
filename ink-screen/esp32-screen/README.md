@@ -1,5 +1,7 @@
 # ESP32 Pixel Controller
 
+此子项目在 `pixel-app/ink-screen/esp32-screen/` 维护。以下命令从此目录执行。
+
 第一版：BLE 键盘/相对鼠标 + Wi-Fi 轮询 pixel-app 后端 + LCD 状态/最近日志。
 不包含语音识别、AI 自动规划、中文输入法处理或绝对坐标点击；先验证基础链路。
 
@@ -31,7 +33,7 @@ python /path/to/esptool.py --port /dev/cu.usbserial-1440 write_flash 0 backups/f
 
 ## 首次配置
 
-先在 pixel-app 后端设置两个不同的随机令牌，详见该仓库 `docs/phone-control.md`。
+先在 Pixel 后端设置两个不同的随机令牌，详见 [手机控制指南](../../docs/phone-control.md)。
 在有 pyserial 的 Python 环境中运行（本机 PlatformIO Python 已安装）：
 
 ```bash
@@ -95,7 +97,7 @@ HTTP 响应丢失或板子重启时不会自动重放动作，后端可能标记
 
 ## 本地模型识别与蓝牙坐标点击
 
-服务器代码位于 `pixel-app` 仓库。当前部署在 `leigang@192.168.0.160`：
+服务器代码位于同仓库的 `server/`。当前部署在 `leigang@192.168.0.160`：
 Ollama容器运行 `qwen3-vl:2b-instruct`，宿主机视觉网关通过无线ADB截图，
 返回模型识别的目标框和手机原始像素坐标。
 
@@ -108,4 +110,4 @@ Ollama容器运行 `qwen3-vl:2b-instruct`，宿主机视觉网关通过无线ADB
 断开时会停止；未知执行结果不自动重放。当前仅实测Pixel竖屏和普通箭头光标。
 
 模型启动、运行参数、日志监控、自动测试和实机测试详见：
-[本地视觉模型运维手册](https://github.com/ryvengray/pixel-app/blob/main/docs/local-vision-operations.md)。
+[本地视觉模型运维手册](../../docs/local-vision-operations.md)。

@@ -1,5 +1,7 @@
 # Pixel Display v1 — E1002
 
+现位于 `pixel-app/ink-screen/pixel-display-e1002/`。下文命令默认从本目录执行。
+
 首次操作请按 [一步一步操作手册](操作手册.md) 执行。烧录及修改代码后的更新步骤见 [固件更新说明](固件更新说明.md)。
 
 此版本适用于 Seeed reTerminal E1002 7.3 英寸六色电子纸，包含 Ubuntu Docker Compose 服务端、MQTT、文本渲染、设备固件及 pixel-app 调用示例。当前版本为首次实机验证准备的原型：定时休眠版本已使用示例配置编译成功，尚未烧录或完成真实屏幕联调。
