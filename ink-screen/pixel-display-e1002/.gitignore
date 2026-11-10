@@ -1,0 +1,7 @@
+.env
+firmware/include/config.h
+firmware/.pio/
+__pycache__/
+
+.ota-tools/
+.ota-release.lock
