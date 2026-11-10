@@ -42,6 +42,15 @@ adb devices -l
 设备状态必须为 `device`，不能为 offline / unauthorized。无线调试端口可能随重启变化。
 ADB 配对授权属于调试通道，蓝牙配对属于输入通道，两者都要完成。
 
+已配对但页面提示「无线调试读取失败」时，在 Ubuntu 上以运行网关服务的同一用户执行：
+
+```bash
+cd /home/leigang/projects/pixel-app
+bash scripts/reconnect-wireless-ubuntu.sh
+```
+
+脚本优先读取已安装的 `pixel-phone-vision` 用户服务的 `--serial`，否则使用仓库服务模板的设备名；通过 mDNS 服务名重连时会解析手机当前端口，无需修改后台设备名。脚本会重试连接并验证 shell 读取，不安装应用、不执行点击、不重启 ADB 或后台服务。连接失败会以非零状态退出并提示配对步骤。可用 `--adb 路径` 和 `--serial 设备名` 覆盖默认值；若改用 IP:端口，后台服务的 `--serial` 也必须同步修改。
+
 在宿主机设置 `PHONE_CONTROL_ADMIN_TOKEN` 环境变量，与服务中的值相同，然后运行：
 
 ```bash

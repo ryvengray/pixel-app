@@ -6,6 +6,7 @@ import base64
 import hashlib
 import io
 import json
+import logging
 import math
 import os
 import secrets
@@ -153,15 +154,32 @@ async def locate(request: LocateRequest):
                 'If the target is missing or ambiguous return {"found":false,"description":"reason"}. '
                 'Do not guess hidden elements. User target: ' + request.target)
             async with httpx.AsyncClient(timeout=httpx.Timeout(240, connect=5), trust_env=False) as client:
-                response = await client.post(config.ollama + '/api/chat', json={
+                payload = {
                     'model': config.model, 'stream': False, 'format': 'json', 'keep_alive': '10m',
                     'messages': [{'role': 'user', 'content': prompt, 'images': [image]}],
-                    'options': {'temperature': 0, 'num_ctx': 4096, 'num_predict': 180, 'num_thread': 6}})
+                    'options': {'temperature': 0, 'num_ctx': 4096, 'num_predict': 180, 'num_thread': 6}}
+                response = await client.post(config.ollama + '/api/chat', json=payload)
                 response.raise_for_status()
                 data = response.json()
             result = parse_result(data['message']['content'], width, height)
             result_id = secrets.token_hex(16)
             ready_at = time.time()
+            # Keep one replayable sample locally; never include service tokens.
+            # A failed export must not prevent the user from receiving a result.
+            try:
+                sample_path = Path.home()/'.local/share/pixel-vision/benchmark/latest.json'
+                sample_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+                sample = {'schema_version': 1, 'captured_at': captured,
+                    'target': request.target, 'width': width, 'height': height,
+                    'request': payload, 'baseline': {'result': result, 'response': data,
+                        'elapsed_seconds': round(time.monotonic()-started, 2)}}
+                temporary = sample_path.with_suffix('.tmp')
+                temporary.write_text(json.dumps(sample, ensure_ascii=False), encoding='utf-8')
+                temporary.chmod(0o600)
+                temporary.replace(sample_path)
+                logging.getLogger('uvicorn.error').info('Saved benchmark sample: %s', sample_path)
+            except OSError:
+                logging.getLogger('uvicorn.error').exception('Could not save benchmark sample')
             located_results[result_id] = {**result, 'raw': raw, 'focus': focus, 'width': width,
                 'height': height, 'captured_at': captured, 'ready_at': ready_at}
             while len(located_results) > 10:

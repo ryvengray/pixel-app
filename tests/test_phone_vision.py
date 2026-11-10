@@ -28,7 +28,8 @@ def test_coordinate_contract():
             vision.parse_result(json.dumps({'found':True,'box':box}),100,100)
 
 
-def test_gateway_auth_and_real_image_mapping(monkeypatch):
+def test_gateway_auth_and_real_image_mapping(monkeypatch, tmp_path):
+    monkeypatch.setenv('HOME', str(tmp_path))
     monkeypatch.setenv('PHONE_CONTROL_ADMIN_TOKEN','a'*32)
     monkeypatch.setattr(vision,'config',SimpleNamespace(model='test',ollama='http://ollama'))
     monkeypatch.setattr(vision,'inference_lock',asyncio.Lock())
@@ -52,6 +53,11 @@ def test_gateway_auth_and_real_image_mapping(monkeypatch):
         assert result['width']==1001 and result['height']==2001
         assert result['input_executed'] is False
         assert result['image_base64']
+        sample = json.loads((tmp_path/'.local/share/pixel-vision/benchmark/latest.json').read_text())
+        assert sample['target'] == '设置'
+        assert sample['request']['messages'][0]['images'][0] == result['image_base64']
+        assert sample['baseline']['result']['point'] == result['point']
+        assert 'a'*32 not in json.dumps(sample)
 
 
 def test_api_auth_and_no_input(monkeypatch):
