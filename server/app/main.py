@@ -682,6 +682,11 @@ async def start_phone_task(request: phone_agent.TaskRequest):
     return await phone_agent.start(request.goal, request.id, request.goal, deepseek, phone_task_notification)
 
 
+@app.get('/v1/phone-control/tasks', dependencies=[Depends(phone_control.admin)])
+async def latest_phone_task():
+    return phone_agent.status()
+
+
 @app.get('/v1/phone-control/tasks/{task_id}', dependencies=[Depends(phone_control.admin)])
 async def get_phone_task(task_id: str):
     return phone_agent.status(task_id)

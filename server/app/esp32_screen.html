@@ -14,7 +14,7 @@
 <section class="cards" aria-label="连接状态"><div class="card"><div class="label">板子在线</div><div class="value" id="online">—</div><div class="detail" id="seen">等待状态同步</div></div><div class="card"><div class="label">蓝牙 · Pixel</div><div class="value" id="bluetooth">—</div><div class="detail">Pixel-Control</div></div><div class="card"><div class="label">蓝牙控制开关</div><div class="value" id="armed">—</div><div class="detail">短按板子 BOOT 切换</div></div></section>
 <div class="layout"><div><section class="panel"><div class="panel-head"><h2>手机屏幕</h2><span class="step" id="adb-state">等待 ADB</span></div><p class="hint">实时视频通过 WebRTC 传输；按下、拖动、松开实时传到手机。</p><div class="phone-frame"><p id="screen-empty" class="empty">登录后显示手机画面</p><video id="phone-video" aria-label="Pixel 实时屏幕，可点击或拖动滑动" autoplay muted playsinline hidden></video></div><div class="row"><span class="hint" id="screen-size">等待画面</span><button id="screen-pause" type="button" class="secondary">暂停预览</button></div><label class="touch-toggle"><input id="touch-enabled" type="checkbox">允许点击与滑动</label><div class="screen-actions"><button id="swipe-up" type="button" class="secondary" disabled>↑ 向上滑动</button><button id="swipe-down" type="button" class="secondary" disabled>↓ 向下滑动</button><button id="screen-retry" type="button" hidden>检查操作结果</button></div><div id="screen-message" class="message" role="status" aria-live="polite">等待手机画面…</div></section>
 <section class="panel"><div class="panel-head"><h2>最近键盘指令</h2><span class="step">执行回执</span></div><div id="history-empty" class="empty">暂无指令</div><table id="history" hidden><thead><tr><th>状态</th><th>时间</th><th>指令 / 结果</th></tr></thead><tbody id="commands"></tbody></table></section></div>
-<aside><section class="panel"><div class="panel-head"><h2>识别手机目标</h2><span class="step">本地视觉模型</span></div><form id="vision-form"><label for="vision-target">需要找到什么</label><input id="vision-target" maxlength="300" required placeholder="例如：屏幕右上角的设置按钮"><div class="row"><span class="hint">分析当前画面，返回位置</span><button id="vision-button">识别位置</button></div></form><p id="vision-message" class="message" role="status" aria-live="polite">登录后可用。识别后会显示目标框，确认位置后可通过蓝牙点击。</p><canvas id="vision-preview" hidden style="width:100%;height:auto"></canvas><div class="row"><button id="vision-click" type="button" hidden disabled>蓝牙点击识别目标</button></div><p id="vision-click-hint" class="hint"></p></section><section class="panel"><div class="panel-head"><h2>输入到手机</h2><span class="step">蓝牙键盘</span></div><p class="hint">在电脑上打开本页，并在 Pixel 上点选目标输入框。</p><form id="type-form"><label for="content">输入内容</label><input id="content" type="text" maxlength="160" autocomplete="off" spellcheck="false" placeholder="例如：hello pixel" required aria-describedby="input-hint"><p class="hint" id="input-hint">目前支持单行英文、数字及英文标点。请先将手机输入法切为英文。</p><div class="row"><span class="hint" id="count">0 / 160</span><button id="type-button" disabled>确认并输入</button></div></form><div id="feedback" class="message" role="status" aria-live="polite">请先登录并连接板子。</div><p class="hint">不会自动追加回车，也不会点击手机的发送按钮。</p></section><section class="panel"><div class="panel-head"><h2>设备信息</h2><button type="button" class="secondary" id="refresh">刷新</button></div><div class="kv"><span>局域网 IP</span><span class="mono" id="ip">—</span><span>固件版本</span><span class="mono" id="firmware">—</span><span>运行时间</span><span id="uptime">—</span><span>空闲内存</span><span id="heap">—</span><span>最近同步</span><span id="last-seen">—</span></div></section><section class="panel"><div class="panel-head"><h2>板子日志</h2><span class="step">最近 6 条</span></div><pre id="logs">等待设备日志…</pre></section></aside></div>
+<aside><section class="panel"><div class="panel-head"><h2>微信发消息 · 手机任务</h2><span class="step">后台 Agent</span></div><form id="task-form"><label for="task-goal">完整任务指令</label><textarea id="task-goal" rows="4" maxlength="1500" required placeholder="用微信给张三发消息，内容是明天下午回老家" style="width:100%;font:inherit;padding:12px;border:1px solid #bccdc1;border-radius:10px"></textarea><p class="hint">请写清联系人和消息原文。测试时可注明「只填写草稿，不发送」。启动后会按指令操作手机，请勿同时手动操作。</p><div class="row"><button id="task-start" disabled>启动任务</button><button id="task-stop" type="button" class="secondary" disabled>停止任务</button></div></form><div class="row"><span id="task-id" class="mono"></span><button id="task-refresh" type="button" class="secondary">查询进度</button></div><p id="task-message" class="message" role="status" aria-live="polite">登录后可启动任务。</p><pre id="task-events" hidden></pre><p class="hint">停止不能撤回已下发动作；完成状态表示视觉验证通过，收件人是否收到请另行确认。</p></section><section class="panel"><div class="panel-head"><h2>识别手机目标</h2><span class="step">本地视觉模型</span></div><form id="vision-form"><label for="vision-target">需要找到什么</label><input id="vision-target" maxlength="300" required placeholder="例如：屏幕右上角的设置按钮"><div class="row"><span class="hint">分析当前画面，返回位置</span><button id="vision-button">识别位置</button></div></form><p id="vision-message" class="message" role="status" aria-live="polite">登录后可用。识别后会显示目标框，确认位置后可通过蓝牙点击。</p><canvas id="vision-preview" hidden style="width:100%;height:auto"></canvas><div class="row"><button id="vision-click" type="button" hidden disabled>蓝牙点击识别目标</button></div><p id="vision-click-hint" class="hint"></p></section><section class="panel"><div class="panel-head"><h2>输入到手机</h2><span class="step">蓝牙键盘</span></div><p class="hint">在电脑上打开本页，并在 Pixel 上点选目标输入框。</p><form id="type-form"><label for="content">输入内容</label><input id="content" type="text" maxlength="160" autocomplete="off" spellcheck="false" placeholder="例如：hello pixel" required aria-describedby="input-hint"><p class="hint" id="input-hint">目前支持单行英文、数字及英文标点。请先将手机输入法切为英文。</p><div class="row"><span class="hint" id="count">0 / 160</span><button id="type-button" disabled>确认并输入</button></div></form><div id="feedback" class="message" role="status" aria-live="polite">请先登录并连接板子。</div><p class="hint">不会自动追加回车，也不会点击手机的发送按钮。</p></section><section class="panel"><div class="panel-head"><h2>设备信息</h2><button type="button" class="secondary" id="refresh">刷新</button></div><div class="kv"><span>局域网 IP</span><span class="mono" id="ip">—</span><span>固件版本</span><span class="mono" id="firmware">—</span><span>运行时间</span><span id="uptime">—</span><span>空闲内存</span><span id="heap">—</span><span>最近同步</span><span id="last-seen">—</span></div></section><section class="panel"><div class="panel-head"><h2>板子日志</h2><span class="step">最近 6 条</span></div><pre id="logs">等待设备日志…</pre></section></aside></div>
 <footer><a id="ink-link" href="ink-screen">水墨屏控制台 ↗</a><span> · 状态每 2 秒更新 · 回执表示固件发送结果，实际输入请在手机上确认</span></footer>
 </main>
 <script>
@@ -30,7 +30,7 @@ const errors={keyboard_notify_error:'蓝牙键盘通知发送失败，请检查�
 function say(text,error=false){$('feedback').textContent=text;$('feedback').classList.toggle('error',error);}
 function setAuth(ok){authenticated=ok;phoneScreen.auth(ok);$('login-panel').hidden=ok;if(!ok){currentStatus=null;$('connection-label').textContent='请先登录';$('connection-dot').className='dot';}updateButton();}
 function ready(){return authenticated&&currentStatus?.online&&currentStatus.device?.ble_connected&&currentStatus.device?.armed;}
-function updateButton(){updateVisionButton();const text=$('content').value;const valid=text.length>0&&text.length<=160&&/^[\x20-\x7e]+$/.test(text);$('type-button').disabled=busy||visionClickBusy||!authenticated||(!attempt&&(!ready()||!valid));$('type-button').textContent=busy?'处理中…':attempt?'检查提交结果':'确认并输入';$('content').readOnly=!!attempt;$('count').textContent=text.length+' / 160';}
+function updateButton(){updateTaskButtons();updateVisionButton();const text=$('content').value;const valid=text.length>0&&text.length<=160&&/^[\x20-\x7e]+$/.test(text);$('type-button').disabled=busy||visionClickBusy||!authenticated||(!attempt&&(!ready()||!valid));$('type-button').textContent=busy?'处理中…':attempt?'检查提交结果':'确认并输入';$('content').readOnly=!!attempt;$('count').textContent=text.length+' / 160';}
 async function request(url,options={}){const response=await fetch(url,{...options,credentials:'same-origin',cache:'no-store'});if(response.status===401){setAuth(false);throw Error('登录已过期，请重新登录');}let data;try{data=await response.json();}catch{data={};}if(!response.ok){const error=Error(typeof data.detail==='string'?data.detail:'请求未完成，请检查内容和设备状态');error.status=response.status;throw error;}return data;}
 function clock(seconds){return seconds?new Date(seconds*1000).toLocaleTimeString('zh-CN',{hour12:false}):'—';}
 function duration(ms){const s=Math.floor((ms||0)/1000);return s<60?s+' 秒':s<3600?Math.floor(s/60)+' 分 '+s%60+' 秒':Math.floor(s/3600)+' 小时 '+Math.floor(s%3600/60)+' 分';}
@@ -47,8 +47,60 @@ $('type-form').addEventListener('submit',async event=>{event.preventDefault();if
 $('content').addEventListener('input',()=>{updateButton();const text=$('content').value;if(text&&!/^[\x20-\x7e]+$/.test(text))say('目前请使用单行英文、数字和英文标点；中文输入尚未接入。',true);else if(ready()&&!attempt)say('已就绪。确认手机输入框有焦点后，点击确认并输入。');});
 $('refresh').addEventListener('click',refresh);
 $('login-form').addEventListener('submit',async event=>{event.preventDefault();$('login-button').disabled=true;$('login-error').textContent='';try{const response=await fetch(prefix+'/v1/ink/auth/login',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({code:$('code').value.trim()})});if(!response.ok)throw Error('验证码无效或已过期');$('code').value='';setAuth(true);await refresh();}catch(error){$('login-error').textContent=error.message;}finally{$('login-button').disabled=false;}});
+/* PHONE_TASK_SCRIPT */
+let taskId=null,taskState=null,taskBusy=false,taskRefreshing=false;
+try{taskId=localStorage.getItem('pixel-phone-task:'+prefix)||null;}catch{}
+const taskLabels={running:'执行中',succeeded:'视觉验证完成',failed:'执行失败',stopped:'已停止',cancelled:'已取消',unknown:'结果未知'};
+function updateTaskButtons(){
+ $('task-start').disabled=!authenticated||taskBusy||!!taskId&&(!taskState||taskState==='running')||!$('task-goal').value.trim();
+ $('task-stop').disabled=!authenticated||taskBusy||!taskId||taskState!=='running';
+ $('task-refresh').disabled=!authenticated||taskBusy;
+ $('task-goal').readOnly=taskBusy||!!taskId&&(!taskState||taskState==='running');
+}
+function rememberTask(id){taskId=id;try{if(id)localStorage.setItem('pixel-phone-task:'+prefix,id);else localStorage.removeItem('pixel-phone-task:'+prefix);}catch{}}
+function renderTask(data){
+ taskState=data.state;rememberTask(data.task_id||data.id);
+ $('task-id').textContent=taskId;
+ $('task-message').textContent=(taskLabels[data.state]||data.state)+'：'+(data.summary||data.goal||'');
+ if(data.goal)$('task-goal').value=data.goal;
+ $('task-events').hidden=!(data.events||[]).length;
+ $('task-events').textContent=(data.events||[]).map(e=>clock(e.at)+' · '+e.kind+'\n'+JSON.stringify(e.data,null,2)).join('\n');
+ updateTaskButtons();
+}
+async function refreshTask(){
+ if(!authenticated||taskBusy||taskRefreshing)return;
+ taskRefreshing=true;
+ try{
+  const data=await request(api+'/tasks'+(taskId?'/'+encodeURIComponent(taskId):''));
+  if(data.ok)renderTask(data);
+  else{rememberTask(null);taskState=null;$('task-id').textContent='';$('task-message').textContent=data.error||'暂无任务';$('task-events').hidden=true;}
+ }catch(error){$('task-message').textContent=error.message+'；请查询原任务，不要重复启动。';}
+ finally{taskRefreshing=false;updateTaskButtons();}
+}
+$('task-goal').addEventListener('input',updateTaskButtons);
+$('task-refresh').addEventListener('click',refreshTask);
+$('task-form').addEventListener('submit',async event=>{
+ event.preventDefault();updateTaskButtons();if($('task-start').disabled)return;
+ if(taskRefreshing)return;
+ const goal=$('task-goal').value.trim();rememberTask(newId());taskState=null;taskBusy=true;updateTaskButtons();
+ $('task-id').textContent=taskId;$('task-message').textContent='正在启动后台任务…';
+ try{
+  const data=await request(api+'/tasks',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:taskId,goal})});
+  if(data.ok)renderTask(data);
+  else{rememberTask(null);$('task-message').textContent=data.error||'任务未启动';}
+ }catch(error){$('task-message').textContent=error.message+'；提交结果未确认，请查询原任务。';}
+ finally{taskBusy=false;updateTaskButtons();}
+});
+$('task-stop').addEventListener('click',async()=>{
+ if(taskBusy||taskState!=='running')return;taskBusy=true;updateTaskButtons();
+ try{const data=await request(api+'/tasks/'+encodeURIComponent(taskId)+'/stop',{method:'POST'});if(data.ok)renderTask(data);else $('task-message').textContent=data.error;}
+ catch(error){$('task-message').textContent=error.message+'；停止结果未确认，请查询进度。';}
+ finally{taskBusy=false;updateTaskButtons();}
+});
+/* END_PHONE_TASK_SCRIPT */
 (async()=>{try{const response=await fetch(prefix+'/v1/ink/auth/session',{credentials:'same-origin',cache:'no-store'});setAuth(response.ok);if(response.ok)await refresh();}catch{setAuth(false);}})();
 setInterval(refresh,2000);
+setInterval(()=>{if(authenticated)refreshTask();},3000);
 function updateVisionButton(){
  const button=$('vision-click'),hint=$('vision-click-hint');
  $('vision-button').disabled=visionClickBusy||visionRecognizing;
