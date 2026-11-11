@@ -8,3 +8,4 @@ Pillow==11.3.0
 python-multipart==0.0.20
 pypdf>=4.0.0
 jsonschema==4.23.0
+pypinyin==0.55.0

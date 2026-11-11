@@ -94,3 +94,88 @@ def test_click_proxy_is_authenticated_and_rejects_client_coordinates(monkeypatch
         assert client.get(url+'/'+'c'*32,headers=A).status_code==200
         assert client.get(url+'/invalid',headers=A).status_code==422
         assert calls==[('POST','/click',body),('GET','/click/'+'c'*32,None)]
+
+
+@pytest.mark.parametrize('content,status,matched', [
+    ('{"matched":true,"reason":"名字一致"}', 200, True),
+    ('{"matched":false,"reason":"名字不一致"}', 200, False),
+    ('{"matched":"true","reason":"不确定"}', 502, None),
+    ('{"matched":true}', 502, None),
+    ('not json', 502, None),
+])
+def test_fresh_verification_contract(monkeypatch, content, status, matched):
+    monkeypatch.setenv('PHONE_CONTROL_ADMIN_TOKEN', 'a'*32)
+    monkeypatch.setattr(vision, 'config', SimpleNamespace(model='test', ollama='http://ollama'))
+    monkeypatch.setattr(vision, 'inference_lock', asyncio.Lock())
+    monkeypatch.setattr(vision, 'clicker', None)
+    captured = []
+    async def capture():
+        captured.append(True)
+        image = io.BytesIO()
+        Image.new('RGB', (100, 200)).save(image, 'PNG')
+        return image.getvalue()
+    monkeypatch.setattr(vision, 'capture', capture)
+    class Client:
+        def __init__(self, **kwargs): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): pass
+        async def post(self, url, json):
+            assert 'images' in json['messages'][0]
+            return httpx.Response(200, json={'message': {'content': content}}, request=httpx.Request('POST', url))
+    monkeypatch.setattr(vision.httpx, 'AsyncClient', Client)
+    with TestClient(vision.app) as client:
+        assert client.post('/verify', json={'assertion': '名字'}).status_code == 401
+        response = client.post('/verify', headers=A, json={'assertion': '名字'})
+        assert response.status_code == status
+        if status == 200:
+            assert response.json()['matched'] is matched
+            assert response.json()['input_executed'] is False
+    assert captured == [True]
+
+
+def test_verify_proxy_auth_and_validation(monkeypatch):
+    monkeypatch.setenv('PHONE_CONTROL_ADMIN_TOKEN', 'a'*32)
+    calls = []
+    async def request(method, path, payload=None):
+        calls.append((method, path, payload))
+        return {'matched': False}
+    monkeypatch.setattr(pc, 'vision_request', request)
+    app = FastAPI(); app.include_router(pc.router)
+    with TestClient(app) as client:
+        url = '/v1/phone-control/vision/verify'
+        assert client.post(url, json={'assertion': '输入框为空'}).status_code == 401
+        assert client.post(url, headers=A, json={'assertion': '输入框为空', 'click': True}).status_code == 422
+        assert client.post(url, headers=A, json={'assertion': '输入框为空'}).json() == {'matched': False}
+    assert calls == [('POST', '/verify', {'assertion': '输入框为空'})]
+
+
+@pytest.mark.parametrize('valid', [True, False])
+def test_observation_is_read_only_fresh_evidence(monkeypatch, valid):
+    monkeypatch.setenv('PHONE_CONTROL_ADMIN_TOKEN', 'a'*32)
+    monkeypatch.setattr(vision, 'config', SimpleNamespace(model='test', ollama='http://ollama'))
+    monkeypatch.setattr(vision, 'inference_lock', asyncio.Lock())
+    monkeypatch.setattr(vision, 'clicker', None)
+    captures = []
+    async def capture():
+        captures.append(True)
+        image = io.BytesIO(); Image.new('RGB', (100, 200)).save(image, 'PNG')
+        return image.getvalue()
+    monkeypatch.setattr(vision, 'capture', capture)
+    class Client:
+        def __init__(self, **kwargs): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): pass
+        async def post(self, url, json):
+            data = {'description': '主页有弹窗', 'visible_text': ['关闭'], 'controls': ['关闭按钮'],
+                    'keyboard_visible': False if valid else 'false'}
+            return httpx.Response(200, json={'message': {'content': __import__('json').dumps(data)}},
+                                  request=httpx.Request('POST', url))
+    monkeypatch.setattr(vision.httpx, 'AsyncClient', Client)
+    with TestClient(vision.app) as client:
+        assert client.post('/observe', json={'objective': '查找微信'}).status_code == 401
+        result = client.post('/observe', headers=A, json={'objective': '查找微信'})
+        assert result.status_code == (200 if valid else 502)
+        if valid:
+            assert result.json()['input_executed'] is False
+            assert result.json()['description'] == '主页有弹窗'
+    assert captures == [True]

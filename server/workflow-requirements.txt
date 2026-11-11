@@ -1,0 +1,2 @@
+# CLI submission/query client; backend dependencies are in server/requirements.txt.
+httpx==0.28.1

@@ -119,6 +119,26 @@ async def vision_locate(request: VisionLocate):
     return await vision_request('POST', '/locate', request.model_dump())
 
 
+class VisionVerify(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    assertion: str = Field(min_length=1, max_length=1500)
+
+
+@router.post('/vision/verify', dependencies=[Depends(admin)])
+async def vision_verify(request: VisionVerify):
+    return await vision_request('POST', '/verify', request.model_dump())
+
+
+class VisionObserve(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    objective: str = Field(min_length=1, max_length=1500)
+
+
+@router.post('/vision/observe', dependencies=[Depends(admin)])
+async def vision_observe(request: VisionObserve):
+    return await vision_request('POST', '/observe', request.model_dump())
+
+
 class VisionClick(BaseModel):
     model_config = ConfigDict(extra='forbid')
     id: str = Field(pattern=r'^[a-f0-9]{32}$')

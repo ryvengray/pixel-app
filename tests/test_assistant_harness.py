@@ -34,6 +34,58 @@ class HarnessTests(unittest.TestCase):
             db.execute("INSERT INTO reminder(id,title,due_at,created_at) VALUES(?,?,?,?)",
                        ("test-reminder", "带上材料", (datetime.now(timezone.utc)-timedelta(minutes=1)).isoformat(), main.utc_now()))
 
+    def test_chat_delegates_phone_goal_to_existing_llm_and_deduplicates(self):
+        goal = '用微信给张三发消息，内容是明天下午回老家'
+        model = AsyncMock(side_effect=[
+            {'role': 'assistant', 'content': None, 'tool_calls': [
+                {'id': 'phone-call', 'type': 'function', 'function': {
+                    'name': 'start_phone_task', 'arguments': json.dumps({'goal': goal}, ensure_ascii=False)}}]},
+            {'role': 'assistant', 'content': '手机任务已启动，完成后通知你。'},
+        ])
+        started = AsyncMock(return_value={'ok': True, 'task_id': 'a'*64, 'state': 'running',
+                                          'business_confirmed': False, 'summary': '手机任务已启动'})
+        payload = {'messages': [{'role': 'user', 'content': goal}], 'client_message_id': 'phone-agent-stable-request'}
+        with patch.object(main, 'deepseek', model), patch.object(main.phone_agent, 'start', started):
+            first = self.client.post('/v1/chat', headers=self.headers, json=payload)
+            retry = self.client.post('/v1/chat', headers=self.headers, json=payload)
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(first.json(), retry.json())
+        self.assertEqual(started.await_count, 1)
+        self.assertEqual(started.call_args.args[0], goal)
+        self.assertEqual(len(started.call_args.args[1]), 64)
+        self.assertIn(goal, started.call_args.args[2])
+        self.assertIs(started.call_args.args[3], model)
+        self.assertFalse(first.json()['tool_results'][0]['result']['business_confirmed'])
+        names = {t['function']['name'] for t in model.call_args_list[0].args[1]}
+        self.assertIn('start_phone_task', names)
+        self.assertIn('get_phone_task', names)
+
+    def test_phone_task_http_api_requires_admin(self):
+        with patch.dict('os.environ', {'PHONE_CONTROL_ADMIN_TOKEN': 'a'*32}):
+            started = AsyncMock(return_value={'ok': True, 'state': 'running', 'task_id': 'b'*32})
+            with patch.object(main.phone_agent, 'start', started):
+                body = {'id': 'b'*32, 'goal': '打开微信'}
+                url = '/v1/phone-control/tasks'
+                self.assertEqual(self.client.post(url, json=body).status_code, 401)
+                self.assertEqual(self.client.post(url, headers=self.headers, json=body).status_code, 401)
+                result = self.client.post(url, headers={'Authorization': 'Bearer '+'a'*32}, json=body)
+                self.assertEqual(result.json()['state'], 'running')
+                self.assertEqual(started.await_count, 1)
+
+    def test_phone_task_trace_http_api_requires_admin_and_valid_pagination(self):
+        with patch.dict('os.environ', {'PHONE_CONTROL_ADMIN_TOKEN': 'a'*32}):
+            exported = {'ok': True, 'task_id': 'a'*32, 'events': [], 'has_more': False}
+            with patch.object(main.phone_agent, 'trace', return_value=exported) as trace:
+                url = '/v1/phone-control/tasks/'+'a'*32+'/trace'
+                self.assertEqual(self.client.get(url).status_code, 401)
+                self.assertEqual(self.client.get(url, headers=self.headers).status_code, 401)
+                admin = {'Authorization': 'Bearer '+'a'*32}
+                self.assertEqual(self.client.get(url+'?limit=1001', headers=admin).status_code, 422)
+                self.assertEqual(self.client.get(url+'?after_seq=-1', headers=admin).status_code, 422)
+                result = self.client.get(url+'?after_seq=10&limit=20&through_seq=99', headers=admin)
+                self.assertEqual(result.json(), exported)
+                trace.assert_called_once_with('a'*32, 10, 20, 99)
+
     def test_repeated_scheduler_persists_one_message_and_push(self):
         self.due_reminder()
         main.fire_due_reminders()
