@@ -1,12 +1,15 @@
 """Model-controlled phone tasks; no real LLM, ADB or HID traffic."""
 import asyncio
 import json
+import time
 from unittest.mock import AsyncMock
 
 import pytest
 
 from server.app import phone_agent as agent
 from server.app.phone_input import typing_units
+
+ELEMENT = {'element_id': 'b'*32, 'result_id': 'b'*32, 'label': '可见按钮', 'expires_at': time.time()+3600}
 
 ORIGINAL_POLL = agent.PhoneExecutor.poll
 
@@ -26,7 +29,7 @@ def configured(monkeypatch, tmp_path):
     async def vision(method, path, payload=None):
         if path == '/observe':
             return {'description': '当前有弹窗，关闭后才能继续', 'visible_text': ['关闭'], 'controls': ['右上角关闭'],
-                    'keyboard_visible': False, 'focus': 'any.app/Page'}
+                    'keyboard_visible': False, 'focus': 'any.app/Page', 'elements': [ELEMENT]}
         if path == '/locate':
             return {'found': True, 'result_id': 'a'*32}
         if path == '/click':
@@ -65,7 +68,7 @@ def test_model_chooses_next_action_from_observation(configured):
             else:
                 data = json.loads(last['content'])
                 if 'description' in data and '弹窗' in data['description']:
-                    answer = call('click_element', target='右上角关闭弹窗按钮', expected_after='弹窗已关闭')
+                    answer = call('click_element', element_id=ELEMENT['element_id'], expected_after='弹窗已关闭')
                 elif data.get('postcondition_matched'):
                     answer = call('observe_screen', objective='检查关闭结果')
                     # Vary the observed page; the model's next action must depend on it.
@@ -116,7 +119,7 @@ def test_unknown_click_stops_without_another_model_decision(configured):
         return await original(method, path, payload)
     configured.side_effect = vision
     model = AsyncMock(side_effect=[call('observe_screen', objective='查看界面'),
-                                   call('click_element', target='发送', expected_after='新消息气泡可见')])
+                                   call('click_element', element_id=ELEMENT['element_id'], expected_after='新消息气泡可见')])
     async def run():
         started = await agent.start('发送指定消息', 'd'*64, '原始目标', model)
         result = await await_worker(started['task_id'])
@@ -150,7 +153,7 @@ def test_chinese_typing_primitive_is_independent_of_app(configured, monkeypatch)
 
 def test_missing_observation_blocks_input(configured):
     async def run():
-        model = AsyncMock(return_value=call('click_element', target='按钮', expected_after='下一页'))
+        model = AsyncMock(return_value=call('click_element', element_id=ELEMENT['element_id'], expected_after='下一页'))
         started = await agent.start('操作手机', 'f'*64, '原始任务', model)
         result = await await_worker(started['task_id'])
         assert result['state'] == 'stopped'
@@ -182,7 +185,7 @@ def test_finish_requires_visual_evidence(configured):
 def test_complete_trace_has_step_spans_evidence_and_timings(configured):
     model = AsyncMock(side_effect=[
         call('observe_screen', objective='检查当前页面', decision_summary='先确认实际页面'),
-        call('click_element', target='关闭按钮', expected_after='弹窗消失', decision_summary='弹窗遮挡入口，先关闭'),
+        call('click_element', element_id=ELEMENT['element_id'], expected_after='弹窗消失', decision_summary='弹窗遮挡入口，先关闭'),
         call('finish_task', evidence='目标页面可见', summary='已完成'),
     ])
     async def run():
@@ -330,4 +333,61 @@ def test_observation_retries_are_bounded_and_invalidate_evidence(configured):
                 executor.require_observation()
         with pytest.raises(agent.Stopped, match='连续3次'):
             await executor.observe('查看页面')
+    asyncio.run(run())
+
+
+def test_find_app_from_another_app_via_launcher(configured, monkeypatch):
+    observations = iter([
+        {'description': '设置页面', 'visible_text': ['设置'], 'controls': []},
+        {'description': '桌面', 'visible_text': ['微信'], 'controls': ['微信图标'], 'elements': [ELEMENT]},
+        {'description': '微信首页', 'visible_text': ['微信', '通讯录'], 'controls': ['通讯录']},
+    ])
+    original = configured.side_effect
+    async def vision(method, path, payload=None):
+        if path == '/observe':
+            return next(observations)
+        return await original(method, path, payload)
+    configured.side_effect = vision
+    keys = []
+    monkeypatch.setattr(agent.pc, 'enqueue', lambda request: keys.append(request.action.model_dump()))
+    monkeypatch.setattr(agent.pc, 'command_status', lambda _: {'state': 'succeeded'})
+    async def model(messages, tools):
+        data = json.loads(messages[-1]['content']) if messages[-1]['role'] == 'tool' else {}
+        if data.get('description') == '设置页面':
+            return call('press_key', key='HOME', expected_after='桌面可见')
+        if data.get('description') == '桌面':
+            return call('click_element', element_id=ELEMENT['element_id'], expected_after='微信首页可见')
+        if data.get('description') == '微信首页':
+            return call('finish_task', evidence='微信首页可见', summary='已打开微信')
+        return call('observe_screen', objective='查看当前页面与应用图标')
+    async def run():
+        started = await agent.start('打开微信', 'c'*64, '打开微信', model)
+        result = await await_worker(started['task_id'])
+        assert result['state'] == 'succeeded'
+        assert keys == [{'type': 'key', 'usage': 40, 'modifiers': 8}]
+        assert sum(c.args[1] == '/click' for c in configured.call_args_list) == 1
+    asyncio.run(run())
+
+
+def test_click_uses_observed_element_and_invalidates_map(configured):
+    async def run():
+        with agent.db() as db:
+            db.execute('INSERT INTO phone_agent_task VALUES(?,?,?,?,?,?,?)',
+                       ('9'*64, '点击按钮', '', 'running', '', 1, 1))
+        executor = agent.PhoneExecutor('9'*64)
+        await executor.observe('查看按钮')
+        for element_id in ['0'*32, ELEMENT['element_id']]:
+            if element_id == ELEMENT['element_id']:
+                executor.elements[element_id] = {**ELEMENT, 'expires_at': 0}
+            with pytest.raises(ValueError, match='最新画面或已过期'):
+                await executor.click_observed(element_id)
+        assert not any(c.args[1] in ('/locate', '/click') for c in configured.call_args_list)
+        await executor.observe('重新查看按钮')
+        await executor.click_observed(ELEMENT['element_id'])
+        assert not any(c.args[1] == '/locate' for c in configured.call_args_list)
+        post = next(c for c in configured.call_args_list if c.args[1] == '/click')
+        assert post.args[2]['result_id'] == ELEMENT['result_id']
+        assert executor.elements == {}
+        with pytest.raises(ValueError, match='必须先调用observe_screen'):
+            await executor.click_observed(ELEMENT['element_id'])
     asyncio.run(run())
