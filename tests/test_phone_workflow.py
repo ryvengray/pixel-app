@@ -293,3 +293,41 @@ def test_receipt_logs_progress_changes_without_repeating_identical_polls(configu
     assert len(receipts) == 3
     assert all(e['data']['action_id'] == 'click-123' for e in receipts)
     assert receipts[1]['data']['result']['message'] == '正在移动到目标'
+
+
+def test_read_only_observation_failure_can_recover(configured):
+    from fastapi import HTTPException
+    async def run():
+        configured.side_effect = [HTTPException(502, '模型没有返回有效画面描述'),
+                                  {'description': '桌面可见微信', 'controls': ['微信']},
+                                  {'matched': True, 'reason': '桌面可见'}]
+        model = AsyncMock(side_effect=[call('observe_screen', objective='查看当前页面'),
+                                       call('observe_screen', objective='描述可见图标'),
+                                       call('finish_task', evidence='桌面可见', summary='已查看桌面')])
+        started = await agent.start('查看桌面', 'f'*64, '查看桌面', model)
+        result = await await_worker(started['task_id'])
+        assert result['state'] == 'succeeded'
+        responses = [e['data']['result'] for e in agent.trace(started['task_id'], limit=1000)['events']
+                     if e['kind'] == 'tool_result']
+        assert responses[0]['ok'] is False and responses[0]['retryable'] is True
+        assert not any(e['kind'] in ('click_intent', 'keyboard_intent')
+                       for e in agent.trace(started['task_id'], limit=1000)['events'])
+    asyncio.run(run())
+
+
+def test_observation_retries_are_bounded_and_invalidate_evidence(configured):
+    from fastapi import HTTPException
+    async def run():
+        with agent.db() as db:
+            db.execute('INSERT INTO phone_agent_task VALUES(?,?,?,?,?,?,?)',
+                       ('e'*64, '查看页面', '', 'running', '', 1, 1))
+        executor = agent.PhoneExecutor('e'*64)
+        executor.observed_at = __import__('time').monotonic()
+        configured.side_effect = HTTPException(502, 'invalid observation')
+        for _ in range(2):
+            assert (await executor.observe('查看页面'))['ok'] is False
+            with pytest.raises(ValueError):
+                executor.require_observation()
+        with pytest.raises(agent.Stopped, match='连续3次'):
+            await executor.observe('查看页面')
+    asyncio.run(run())
