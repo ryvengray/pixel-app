@@ -168,6 +168,7 @@ def test_observation_is_read_only_fresh_evidence(monkeypatch, valid):
         async def post(self, url, json):
             assert json['format'] == vision.OBSERVATION_SCHEMA
             data = {'description': '主页有弹窗', 'visible_text': ['关闭'], 'controls': ['关闭按钮'],
+                    'elements': [{'label': '关闭', 'box': [100, 200, 300, 400]}],
                     'keyboard_visible': False if valid else 'false'}
             return httpx.Response(200, json={'message': {'content': __import__('json').dumps(data)}},
                                   request=httpx.Request('POST', url))
@@ -179,4 +180,12 @@ def test_observation_is_read_only_fresh_evidence(monkeypatch, valid):
         if valid:
             assert result.json()['input_executed'] is False
             assert result.json()['description'] == '主页有弹窗'
-    assert captures == [True]
+            element = result.json()['elements'][0]
+            assert element['bounds'] == [10, 40, 30, 80]
+            assert element['version'] == result.json()['version']
+            assert vision.located_results[element['result_id']]['raw'].startswith(b'\x89PNG')
+            old_id = element['element_id']
+            next_result = client.post('/observe', headers=A, json={'objective': '查找微信'}).json()
+            assert next_result['elements'][0]['element_id'] != old_id
+            assert old_id not in vision.located_results
+    assert captures == ([True, True] if valid else [True])
