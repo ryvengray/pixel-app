@@ -166,6 +166,7 @@ def test_observation_is_read_only_fresh_evidence(monkeypatch, valid):
         async def __aenter__(self): return self
         async def __aexit__(self, *args): pass
         async def post(self, url, json):
+            assert json['format'] == vision.OBSERVATION_SCHEMA
             data = {'description': '主页有弹窗', 'visible_text': ['关闭'], 'controls': ['关闭按钮'],
                     'keyboard_visible': False if valid else 'false'}
             return httpx.Response(200, json={'message': {'content': __import__('json').dumps(data)}},
