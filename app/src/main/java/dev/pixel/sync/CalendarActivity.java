@@ -49,7 +49,14 @@ public final class CalendarActivity extends Activity {
     }catch(Exception e){error(e);}}
     private void showDay(LocalDate d,boolean cycle)throws Exception{
         JSONArray events=store.events(d,d);for(int i=0;i<events.length();i++){JSONObject e=events.getJSONObject(i);entry(eventTitle(e),e.optBoolean("completed")?"已完成":"今天",CalendarDates.repeatLabel(e)+(e.optString("note").isEmpty()?"":" · "+e.optString("note")),()->eventEditor(e));}
-        if(cycle){boolean actual=false;for(JSONObject r:store.cycles()){LocalDate a=LocalDate.parse(r.getString("start")),b=LocalDate.parse(r.optString("end",LocalDate.now().toString()));if(!d.isBefore(a)&&!d.isAfter(b)){actual=true;entry("大姨妈第"+(CalendarDates.days(a,d)+1)+"天","已记录",r.optString("note"),()->cycleEditor(r));}}
+        if(cycle){boolean actual=false;LocalDate today=LocalDate.now();
+            for(JSONObject r:store.cycles()){
+                LocalDate start=LocalDate.parse(r.getString("start"));
+                if(!d.isAfter(today)&&!d.isBefore(start)&&!d.isAfter(CalendarDates.cycleEnd(r))){
+                    actual=true;
+                    entry("大姨妈第"+(CalendarDates.days(start,d)+1)+"天","已记录",r.optString("note"),()->cycleEditor(r));
+                }
+            }
             JSONObject p=store.prediction();if(!actual&&p.optBoolean("available")&&!d.isBefore(LocalDate.parse(p.getString("next_start")))&&!d.isAfter(LocalDate.parse(p.getString("next_end"))))entry("预计大姨妈","预计","尚未记录本次开始",this::cycleSettings);
             if(!actual&&p.has("ovulation")&&d.toString().equals(p.optString("ovulation")))entry("预计排卵日","预计","仅为日期估算，不能作为避孕依据",this::cycleSettings);else if(!actual&&p.has("fertile_start")&&!d.isBefore(LocalDate.parse(p.getString("fertile_start")))&&!d.isAfter(LocalDate.parse(p.getString("fertile_end"))))entry("预计易孕期","预计","仅为日期估算，不能作为避孕依据",this::cycleSettings);}
     }
@@ -114,7 +121,19 @@ public final class CalendarActivity extends Activity {
     }catch(Exception ex){error(ex);}}
     private void lunarPicker(LocalDate[] date,TextView label){CalendarDates.Lunar lunar=CalendarDates.lunar(date[0]);LinearLayout panel=new LinearLayout(this);panel.setOrientation(1);panel.setPadding(dp(20),dp(10),dp(20),dp(10));TextView desc=text("选择农历月日，年份沿用已选日期的公历年",13);panel.addView(desc);LinearLayout pickers=row();NumberPicker m=new NumberPicker(this),d=new NumberPicker(this);m.setMinValue(1);m.setMaxValue(12);m.setValue(lunar.month);d.setMinValue(1);d.setMaxValue(30);d.setValue(lunar.day);pickers.addView(m,new LinearLayout.LayoutParams(0,-2,1));pickers.addView(d,new LinearLayout.LayoutParams(0,-2,1));panel.addView(pickers);Switch leap=toggle(panel,"闰月",lunar.leap);AlertDialog dialog=new AlertDialog.Builder(this).setTitle("农历日期").setView(panel).setPositiveButton("确定",null).setNegativeButton("取消",null).create();dialog.setOnShowListener(v->dialog.getButton(-1).setOnClickListener(x->{LocalDate found=m.getValue()==lunar.month&&d.getValue()==lunar.day&&leap.isChecked()==lunar.leap?date[0]:CalendarDates.lunarInYear(date[0].getYear(),m.getValue(),d.getValue(),leap.isChecked(),"skip");if(found==null){Toast.makeText(this,"该公历年没有这个农历日期，请调整年份或日期",Toast.LENGTH_LONG).show();return;}date[0]=found;label.setText(found+" · 农历"+CalendarDates.lunar(found).label());dialog.dismiss();}));dialog.show();}
     private void cycleEditor(JSONObject original){try{
-        JSONObject e=original==null?new JSONObject():new JSONObject(original.toString());LinearLayout form=sheet("记录大姨妈");LocalDate[] start={LocalDate.parse(e.optString("start",selected.isAfter(LocalDate.now())?LocalDate.now().toString():selected.toString()))},end={LocalDate.parse(e.optString("end",LocalDate.now().toString()))};dateField(form,"实际开始日期",start);Switch ended=toggle(form,"本次已经结束",e.has("end"));dateField(form,"实际结束日期（未结束时不会保存）",end);EditText note=field(form,"备注／身体感受",e.optString("note"),android.text.InputType.TYPE_CLASS_TEXT);
+        JSONObject e=original==null?new JSONObject():original;
+        LinearLayout form=sheet("记录大姨妈");
+        LocalDate today=LocalDate.now();
+        LocalDate[] start={LocalDate.parse(e.optString("start",(selected.isAfter(today)?today:selected).toString()))};
+        LocalDate defaultEnd=original==null?today:CalendarDates.cycleEnd(e);
+        LocalDate[] end={defaultEnd.isAfter(today)?today:defaultEnd};
+        dateField(form,"实际开始日期",start);
+        Switch ended=toggle(form,"本次已经结束",!e.optString("end").isEmpty());
+        dateField(form,"实际结束日期",end);
+        TextView autoEnd=text("未填写实际结束日期时，按 "+CalendarDates.DEFAULT_CYCLE_DURATION+" 天自动结束。",13);
+        autoEnd.setTextColor(muted);
+        form.addView(autoEnd);
+        EditText note=field(form,"备注／身体感受",e.optString("note"),android.text.InputType.TYPE_CLASS_TEXT);
         saveButton(form,()->{try{JSONObject change=new JSONObject().put("start",start[0].toString()).put("end",ended.isChecked()?end[0].toString():JSONObject.NULL).put("note",note.getText().toString());if(e.has("id"))change.put("id",e.getString("id")).put("expected_revision",e.getInt("revision"));saved(store.write("cycle",change,UUID.randomUUID().toString()));}catch(Exception ex){error(ex);}});deleteButton(form,e,"cycle");showSheet(form);
     }catch(Exception ex){error(ex);}}
     private void cycleSettings(){try{
@@ -124,7 +143,22 @@ public final class CalendarActivity extends Activity {
         saveButton(form,()->{try{JSONObject change=new JSONObject().put("id","cycle-settings").put("expected_revision",old.optInt("revision")).put("enabled",enabled.isChecked()).put("adaptive",adaptive.isChecked()).put("remind",remind.isChecked()).put("remind_days",Integer.parseInt(ahead.getText().toString())).put("remind_time",time.getText().toString().trim()).put("timezone",zone.getText().toString().trim()).put("follow_timezone",followZone.isChecked()).put("ai_access",ai.isChecked());if(!length.getText().toString().isEmpty())change.put("cycle_days",Integer.parseInt(length.getText().toString()));if(!duration.getText().toString().isEmpty())change.put("duration",Integer.parseInt(duration.getText().toString()));JSONObject result=store.configure(change,empty&&enabled.isChecked()?first[0].toString():null,enabled.isChecked(),UUID.randomUUID().toString());if(remind.isChecked())notificationPermission();saved(result);}catch(Exception ex){error(ex);}});
         TextView history=text("查看／修正历史记录 ›",14);history.setPadding(0,dp(18),0,0);history.setOnClickListener(v->cycleHistory());form.addView(history);showSheet(form);
     }catch(Exception ex){error(ex);}}
-    private void cycleHistory(){try{java.util.List<JSONObject> records=store.cycles();Collections.reverse(records);String[] labels=new String[records.size()];for(int i=0;i<labels.length;i++)labels[i]=records.get(i).optString("start")+" → "+records.get(i).optString("end","尚未记录结束");new AlertDialog.Builder(this).setTitle("大姨妈实际记录").setItems(labels,(d,n)->cycleEditor(records.get(n))).setNegativeButton("关闭",null).show();}catch(Exception e){error(e);}}
+    private void cycleHistory(){try{
+        java.util.List<JSONObject> records=store.cycles();
+        Collections.reverse(records);
+        String[] labels=new String[records.size()];
+        LocalDate today=LocalDate.now();
+        for(int i=0;i<labels.length;i++){
+            JSONObject record=records.get(i);
+            String end=record.optString("end");
+            if(end.isEmpty()){
+                LocalDate automaticEnd=CalendarDates.cycleEnd(record);
+                end=today.isAfter(automaticEnd)?automaticEnd+"（自动结束）":"进行中";
+            }
+            labels[i]=record.optString("start")+" → "+end;
+        }
+        new AlertDialog.Builder(this).setTitle("大姨妈实际记录").setItems(labels,(d,n)->cycleEditor(records.get(n))).setNegativeButton("关闭",null).show();
+    }catch(Exception e){error(e);}}
     private void deleteButton(LinearLayout form,JSONObject e,String kind){if(!e.has("id"))return;TextView delete=text("删除这条记录",13);delete.setTextColor(muted);delete.setPadding(0,dp(22),0,0);delete.setOnClickListener(v->{try{saved(store.write(kind,new JSONObject().put("id",e.getString("id")).put("expected_revision",e.getInt("revision")).put("deleted",true),UUID.randomUUID().toString()));}catch(Exception ex){error(ex);}});form.addView(delete);}
     private void notificationPermission(){if(android.os.Build.VERSION.SDK_INT>=33&&checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)!=android.content.pm.PackageManager.PERMISSION_GRANTED)requestPermissions(new String[]{android.Manifest.permission.POST_NOTIFICATIONS},84);}
     public void onRequestPermissionsResult(int code,String[] permissions,int[] results){super.onRequestPermissionsResult(code,permissions,results);if(code==84)CalendarUpdates.changed(this);}

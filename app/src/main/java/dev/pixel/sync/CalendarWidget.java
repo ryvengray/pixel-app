@@ -6,10 +6,17 @@ import android.content.*;
 import android.content.res.Configuration;
 import android.graphics.*;
 import android.os.Bundle;
+import android.text.SpannableString;
+import android.text.style.ForegroundColorSpan;
+import android.text.style.RelativeSizeSpan;
+import android.text.style.StyleSpan;
 import android.view.View;
 import android.widget.RemoteViews;
 import org.json.*;
 import java.time.*;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
 import java.util.concurrent.Executors;
 
 public class CalendarWidget extends AppWidgetProvider {
@@ -55,11 +62,21 @@ public class CalendarWidget extends AppWidgetProvider {
             RemoteViews view=build(c,id,store,mode(c,id),AppWidgetManager.getInstance(c).getAppWidgetOptions(id));AppWidgetManager.getInstance(c).updateAppWidget(id,view);
         }catch(Exception error){android.util.Log.w("GretaCalendar","Widget update failed: "+error.getClass().getSimpleName());}
     }
-    // Leave a scrollable task area even on a six-week month or a short widget.
-    static int gridHeight(YearMonth month,int height){int rows=(month.atDay(1).getDayOfWeek().getValue()-1+month.lengthOfMonth()+6)/7;return Math.min(24+rows*44,Math.max(24+rows*28,height-94-64));}
+    static int gridHeight(YearMonth month,int height){
+        int rows=(month.atDay(1).getDayOfWeek().getValue()-1+month.lengthOfMonth()+6)/7;
+        int headerHeight=24;
+        int surroundingHeight=86; // Widget padding, month controls and lunar summary.
+        int listHeight=52; // Leave space for the list even with launcher insets.
+        int available=height-surroundingHeight-listHeight;
+        return Math.min(headerHeight+rows*48,Math.max(headerHeight+rows*28,available));
+    }
     static RemoteViews build(Context c,int id,CalendarStore store,String mode,Bundle options)throws Exception{
         android.content.SharedPreferences p=prefs(c,id);int theme=p.getInt("theme",c.getSharedPreferences("home",0).getInt("theme",0));boolean dark=theme==2||(theme==0&&(c.getResources().getConfiguration().uiMode&Configuration.UI_MODE_NIGHT_MASK)==Configuration.UI_MODE_NIGHT_YES);boolean show=p.getBoolean("cycle",false);JSONObject prediction=store.prediction();int ink=dark?0xFFE7F0EC:0xFF243F37,muted=dark?0xFFA8BDB8:0xFF61776F;
-        YearMonth month=YearMonth.now().plusMonths(p.getInt("offset",0));RemoteViews v=new RemoteViews(c.getPackageName(),R.layout.calendar_widget);v.setInt(R.id.calendar_widget_root,"setBackgroundResource",dark?R.drawable.calendar_widget_dark:R.drawable.calendar_widget_light);v.setTextViewText(R.id.widget_month,typography(c,month.getMonthValue()+"月 "+month.getYear()));
+        LocalDate today=LocalDate.now();
+        YearMonth month=YearMonth.from(today).plusMonths(p.getInt("offset",0));
+        RemoteViews v=new RemoteViews(c.getPackageName(),R.layout.calendar_widget);
+        v.setInt(R.id.calendar_widget_root,"setBackgroundResource",dark?R.drawable.calendar_widget_dark:R.drawable.calendar_widget_light);
+        v.setTextViewText(R.id.widget_month,typography(c,datedText(month.getMonthValue()+"月","  ",String.valueOf(month.getYear()),muted)));
         for(int view:new int[]{R.id.widget_month,R.id.widget_prev,R.id.widget_next,R.id.widget_cycle,R.id.widget_add})v.setTextColor(view,ink);v.setTextColor(R.id.widget_summary,muted);
         v.setOnClickPendingIntent(R.id.widget_prev,action(c,id,"prev"));v.setOnClickPendingIntent(R.id.widget_next,action(c,id,"next"));if(!show&&!store.settings().optBoolean("enabled")&&store.cycles().isEmpty()){
             Intent setup=new Intent(c,CalendarActivity.class).setData(android.net.Uri.parse("greta-calendar://cycle-setup/"+id)).putExtra("cycle_setup",true);
@@ -68,7 +85,7 @@ public class CalendarWidget extends AppWidgetProvider {
         v.setViewVisibility(R.id.widget_header,"countdown".equals(mode)?View.GONE:View.VISIBLE);v.setViewVisibility(R.id.widget_summary,"calendar".equals(mode)?View.VISIBLE:View.GONE);v.setInt(R.id.calendar_widget_root,"setGravity","countdown".equals(mode)?android.view.Gravity.CENTER_VERTICAL:android.view.Gravity.TOP);
         v.setViewVisibility(R.id.widget_calendar_frame,"calendar".equals(mode)?View.VISIBLE:View.GONE);v.setViewVisibility(R.id.widget_prev,"calendar".equals(mode)?View.VISIBLE:View.GONE);v.setViewVisibility(R.id.widget_next,"calendar".equals(mode)?View.VISIBLE:View.GONE);
         if("calendar".equals(mode)){
-            CalendarMonthView grid=new CalendarMonthView(c);grid.forWidget();grid.bind(month,LocalDate.now(),dark,show,store,null);int rows=(month.atDay(1).getDayOfWeek().getValue()-1+month.lengthOfMonth()+6)/7;int width=Math.max(200,Math.min(700,options.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH,350)-28));int gridHeight=gridHeight(month,options.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT,400));v.setViewLayoutHeight(R.id.widget_calendar_frame,gridHeight,android.util.TypedValue.COMPLEX_UNIT_DIP);
+            CalendarMonthView grid=new CalendarMonthView(c);grid.forWidget();grid.bind(month,today,dark,show,store,null);int rows=(month.atDay(1).getDayOfWeek().getValue()-1+month.lengthOfMonth()+6)/7;int width=Math.max(200,Math.min(700,options.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH,350)-28));int gridHeight=gridHeight(month,options.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT,400));v.setViewLayoutHeight(R.id.widget_calendar_frame,gridHeight,android.util.TypedValue.COMPLEX_UNIT_DIP);
             // Widget options are dp; render at physical resolution so the launcher never
             // has to enlarge a low-resolution month image on high-density phones.
             android.util.DisplayMetrics metrics=c.getResources().getDisplayMetrics();
@@ -82,7 +99,7 @@ public class CalendarWidget extends AppWidgetProvider {
             for(int row=0;row<rows;row++){RemoteViews week=new RemoteViews(c.getPackageName(),R.layout.calendar_widget_row);for(int col=0;col<7;col++){LocalDate d=first.plusDays(row*7+col);RemoteViews day=new RemoteViews(c.getPackageName(),R.layout.calendar_widget_day);int phase=grid.phase(d);String phaseLabel=phase==1?"，已记录大姨妈":phase==2?"，预计大姨妈":phase==4?"，预计排卵日":phase==3?"，预计易孕期":"";day.setContentDescription(R.id.widget_day,d+"，农历"+CalendarDates.lunar(d).label()+phaseLabel);day.setOnClickPendingIntent(R.id.widget_day,open(c,id,d.toString(),"",false));week.addView(R.id.widget_week,day);}v.addView(R.id.widget_calendar_hits,week);}
         }
         RemoteViews.RemoteCollectionItems.Builder items=new RemoteViews.RemoteCollectionItems.Builder().setHasStableIds(true).setViewTypeCount(1);
-        int count=0;JSONArray events=store.upcoming(LocalDate.now(),LocalDate.now().plusYears(1));
+        int count=0;
         if("countdown".equals(mode)){
             String chosen=p.getString("event","");JSONObject item=chosen.isEmpty()?null:store.get(chosen);
             if(item!=null&&!item.optBoolean("deleted")){
@@ -94,24 +111,50 @@ public class CalendarWidget extends AppWidgetProvider {
                 }
             }v.setViewVisibility(R.id.widget_cycle,View.GONE);
         }else{
-            for(int n=0;n<Math.min(events.length(),100);n++){
-                JSONObject e=events.getJSONObject(n);long days=e.getLong("days_until");String when=days==0?"今天":days<0?"已逾期"+(-days)+"天":days+"天后";
-                items.addItem(stableId(e.getString("id")),widgetRow(c,e,e.getString("title")+"  ·  "+when+"\n"+e.getString("occurrence")+" · "+CalendarDates.repeatLabel(e),ink,LocalDate.parse(e.getString("occurrence")),false));count++;
-            }
+            JSONArray events=store.upcoming(today,today.plusYears(1));
+            List<JSONObject> entries=new ArrayList<>();
             if(show&&prediction.optBoolean("available")){
-                LocalDate due=LocalDate.parse(prediction.getString("next_start"));long days=CalendarDates.days(LocalDate.now(),due);
-                JSONObject period=new JSONObject().put("id","");items.addItem(Long.MIN_VALUE,widgetRow(c,period,"大姨妈 · "+(days<0?"尚未记录本次开始":"预计"+days+"天后")+"\n仅为日期估算，供记录参考",ink,due,false));count++;
+                LocalDate due=LocalDate.parse(prediction.getString("next_start"));
+                long days=CalendarDates.days(today,due);
+                if(days>=0&&days<=2){
+                    entries.add(new JSONObject().put("id","").put("occurrence",due.toString()).put("days_until",days));
+                }
+            }
+            for(int n=0;n<events.length();n++)entries.add(events.getJSONObject(n));
+            // Upcoming dates come first, then overdue dates from newest to oldest.
+            entries.sort(Comparator.comparing((JSONObject e)->e.optLong("days_until")<0)
+                .thenComparingLong(e->Math.abs(e.optLong("days_until"))));
+            for(JSONObject e:entries){
+                if(count==100)break;
+                String entryId=e.getString("id");
+                boolean period=entryId.isEmpty();
+                long days=e.getLong("days_until");
+                String when=days==0?"今天":days<0?"已逾期"+(-days)+"天":days+"天后";
+                LocalDate date=LocalDate.parse(e.getString("occurrence"));
+                String title=period?"大姨妈 · 预计"+when:e.getString("title")+"  ·  "+when;
+                String detail=date+" · "+(period?"仅供参考":CalendarDates.repeatLabel(e));
+                items.addItem(period?Long.MIN_VALUE:stableId(entryId),widgetRow(c,e,datedText(title,"\n",detail,muted),ink,date,false));
+                count++;
             }
         }
         if(count==0){RemoteViews empty=new RemoteViews(c.getPackageName(),R.layout.calendar_widget_event);empty.setViewVisibility(R.id.widget_event_complete,View.GONE);empty.setTextViewText(R.id.widget_event,"countdown".equals(mode)?"长按组件，选择要展示的纪念日":"没有待办事项 · 点击添加日期");empty.setTextColor(R.id.widget_event,muted);empty.setOnClickFillInIntent(R.id.widget_event,new Intent().putExtra("action","open").putExtra("date",LocalDate.now().toString()).putExtra("add",true));items.addItem(0,empty);}
         v.setPendingIntentTemplate(R.id.widget_events,collectionAction(c,id));v.setRemoteAdapter(R.id.widget_events,items.build());
-        String summary="Greta · 农历"+CalendarDates.lunar(LocalDate.now()).label();if(show&&prediction.optBoolean("available")){long days=CalendarDates.days(LocalDate.now(),LocalDate.parse(prediction.getString("next_start")));summary=days<0?"大姨妈预计日期已过 · 尚未记录本次开始":"大姨妈预计 "+days+" 天后 · 仅供参考";}v.setTextViewText(R.id.widget_summary,typography(c,summary));return v;
+        v.setTextViewText(R.id.widget_summary,typography(c,"Greta · 农历"+CalendarDates.lunar(today).label()));
+        return v;
     }
     private static long stableId(String id){long hash=0xcbf29ce484222325L;for(int i=0;i<id.length();i++){hash^=id.charAt(i);hash*=0x100000001b3L;}return hash;}
     private static CharSequence typography(Context c,CharSequence text){if(c.getSharedPreferences("home",0).getInt("font",0)!=1)return text;android.text.SpannableString value=new android.text.SpannableString(text);value.setSpan(new android.text.style.TypefaceSpan("serif"),0,value.length(),0);return value;}
-    static RemoteViews widgetRow(Context c,JSONObject e,String text,int ink,LocalDate date,boolean countdown)throws Exception{
+    private static CharSequence datedText(String title,String separator,String detail,int muted){
+        SpannableString text=new SpannableString(title+separator+detail);
+        int detailStart=title.length()+separator.length();
+        text.setSpan(new StyleSpan(Typeface.BOLD),0,title.length(),0);
+        text.setSpan(new RelativeSizeSpan(.82f),detailStart,text.length(),0);
+        text.setSpan(new ForegroundColorSpan(muted),detailStart,text.length(),0);
+        return text;
+    }
+    static RemoteViews widgetRow(Context c,JSONObject e,CharSequence text,int ink,LocalDate date,boolean countdown)throws Exception{
         RemoteViews row=new RemoteViews(c.getPackageName(),R.layout.calendar_widget_event);CharSequence styled=text;
-        if(countdown){android.text.SpannableString span=new android.text.SpannableString(text);int split=text.indexOf('\n');if(split>0){span.setSpan(new android.text.style.AbsoluteSizeSpan(40,true),0,split,0);span.setSpan(new android.text.style.AbsoluteSizeSpan(14,true),split,text.length(),0);}styled=span;row.setInt(R.id.widget_event,"setGravity",android.view.Gravity.CENTER);}
+        if(countdown){android.text.SpannableString span=new android.text.SpannableString(text);int split=text.toString().indexOf('\n');if(split>0){span.setSpan(new android.text.style.AbsoluteSizeSpan(40,true),0,split,0);span.setSpan(new android.text.style.AbsoluteSizeSpan(14,true),split,text.length(),0);}styled=span;row.setInt(R.id.widget_event,"setGravity",android.view.Gravity.CENTER);}
         row.setTextViewText(R.id.widget_event,typography(c,styled));row.setTextColor(R.id.widget_event,ink);
         row.setOnClickFillInIntent(R.id.widget_event,new Intent().putExtra("action","open").putExtra("date",date.toString()).putExtra("item",e.optString("id")));
         boolean todo=CalendarDates.todo(e)&&!e.optBoolean("completed");row.setViewVisibility(R.id.widget_event_complete,todo?View.VISIBLE:View.GONE);

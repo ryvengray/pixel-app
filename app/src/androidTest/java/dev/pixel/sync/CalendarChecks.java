@@ -114,10 +114,76 @@ final class CalendarChecks {
                         options.putInt(android.appwidget.AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT,mode.equals("calendar")?360:mode.equals("agenda")?120:140);
                         android.appwidget.AppWidgetHostView frame=new android.appwidget.AppWidgetHostView(context);android.appwidget.AppWidgetProviderInfo info=android.appwidget.AppWidgetManager.getInstance(context).getInstalledProviders().stream().filter(provider->provider.provider.equals(new ComponentName(context,CalendarWidget.class))).findFirst().get();frame.setAppWidget(widget,info);View view=CalendarWidget.build(context,widget,isolated,mode,options).apply(context,frame);frame.addView(view);
                         float density=context.getResources().getDisplayMetrics().density;int width=Math.round(300*density),height=Math.round((mode.equals("calendar")?360:mode.equals("agenda")?120:140)*density);frame.measure(View.MeasureSpec.makeMeasureSpec(width,View.MeasureSpec.EXACTLY),View.MeasureSpec.makeMeasureSpec(height,View.MeasureSpec.EXACTLY));frame.layout(0,0,width,height);
+                        if(mode.equals("calendar")){
+                            View grid=view.findViewById(R.id.widget_calendar_frame);
+                            expect(grid.getHeight()>=Math.round((24+6*33)*density),"six-week widget dates are too short");
+                        }
                         ListView list=view.findViewById(R.id.widget_events);expect(list.getHeight()>=Math.round(44*density),"short "+mode+" widget has only "+list.getHeight()+" pixels for tasks");expect(list.getAdapter()!=null&&list.getAdapter().getCount()==1,"widget hides today task or repeats the same series");View row=list.getAdapter().getView(0,null,list);expect(((TextView)row.findViewById(R.id.widget_event)).getText().toString().contains("今天的组件待办"),"today task missing");expect(row.findViewById(R.id.widget_event_complete).getVisibility()==View.VISIBLE,"widget completion control missing");
                         if(mode.equals("calendar")){android.graphics.Bitmap bitmap=android.graphics.Bitmap.createBitmap(width,height,android.graphics.Bitmap.Config.ARGB_8888);frame.draw(new android.graphics.Canvas(bitmap));try(java.io.OutputStream output=new java.io.FileOutputStream(new java.io.File(context.getExternalFilesDir(null),"calendar-widget-short-todo.png"))){bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG,100,output);}bitmap.recycle();}
                     }catch(Exception error){throw new RuntimeException(error);}});
                 }finally{CalendarWidget.prefs(context,widget).edit().clear().commit();context.deleteDatabase(db);}
+            });
+            check("missingCycleEndDefaultsToSixDays",()->{
+                String db="calendar-auto-end-tests.db";
+                context.deleteDatabase(db);
+                try(CalendarStore isolated=new CalendarStore(context,db)){
+                    LocalDate today=LocalDate.now(),start=today.minusDays(6);
+                    JSONObject first=isolated.write("cycle",new JSONObject().put("start",start.toString()),UUID.randomUUID().toString()).getJSONObject("record");
+                    expect(CalendarDates.cycleEnd(first).equals(today.minusDays(1)),"the start must count as day one");
+                    boolean overlap=false;
+                    try{
+                        isolated.write("cycle",new JSONObject().put("start",today.minusDays(1).toString()),UUID.randomUUID().toString());
+                    }catch(IllegalArgumentException error){overlap=true;}
+                    expect(overlap,"the sixth day must still count toward the earlier record");
+                    test.runOnMainSync(()->{try{
+                        CalendarMonthView grid=new CalendarMonthView(context);
+                        grid.bind(YearMonth.from(today),today,false,true,isolated,null);
+                        expect(grid.phase(today.minusDays(1))==1&&grid.phase(today)==0,"the month view did not end the period after six days");
+                    }catch(Exception error){throw new RuntimeException(error);}});
+                    isolated.write("cycle",new JSONObject().put("start",today.toString()),UUID.randomUUID().toString());
+                    JSONObject earlier=isolated.write("cycle",new JSONObject().put("id",first.getString("id"))
+                        .put("expected_revision",first.getInt("revision")).put("end",start.plusDays(2).toString()),
+                        UUID.randomUUID().toString()).getJSONObject("record");
+                    expect(CalendarDates.cycleEnd(earlier).equals(start.plusDays(2)),"the manual end must override the default");
+                }finally{context.deleteDatabase(db);}
+            });
+            check("widgetPredictionAppearsTwoDaysAheadInDateOrder",()->{
+                String db="calendar-widget-prediction-tests.db";
+                int widget=-41258;
+                context.deleteDatabase(db);
+                try(CalendarStore isolated=new CalendarStore(context,db)){
+                    LocalDate today=LocalDate.now();
+                    isolated.write("cycle",new JSONObject().put("start",today.minusDays(28).toString()),UUID.randomUUID().toString());
+                    for(int offset:new int[]{1,2,4,-1,-8}){
+                        isolated.write("event",task(today.plusDays(offset).toString(),"none").put("title","待办 "+offset),UUID.randomUUID().toString());
+                    }
+                    CalendarWidget.prefs(context,widget).edit().putBoolean("cycle",true).commit();
+                    for(int length:new int[]{31,30,29,28,27}){
+                        JSONObject settings=new JSONObject().put("id","cycle-settings")
+                            .put("expected_revision",isolated.settings().optInt("revision"))
+                            .put("enabled",true).put("cycle_days",length).put("duration",5).put("remind",false);
+                        isolated.write("settings",settings,UUID.randomUUID().toString());
+                        test.runOnMainSync(()->{try{
+                            android.appwidget.AppWidgetHostView frame=new android.appwidget.AppWidgetHostView(context);
+                            android.appwidget.AppWidgetProviderInfo info=android.appwidget.AppWidgetManager.getInstance(context).getInstalledProviders()
+                                .stream().filter(provider->provider.provider.equals(new ComponentName(context,CalendarWidget.Agenda.class))).findFirst().get();
+                            frame.setAppWidget(widget,info);
+                            View view=CalendarWidget.build(context,widget,isolated,"agenda",new Bundle()).apply(context,frame);
+                            ListView list=view.findViewById(R.id.widget_events);
+                            List<String> expected=new ArrayList<>(Arrays.asList("待办 1","待办 2","待办 4","待办 -1","待办 -8"));
+                            if(length>=28&&length<=30)expected.add(length==30?1:0,"大姨妈");
+                            expect(list.getAdapter().getCount()==expected.size(),"unexpected widget item count for cycle length "+length);
+                            for(int i=0;i<expected.size();i++){
+                                View row=list.getAdapter().getView(i,null,list);
+                                TextView title=row.findViewById(R.id.widget_event);
+                                expect(title.getText().toString().startsWith(expected.get(i)+" "), "wrong widget order: "+title.getText());
+                            }
+                        }catch(Exception error){throw new RuntimeException(error);}});
+                    }
+                }finally{
+                    CalendarWidget.prefs(context,widget).edit().clear().commit();
+                    context.deleteDatabase(db);
+                }
             });
             check("boundWidgetCheckboxCommitsThroughBroadcast",()->{
                 android.appwidget.AppWidgetManager manager=android.appwidget.AppWidgetManager.getInstance(context);android.appwidget.AppWidgetHost host=new android.appwidget.AppWidgetHost(context,41257);int widget=-1;Activity activity=null;String recordId=null;

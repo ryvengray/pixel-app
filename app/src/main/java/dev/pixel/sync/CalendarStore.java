@@ -35,9 +35,20 @@ final class CalendarStore extends SQLiteOpenHelper {
             number(j,"lunar_month",1,12);number(j,"lunar_day",1,30);number(j,"milestone",1,100000);number(j,"remind_days",0,365);
         }
         if(kind.equals("cycle")){
-            LocalDate start=LocalDate.parse(text(j,"start",10));if(start.isAfter(LocalDate.now()))throw new IllegalArgumentException("实际开始日期不能是未来");
-            if(j.has("end")&&!j.optString("end").isEmpty()){LocalDate end=LocalDate.parse(j.getString("end"));if(end.isBefore(start)||end.isAfter(LocalDate.now()))throw new IllegalArgumentException("结束日期应在开始至今天之间");}
-            for(JSONObject other:items("cycle")){if(other.optString("id").equals(j.optString("id")))continue;LocalDate a=LocalDate.parse(other.getString("start")),b=LocalDate.parse(other.optString("end",LocalDate.now().toString()));LocalDate end=LocalDate.parse(j.optString("end",j.getString("start")));if(!start.isAfter(b)&&!end.isBefore(a))throw new IllegalArgumentException("与已有大姨妈记录重叠，请先修改原记录");}
+            LocalDate today=LocalDate.now();
+            LocalDate start=LocalDate.parse(text(j,"start",10));
+            if(start.isAfter(today))throw new IllegalArgumentException("实际开始日期不能是未来");
+            LocalDate end=CalendarDates.cycleEnd(j);
+            if(!j.optString("end").isEmpty()&&(end.isBefore(start)||end.isAfter(today))){
+                throw new IllegalArgumentException("结束日期应在开始至今天之间");
+            }
+            for(JSONObject other:items("cycle")){
+                if(other.optString("id").equals(j.optString("id")))continue;
+                LocalDate otherStart=LocalDate.parse(other.getString("start"));
+                if(!start.isAfter(CalendarDates.cycleEnd(other))&&!end.isBefore(otherStart)){
+                    throw new IllegalArgumentException("与已有大姨妈记录重叠，请先修改原记录");
+                }
+            }
         }
         if(kind.equals("settings")){number(j,"cycle_days",1,365);number(j,"duration",1,60);number(j,"remind_days",0,30);if(j.optBoolean("enabled")&&(!j.has("cycle_days")||!j.has("duration")))throw new IllegalArgumentException("请先配置周期和持续天数");}
         if(j.has("timezone"))ZoneId.of(j.getString("timezone"));if(j.has("remind_time"))LocalTime.parse(j.getString("remind_time"));if(j.optString("note").length()>2000)throw new IllegalArgumentException("备注过长");

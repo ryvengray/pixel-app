@@ -5,6 +5,7 @@ import android.icu.util.Calendar;
 import java.time.*;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
+import org.json.JSONObject;
 
 /** Date-only arithmetic shared by the screen, widgets and agent. */
 final class CalendarDates {
@@ -71,5 +72,12 @@ final class CalendarDates {
         dates.removeIf(date->todo(e)&&completed(e,date));return new ArrayList<>(dates);
     }
     static long days(LocalDate a,LocalDate b){return ChronoUnit.DAYS.between(a,b);}
+    static final int DEFAULT_CYCLE_DURATION=6;
+    static LocalDate cycleEnd(JSONObject record){
+        String end=record.optString("end");
+        return end.isEmpty()
+            ?LocalDate.parse(record.optString("start")).plusDays(DEFAULT_CYCLE_DURATION-1)
+            :LocalDate.parse(end);
+    }
     private CalendarDates(){}
 }

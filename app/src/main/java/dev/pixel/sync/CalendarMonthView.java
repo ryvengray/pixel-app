@@ -27,14 +27,23 @@ final class CalendarMonthView extends View {
     protected void onMeasure(int w,int h){setMeasuredDimension(MeasureSpec.getSize(w),MeasureSpec.getMode(h)==MeasureSpec.EXACTLY?MeasureSpec.getSize(h):Math.round((28+rows()*52)*density));}
     int phase(LocalDate day){
         if(!cycle)return 0;
-        for(JSONObject r:records){LocalDate a=LocalDate.parse(r.optString("start"));String end=r.optString("end","");LocalDate b=end.isEmpty()?LocalDate.now():LocalDate.parse(end);if(!day.isBefore(a)&&!day.isAfter(b))return 1;}
+        if(!day.isAfter(LocalDate.now())){
+            for(JSONObject r:records){
+                LocalDate start=LocalDate.parse(r.optString("start"));
+                if(!day.isBefore(start)&&!day.isAfter(CalendarDates.cycleEnd(r)))return 1;
+            }
+        }
         if(prediction!=null&&prediction.optBoolean("available")){
             if(!day.isBefore(LocalDate.parse(prediction.optString("next_start")))&&!day.isAfter(LocalDate.parse(prediction.optString("next_end"))))return 2;
             if(prediction.has("ovulation")){if(day.equals(LocalDate.parse(prediction.optString("ovulation"))))return 4;if(!day.isBefore(LocalDate.parse(prediction.optString("fertile_start")))&&!day.isAfter(LocalDate.parse(prediction.optString("fertile_end"))))return 3;}
         }return 0;
     }
     protected void onDraw(Canvas canvas){super.onDraw(canvas);if(month==null)return;drawMonth(canvas,getWidth(),getHeight());}
-    private void text(Canvas c,String s,float x,float y,float size,int color){paint.setStyle(Paint.Style.FILL);paint.setPathEffect(null);paint.setColor(color);paint.setTypeface(Typeface.create(getContext().getSharedPreferences("home",0).getInt("font",0)==1?"serif":"sans-serif",Typeface.NORMAL));paint.setTextSize(size);paint.setTextAlign(Paint.Align.CENTER);c.drawText(s,x,y,paint);}
+    private void text(Canvas c,String s,float x,float y,float size,int color,Typeface face){
+        paint.setStyle(Paint.Style.FILL);paint.setPathEffect(null);paint.setColor(color);
+        paint.setTypeface(face);paint.setTextSize(size);paint.setTextAlign(Paint.Align.CENTER);
+        c.drawText(s,x,y,paint);
+    }
     void drawMonth(Canvas c,int width,int height){
         if(month==null)return;
         float scale=width/350f,head=widget?24:28*scale,row=(height-head)/rows(),cell=width/7f;
@@ -42,8 +51,17 @@ final class CalendarMonthView extends View {
         int rose=dark?0xFF563443:0xFFF7DCE5,roseInk=dark?0xFFFFDDE7:0xFF8D3455;
         int roseMuted=dark?0xFFE6B5C6:0xFF95546B,green=dark?0xFF98D8B0:0xFF276648;
         int purple=dark?0xFFD0BCE9:0xFF76519B,accent=dark?0xFFB7DAC5:0xFF38694F;
-        String[] week={"一","二","三","四","五","六","日"};for(int i=0;i<7;i++)text(c,week[i],cell*(i+.5f),widget?16:17*scale,widget?11:11*scale,muted);
+        String family=getContext().getSharedPreferences("home",0).getInt("font",0)==1?"serif":"sans-serif";
+        Typeface regular=Typeface.create(family,Typeface.NORMAL);
+        Typeface dayFace=widget?Typeface.create(regular,600,false):regular;
+        String[] week={"一","二","三","四","五","六","日"};
+        for(int i=0;i<7;i++)text(c,week[i],cell*(i+.5f),widget?15:17*scale,widget?10:11*scale,muted,regular);
+        if(widget){
+            paint.setColor(dark?0x2AA8BDB8:0x3061776F);paint.setStrokeWidth(1);
+            c.drawLine(4,head-2,width-4,head-2,paint);
+        }
         LocalDate first=month.atDay(1).minusDays(month.atDay(1).getDayOfWeek().getValue()-1);
+        LocalDate today=widget?selected:LocalDate.now();
         for(int n=0;n<rows()*7;n++){
             LocalDate day=first.plusDays(n);float left=n%7*cell,top=head+n/7*row,x=left+cell/2;boolean inside=YearMonth.from(day).equals(month);int phase=inside?phase(day):0;
             RectF rect=new RectF(left+2*scale,top+2*scale,left+cell-2*scale,top+row-3*scale);
@@ -56,12 +74,25 @@ final class CalendarMonthView extends View {
                     c.drawRoundRect(rect,10*scale,10*scale,paint);paint.setPathEffect(null);
                 }
             }
-            if(day.equals(selected)){paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(scale);paint.setColor(accent);c.drawRoundRect(rect,10*scale,10*scale,paint);}
+            if(day.equals(selected)&&(!widget||inside)){
+                if(widget&&phase!=1&&phase!=2){
+                    paint.setStyle(Paint.Style.FILL);
+                    paint.setColor(dark?0xFF304E45:0xFFD9EAD9);
+                    c.drawRoundRect(rect,8,8,paint);
+                }else{
+                    paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(scale);
+                    paint.setColor(accent);c.drawRoundRect(rect,10*scale,10*scale,paint);
+                }
+            }
             boolean otherCycleDay=inside&&phase==0&&isOtherCycleDay(day);
-            int dateInk=phase==1||phase==2?roseInk:phase>=3?purple:otherCycleDay?green:day.equals(LocalDate.now())?accent:ink;
+            int dateInk=phase==1||phase==2?roseInk:phase>=3?purple:otherCycleDay?green:day.equals(today)?accent:ink;
             int lunarInk=phase==1||phase==2?roseMuted:phase>=3?purple:otherCycleDay?green:muted;
-            text(c,String.valueOf(day.getDayOfMonth()),x,top+(widget?row*.44f:21*scale),widget?14:15*scale,inside?dateInk:(dark?0xFF627775:0xFFA5B4A8));
-            text(c,CalendarDates.lunar(day).shortLabel(),x,top+(widget?row*.77f:38*scale),widget?11:10.5f*scale,inside?lunarInk:(dark?0xFF627775:0xFFA5B4A8));
+            float dateSize=widget?Math.min(18,row*.53f):15*scale;
+            String lunar=CalendarDates.lunar(day).shortLabel();
+            float lunarSize=widget?Math.min(10,Math.min(row*.32f,(cell-5)/Math.max(1,lunar.length()))):10.5f*scale;
+            int adjacent=widget?(dark?0xFF809591:0xFF82968A):(dark?0xFF627775:0xFFA5B4A8);
+            text(c,String.valueOf(day.getDayOfMonth()),x,top+(widget?row*.48f:21*scale),dateSize,inside?dateInk:adjacent,inside?dayFace:regular);
+            text(c,lunar,x,top+(widget?row*.79f:38*scale),lunarSize,inside?lunarInk:adjacent,regular);
             if(phase==4)flower(c,rect.right-6*scale,rect.top+6*scale,scale,purple);
 
             if(events.contains(day)){paint.setStyle(Paint.Style.FILL);paint.setColor(accent);c.drawCircle(x,top+row-(widget?2:4*scale),1.5f*scale,paint);}
