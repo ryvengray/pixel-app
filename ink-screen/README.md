@@ -6,7 +6,7 @@
 从 `pixel-app` 仓库根目录运行：
 
 ```bash
-# 构建 ESP32 蓝牙键鼠控制器（不烧录）
+# 构建 ESP32 温湿度采集固件
 pio run -d ink-screen/esp32-screen/firmware
 
 # 构建 E1002（先配置本机 firmware/include/config.h）
@@ -32,5 +32,5 @@ Python 测试请在 E1002 目录单独运行，避免与 Pixel 后端的同名 `
 首次使用请看 [E1002 操作手册](pixel-display-e1002/操作手册.md)。
 
 
-ESP32蓝牙键鼠控制器、固件烧录和配置说明见 [ESP32控制器文档](esp32-screen/README.md)。
+Gravity AHT20 接线、ESP32 固件烧录和温湿度上传配置见 [ESP32 温湿度采集文档](esp32-screen/README.md)。
 该控制器配合同仓库服务器的本地视觉模型，实现手机目标识别与蓝牙坐标点击。

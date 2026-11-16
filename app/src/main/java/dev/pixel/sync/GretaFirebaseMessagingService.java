@@ -1,5 +1,6 @@
 package dev.pixel.sync;
 
+import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
@@ -30,8 +31,13 @@ public class GretaFirebaseMessagingService extends FirebaseMessagingService {
         if(messageId!=null)open.putExtra("message_id",messageId);
         int notificationId=messageId==null?(int)(System.currentTimeMillis()&0x7fffffff):messageId.hashCode();
         PendingIntent pending = PendingIntent.getActivity(this, notificationId, open, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
-        android.app.Notification.Builder builder = Build.VERSION.SDK_INT >= 26 ? new android.app.Notification.Builder(this, CHANNEL) : new android.app.Notification.Builder(this);
-        builder.setSmallIcon(android.R.drawable.ic_dialog_info).setContentTitle(title).setContentText(body).setAutoCancel(true).setContentIntent(pending);
+        Notification.Builder builder = Build.VERSION.SDK_INT >= 26 ? new Notification.Builder(this, CHANNEL) : new Notification.Builder(this);
+        builder.setSmallIcon(R.drawable.ic_stat_greta)
+                .setContentTitle(title)
+                .setContentText(body)
+                .setStyle(new Notification.BigTextStyle().bigText(body))
+                .setAutoCancel(true)
+                .setContentIntent(pending);
         try { manager.notify(notificationId, builder.build()); } catch (SecurityException ignored) { }
     }
 }
