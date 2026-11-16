@@ -12,6 +12,9 @@ pio run -d ink-screen/esp32-screen/firmware
 # 构建 E1002（先配置本机 firmware/include/config.h）
 pio run -d ink-screen/pixel-display-e1002/firmware
 
+# 构建 E1002 独立月历/相框（无需服务器或 config.h）
+pio run -d ink-screen/e1002-standalone/firmware
+
 # E1002 服务端、OTA 发布脚本测试，需安装对应依赖
 cd ink-screen/pixel-display-e1002
 python3 -m pytest tests
@@ -30,6 +33,8 @@ Python 测试请在 E1002 目录单独运行，避免与 Pixel 后端的同名 `
 服务端部署、固件烧录与接口说明见 [E1002 项目文档](pixel-display-e1002/README.md)。
 
 首次使用请看 [E1002 操作手册](pixel-display-e1002/操作手册.md)。
+
+无需服务器的扫码配网、离线月历和手机上传版本见 [E1002 独立版](e1002-standalone/README.md)。
 
 
 Gravity AHT20 接线、ESP32 固件烧录和温湿度上传配置见 [ESP32 温湿度采集文档](esp32-screen/README.md)。

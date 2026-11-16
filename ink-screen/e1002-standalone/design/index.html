@@ -44,7 +44,13 @@ header p, .hint { color: #575e56; font-size: 14px; }
 .day.outside .lunar { color: var(--blue); font-weight: 500; }
 .day.current::before { content: ""; position: absolute; inset: .32em .2em; background: var(--blue); border-radius: .95em; }
 .day.current > :is(.number, .lunar) { position: relative; color: white; }
-.upload-qr { position: absolute; bottom: 3em; left: 4em; display: block; width: 13em; aspect-ratio: 1; background: #fff; }
+.upload-qr { position: absolute; bottom: 0; left: 0; display: block; width: 20em; aspect-ratio: 1; background: #fff; }
+.device-statusbar { position:absolute; top:1em; right:1em; height:4em; width:13.75em; display:flex; align-items:center; justify-content:space-evenly; background:white; border-radius:.6em; z-index:2; }
+.device-statusbar svg { width:3em; height:3em; }
+.device-statusbar span { font-size:1.4em; }
+.device-statusbar .lamp { fill:white; stroke:var(--ink); stroke-width:1.5; }
+.device-statusbar[data-running="true"] .lamp { fill:var(--green); }
+
 #picture canvas { display: block; width: 100%; height: 100%; }
 .setup-body { position: absolute; inset: 6em 6em 6em 6em; display: grid; grid-template-columns: 1fr 22em; align-items: center; gap: 5em; }
 .setup-copy { border-block: .3em solid var(--ink); padding: 4em 0; }
@@ -68,7 +74,8 @@ aside input { min-width: 0; width: 100%; background: white; border: 1px solid #b
 aside form .primary { width: 100%; }
 .crop-frame { position: relative; margin: 0 0 12px; }
 #photo-preview { display: block; width: 100%; aspect-ratio: 5/3; }
-.crop-qr { position: absolute; inset: auto auto 5% 4%; width: 13%; aspect-ratio: 1; background: #fff; pointer-events: none; }
+.crop-qr { position: absolute; inset: auto auto 0 0; width: 20%; aspect-ratio: 1; background: #fff; pointer-events: none; }
+.crop-status { position:absolute; right:1%; top:1.6667%; width:13.75%; height:6.6667%; display:grid; place-items:center; background:white; font-size:8px; }
 .crop-controls { display: grid; gap: 2px; }
 .crop-controls label { grid-template-columns: 5em minmax(0, 1fr); align-items: center; margin-bottom: 6px; }
 .crop-controls input { padding: 0; accent-color: #253f36; }
@@ -110,6 +117,10 @@ aside form .primary { width: 100%; }
                     <canvas id="photo" width="800" height="480" role="img" aria-label="六色图片预览"></canvas>
                 </section>
                 <img class="upload-qr" id="upload-qr" src="upload-qr.svg" alt="局域网上传二维码示例">
+                <div class="device-statusbar" id="statusbar" data-running="false" aria-label="服务状态和电量示例">
+                    <svg viewBox="0 0 28 28" aria-label="服务状态"><circle class="lamp" cx="14" cy="14" r="4"/></svg>
+                    <svg viewBox="0 0 40 24" aria-label="电量"><rect x="1" y="3" width="33" height="18" rx="3" fill="none" stroke="currentColor" stroke-width="2"/><path d="M36 8v8" stroke="currentColor" stroke-width="3"/><rect x="4" y="6" width="24" height="12" fill="currentColor"/></svg><span>86%</span>
+                </div>
                 <section id="setup" aria-label="首次配网" hidden>
                     <div class="setup-body">
                         <div class="setup-copy">
@@ -151,6 +162,7 @@ aside form .primary { width: 100%; }
                 <div class="crop-frame">
                     <canvas id="photo-preview" width="800" height="480" role="img" aria-label="800 × 480 裁切及六色效果"></canvas>
                     <img class="crop-qr" src="upload-qr.svg" alt="">
+                    <span class="crop-status">服务 · 电量</span>
                 </div>
                 <div class="crop-controls">
                     <label>缩放<input name="zoom" type="range" min="100" max="300" value="100"></label>
@@ -164,11 +176,18 @@ aside form .primary { width: 100%; }
         <p id="message" role="status"></p>
         <div class="sim">
             <button id="expire" disabled>模拟 5 分钟无访问</button>
-            <button id="reset">模拟恢复出厂</button>
+            <button id="reset">模拟前进＋后退长按</button>
         </div>
     </aside>
 </div>
 </main>
+<dialog id="device-settings" aria-labelledby="settings-title">
+    <h2 id="settings-title">设备设置</h2>
+    <p>实体机同时长按前进和后退约 1.5 秒进入，前后键选择，刷新键确认。</p>
+    <button id="reconfigure-network">重配网络（保留照片）</button>
+    <button id="factory-reset">恢复出厂（清空照片）</button>
+    <button id="cancel-settings">返回画面</button>
+</dialog>
 <script>
 const $ = id => document.getElementById(id);
 const today = new Date();
@@ -375,6 +394,8 @@ function drawSample() {
 
 function status() {
     const remaining = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+    $("statusbar").dataset.running = String(!configured || remaining > 0);
+    $("upload-qr").hidden = !configured || (mode === "picture" && remaining === 0);
     if (!remaining && phoneView === "upload") {
         phoneView = null;
         clearPhotoInput();
@@ -573,17 +594,23 @@ uploadForm.onsubmit = event => {
     render();
 };
 $("expire").onclick = () => { deadline = 0; status(); };
-$("reset").onclick = () => {
+$("reset").onclick = () => $("device-settings").showModal();
+$("cancel-settings").onclick = () => $("device-settings").close();
+function resetDemo(clearPhotos) {
+    $("device-settings").close();
     configured = false;
     mode = "calendar";
     offset = 0;
-    selected = 0;
-    frames = [];
+    if (clearPhotos) { selected = 0; frames = []; }
     phoneView = null;
     deadline = 0;
     message = "";
     clearPhotoInput();
     render();
+}
+$("reconfigure-network").onclick = () => resetDemo(false);
+$("factory-reset").onclick = () => {
+    if (confirm("确认清除 Wi-Fi、所有照片、显示状态和上传码？")) resetDemo(true);
 };
 setInterval(status, 1000);
 drawLandscape();

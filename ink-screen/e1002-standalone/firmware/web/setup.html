@@ -1,0 +1,13 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>E1002 配网</title>
+<style>body{font:17px system-ui;background:#f4f3eb;color:#20251f;max-width:480px;margin:40px auto;padding:20px}input,select,button{font:inherit;box-sizing:border-box;width:100%;padding:13px;margin:8px 0 22px;border:1px solid #aaa;border-radius:8px}button{background:#20438b;color:white}small{display:block;line-height:1.7}#status{white-space:pre-wrap;line-height:1.7}</style>
+<h1>连接家里的 Wi-Fi</h1><p>选择 2.4 GHz 网络。照片和配网信息保存在设备中。</p>
+<form id="form"><label>附近的 Wi-Fi<select id="networks"><option value="">手动输入网络名</option></select></label><label>网络名<input id="ssid" maxlength="32" required autocomplete="off"></label><label>密码<input id="password" type="password" maxlength="63" autocomplete="off"></label><label>本地时区<select id="zone"></select></label><button id="submit">连接并同步手机时间</button></form><p id="status" role="status"></p><small>连接期间请保持当前热点连接。若手机提示热点没有互联网，请选择继续使用。若弹窗未跳转，可以用系统浏览器打开 http://192.168.4.1 。</small>
+<script>
+const $=id=>document.getElementById(id); let busy=false;
+const local=-new Date().getTimezoneOffset();
+for(let offset=-720;offset<=840;offset+=15){const o=new Option('UTC'+(offset<0?'-':'+')+String(Math.floor(Math.abs(offset)/60)).padStart(2,'0')+':'+String(Math.abs(offset)%60).padStart(2,'0'),offset);o.selected=offset===local;$('zone').add(o);}
+fetch('/api/networks').then(r=>r.json()).then(v=>{for(const s of v.networks)$('networks').add(new Option(s,s))}).catch(()=>{});
+$('networks').onchange=()=>{$('ssid').value=$('networks').value};
+$('form').onsubmit=async e=>{e.preventDefault();if(busy)return;busy=true;$('submit').disabled=true;$('status').textContent='正在连接，约需 20 秒…';try{const r=await fetch('/api/configure',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ssid:$('ssid').value,password:$('password').value,epoch:Math.floor(Date.now()/1000),offset:Number($('zone').value)})});if(!r.ok)throw Error(await r.text());poll();}catch(e){$('status').textContent='提交失败：'+e.message;busy=false;$('submit').disabled=false;}};
+async function poll(){try{const r=await fetch('/api/status',{cache:'no-store'});const s=await r.json();if(s.network==='connected'){$('status').textContent='已连接并保存。请把手机切回家庭 Wi-Fi，再扫描墨水屏左下角二维码上传照片。'+(s.rtc?'':'\nRTC 写入失败；本次已校时，断电后请重新校时。');busy=false;$('submit').disabled=false;return;}if(s.network==='failed'){$('status').textContent='连接失败，请检查网络名和密码后重试。设备仅支持 2.4 GHz Wi-Fi。';busy=false;$('submit').disabled=false;return;}}catch(e){}setTimeout(poll,1500);}
+</script></html>
