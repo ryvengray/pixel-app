@@ -74,18 +74,35 @@ bool validServer(const String &url) {
 
 void startSetup() {
   if (setupActive) return;
-  WiFi.mode(WIFI_AP_STA);
-  if (!WiFi.softAP(setupSsid.c_str(), setupPassword.c_str())) return;
+  // Stop failed station scans while provisioning: scans can change the AP channel.
+  const bool online = WiFi.isConnected();
+  WiFi.setAutoReconnect(false);
+  if (!online) WiFi.disconnect(false);
+  WiFi.mode(online ? WIFI_AP_STA : WIFI_AP);
+  const IPAddress apIp(192, 168, 4, 1), mask(255, 255, 255, 0);
+  if (!WiFi.softAPConfig(apIp, apIp, mask) ||
+      !WiFi.softAP(setupSsid.c_str(), setupPassword.c_str(), 1)) {
+    Serial.println("Setup hotspot failed");
+    WiFi.mode(WIFI_STA);
+    WiFi.setAutoReconnect(true);
+    if (wifiConfigured) WiFi.reconnect();
+    return;
+  }
   setupActive = true;
   setupStartedAt = millis();
-  dns.start(53, "*", WiFi.softAPIP());
-  Serial.printf("Wi-Fi setup hotspot: %s | http://192.168.4.1 | see LCD for password\n", setupSsid.c_str());
+  dns.start(53, "*", apIp);
+  // Bind HTTP after the AP interface exists (also refresh after mode changes).
+  settings.begin();
+  Serial.printf("Wi-Fi setup hotspot: %s | IP: %s | HTTP ready\n", setupSsid.c_str(), WiFi.softAPIP().toString().c_str());
 }
 
 bool authenticateSettings() {
   settings.sendHeader("Cache-Control", "no-store");
+  // The setup Wi-Fi already requires its password; captive browsers may hide
+  // HTTP Basic login dialogs. Keep authentication on the home LAN interface.
+  if (setupActive && settings.client().localIP() == WiFi.softAPIP()) return true;
   if (settings.authenticate("admin", setupPassword.c_str())) return true;
-  settings.requestAuthentication();
+  settings.requestAuthentication(BASIC_AUTH, "Pixel Settings", "Open http://192.168.4.1 while connected to Pixel-Setup, or log in as admin.");
   return false;
 }
 
@@ -127,7 +144,11 @@ void startSettings() {
     settings.send(200, "text/html; charset=utf-8", "<meta name=viewport content='width=device-width,initial-scale=1'><h2>已保存，正在重启连接</h2><p>请查看设备屏幕。连接失败时，重新连接 Pixel-Setup 热点修改设置。</p>");
     restartAt = millis() + 1500;
   });
-  settings.onNotFound([]() { settings.sendHeader("Location", "/"); settings.send(302); });
+  settings.on("/health", HTTP_GET, []() {
+    settings.sendHeader("Cache-Control", "no-store");
+    settings.send(200, "application/json", "{\"status\":\"ok\"}");
+  });
+  settings.onNotFound([]() { settings.sendHeader("Location", "http://192.168.4.1/"); settings.send(302, "text/plain", "Open http://192.168.4.1/"); });
   settings.begin();
   if (!wifiConfigured || token.isEmpty() || serverUrl.isEmpty()) startSetup();
 }
@@ -285,6 +306,8 @@ void handleSerial(const String &line) {
                   sensorState, WiFi.isConnected() ? "online" : "offline",
                   WiFi.localIP().toString().c_str(), WiFi.macAddress().c_str(),
                   uploadState.c_str(), unsigned(queueCount));
+    Serial.printf("Setup: %s | AP IP: %s | Clients: %u\n", setupActive ? "active" : "off",
+                  WiFi.softAPIP().toString().c_str(), unsigned(WiFi.softAPgetStationNum()));
     if (latest.id[0]) {
       Serial.printf("Latest: %.2f C, %.2f %%RH\n", latest.temperature, latest.humidity);
     }
@@ -299,6 +322,32 @@ void handleSerial(const String &line) {
     Serial.println("DHCP enabled. Restarting.");
     Serial.flush();
     ESP.restart();
+    return;
+  }
+  if (config["op"] == "webtest") {
+    if (!setupActive) { Serial.println("Web test needs setup hotspot"); return; }
+    xTaskCreate([](void *) {
+      WiFiClient client;
+      HTTPClient http;
+      http.setTimeout(3000);
+      http.setConnectTimeout(3000);
+      http.begin(client, "http://192.168.4.1/");
+      const int code = http.GET();
+      const String page = http.getString();
+      Serial.printf("Web test GET: %d | form: %s\n", code,
+                    page.indexOf("action=\"/save\"") >= 0 ? "OK" : "missing");
+      http.end();
+      http.begin(client, "http://192.168.4.1/save");
+      http.addHeader("Content-Type", "application/x-www-form-urlencoded");
+      const int denied = http.POST("csrf=wrong");
+      http.end();
+      http.begin(client, "http://192.168.4.1/save");
+      http.addHeader("Content-Type", "application/x-www-form-urlencoded");
+      const int invalid = http.POST("csrf=12345678&ssid=&server=invalid");
+      http.end();
+      Serial.printf("Web test POST: bad CSRF=%d (expected 403), invalid config=%d (expected 400)\n", denied, invalid);
+      vTaskDelete(nullptr);
+    }, "webtest", 8192, nullptr, 1, nullptr);
     return;
   }
   if (config["op"] == "setup") { startSetup(); drawStatus(); return; }
@@ -417,14 +466,14 @@ void loop() {
   }
   if (online) offlineSince = now;
   if (!online && now - offlineSince >= kRetryInterval && !setupActive) { startSetup(); drawStatus(); }
-  if (online && !token.isEmpty() && !serverUrl.isEmpty() && setupActive && now - setupStartedAt > 120000) {
-    dns.stop(); WiFi.softAPdisconnect(true); WiFi.mode(WIFI_STA); setupActive = false; drawStatus();
+  if (online && !token.isEmpty() && !serverUrl.isEmpty() && setupActive && WiFi.softAPgetStationNum() == 0 && now - setupStartedAt > 120000) {
+    dns.stop(); WiFi.softAPdisconnect(true); WiFi.mode(WIFI_STA); WiFi.setAutoReconnect(true); setupActive = false; drawStatus();
   }
-  if (!online && wifiConfigured && now - lastReconnect >= kRetryInterval) {
+  if (!online && !setupActive && wifiConfigured && now - lastReconnect >= kRetryInterval) {
     lastReconnect = now;
     WiFi.reconnect();
   }
-  if (online && queueCount && !serverUrl.isEmpty() && !token.isEmpty() && due(millis(), nextUpload)) {
+  if (online && !(setupActive && WiFi.softAPgetStationNum()) && queueCount && !serverUrl.isEmpty() && !token.isEmpty() && due(millis(), nextUpload)) {
     upload();
     drawStatus();
   }
