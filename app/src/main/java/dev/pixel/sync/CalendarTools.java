@@ -54,7 +54,19 @@ final class CalendarTools {
                     return new JSONObject().put("ok",true).put("events",filtered).put("all_records",all).put("limit",50).put("narrow_query_if_full",filtered.length()==50||all.length()==50).put("recent_operations",store.recentOperations(false)).put("notifications_allowed",store.notificationsAllowed()).put("preferences",store.preferences()).put("today",LocalDate.now().toString()).put("summary","已读取重要日期");
                 }
                 case "get_cycle_summary":{
-                    LocalDate from=LocalDate.parse(args.optString("from",LocalDate.now().minusMonths(6).toString())),to=LocalDate.parse(args.optString("to",LocalDate.now().toString()));if(to.isBefore(from)||CalendarDates.days(from,to)>732)throw new IllegalArgumentException("每次查询最多两年");JSONArray records=new JSONArray();for(JSONObject e:store.cycles()){LocalDate date=LocalDate.parse(e.getString("start"));if(!date.isBefore(from)&&!date.isAfter(to)){records.put(e);if(records.length()>50)records.remove(0);}}return new JSONObject().put("ok",true).put("records",records).put("notifications_allowed",store.notificationsAllowed()).put("settings",store.settings()).put("recent_operations",store.recentOperations(true)).put("prediction",store.prediction()).put("summary","已读取大姨妈实际记录与预测，预测不能作为避孕依据");
+                    LocalDate today=LocalDate.now();
+                    LocalDate from=LocalDate.parse(args.optString("from",today.minusMonths(6).toString())),to=LocalDate.parse(args.optString("to",today.toString()));
+                    if(to.isBefore(from)||CalendarDates.days(from,to)>732)throw new IllegalArgumentException("每次查询最多两年");
+                    JSONArray records=new JSONArray();
+                    for(JSONObject e:store.cycles()){
+                        LocalDate date=LocalDate.parse(e.getString("start"));
+                        if(date.isBefore(from)||date.isAfter(to))continue;
+                        LocalDate end=CalendarDates.cycleEnd(e);
+                        if(e.optString("end").isEmpty()&&today.isAfter(end))e.put("automatic_end",end.toString());
+                        records.put(e);
+                        if(records.length()>50)records.remove(0);
+                    }
+                    return new JSONObject().put("ok",true).put("records",records).put("notifications_allowed",store.notificationsAllowed()).put("settings",store.settings()).put("recent_operations",store.recentOperations(true)).put("prediction",store.prediction()).put("summary","已读取大姨妈记录与预测。automatic_end 是按默认天数自动结束的日期。预测不能作为避孕依据");
                 }
                 case "set_calendar_todo_completed":return store.completeTodo(args.getString("id"),args.getInt("expected_revision"),LocalDate.parse(args.getString("occurrence")),args.getBoolean("completed"),operation);
                 case "save_special_date":return store.write("event",args,operation);

@@ -9,7 +9,7 @@ Android 应用、Pixel 后端和硬件项目统一在此仓库维护：
 | `app/` | Android 应用 |
 | `server/` | Pixel 后端、手机控制与视觉网关 |
 | [ink-screen/pixel-display-e1002/](ink-screen/pixel-display-e1002/README.md) | E1002 墨水屏固件、API、MQTT 与 OTA 发布工具 |
-| [ink-screen/esp32-screen/](ink-screen/esp32-screen/README.md) | ESP32 蓝牙键鼠控制器固件与配置工具 |
+| [ink-screen/esp32-screen/](ink-screen/esp32-screen/README.md) | ESP32 Gravity AHT20 温湿度采集固件与配置工具 |
 
 原 `ink-screen` 仓库的代码及提交历史已合入 `ink-screen/`，后续在此提交修改。
 迁移说明、构建和测试入口见 [硬件项目说明](ink-screen/README.md)。

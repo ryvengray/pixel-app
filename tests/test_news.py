@@ -1,8 +1,10 @@
 import asyncio
+import sys
 import unittest
 import tempfile
 from pathlib import Path
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch, MagicMock
 from app import main, news
 from fastapi.testclient import TestClient
@@ -18,6 +20,34 @@ class NewsTests(unittest.TestCase):
     def tearDown(self):
         main.DB_PATH = self.old
         self.tmp.cleanup()
+
+    def test_push_uses_plain_text_preview_and_keeps_full_inbox_briefing(self):
+        markdown = (
+            '## 今日重点\n- **模型更新**：[官方公告](https://example.com/release)\n'
+            '- 支持 `Python`，~~旧接口~~已弃用\n\n## 来源与发布时间\n- https://example.com'
+        )
+        message_id = 'news:ai:today'
+        with main.connect() as db:
+            db.execute("INSERT INTO device(id,fcm_token,updated_at) VALUES(?,?,?)",
+                       ('news-phone', 'fake-token', main.utc_now()))
+            db.execute("INSERT INTO inbox_message(id,title,body,created_at) VALUES(?,?,?,?)",
+                       (message_id, 'AI 新进展 · 今日简报', markdown, main.utc_now()))
+            main.enqueue_push(db, message_id)
+        firebase = SimpleNamespace(_apps=True, credentials=None, messaging=MagicMock())
+        with patch.dict(sys.modules, {'firebase_admin': firebase}), patch.dict(
+            'os.environ', {'FIREBASE_SERVICE_ACCOUNT_FILE': 'unused.json'}
+        ):
+            main.deliver_pushes()
+
+        preview = '• 模型更新：官方公告\n• 支持 Python，旧接口已弃用'
+        firebase.messaging.Notification.assert_called_once_with(
+            title='📰 AI 新进展 · 今日简报', body=preview)
+        self.assertEqual(firebase.messaging.Message.call_args.kwargs['data'],
+                         {'message_id': message_id, 'body': preview})
+        firebase.messaging.send.assert_called_once()
+        with main.connect() as db:
+            self.assertEqual(db.execute("SELECT body FROM inbox_message").fetchone()[0], markdown)
+            self.assertEqual(db.execute("SELECT state FROM push_outbox").fetchone()[0], 'sent')
 
     def test_subscription_page_api_auth_validation_and_persistence(self):
         client = TestClient(main.app)

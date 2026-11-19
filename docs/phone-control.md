@@ -65,8 +65,7 @@ bash scripts/reconnect-wireless-ubuntu.sh
 
 ## ESP32 配置与联调
 
-固件位于本仓库 [ink-screen/esp32-screen](../ink-screen/esp32-screen/README.md)。
-烧录后用其中 `tools/configure.py` 写入 Wi-Fi、Ubuntu URL 和设备令牌。
+以下步骤适用于已烧录的旧版蓝牙 HID 固件。当前仓库的 [ESP32 固件](../ink-screen/esp32-screen/README.md) 用于 Gravity AHT20 温湿度采集。
 Pixel 蓝牙配对 `Pixel-Control`，确认键盘布局为美式英语；按板子 BOOT 使其 ARMED。
 
 ```bash

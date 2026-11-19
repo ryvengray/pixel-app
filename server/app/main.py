@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 
 from . import topics, ink, ink_gallery, news, x_notifications, phone_control, phone_agent
 from .decision import Decision, DecisionRequest, apply_policy, fallback, non_action, informational, record_requested
+from .push_preview import format_push
 from jsonschema import Draft202012Validator, FormatChecker
 
 
@@ -113,6 +114,13 @@ def setup_db() -> None:
             status TEXT NOT NULL DEFAULT 'pending', error TEXT,
             created_at TEXT NOT NULL, completed_at TEXT
         );
+        CREATE TABLE IF NOT EXISTS aht20_reading (
+            sample_id TEXT PRIMARY KEY NOT NULL,
+            temperature_c REAL NOT NULL,
+            humidity_pct REAL NOT NULL,
+            received_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS aht20_received_at ON aht20_reading(received_at DESC);
         """)
         topics.setup(db)
         x_notifications.setup(db)
@@ -613,9 +621,10 @@ def deliver_pushes() -> None:
                 WHERE p.state='pending' AND m.withdrawn=0 AND p.next_attempt_at <= ? LIMIT 30""", (utc_now(),)).fetchall()
         for row in deliveries:
             try:
+                title, body = format_push(row["message_id"], row["title"], row["body"])
                 messaging.send(messaging.Message(
-                    notification=messaging.Notification(title=row["title"], body=row["body"][:180]),
-                    data={"message_id": row["message_id"], "body": row["body"][:180]}, token=row["fcm_token"]))
+                    notification=messaging.Notification(title=title, body=body),
+                    data={"message_id": row["message_id"], "body": body}, token=row["fcm_token"]))
                 with connect() as db:
                     db.execute("UPDATE push_outbox SET state='sent' WHERE message_id=? AND device_id=?", (row["message_id"], row["device_id"]))
             except Exception:
@@ -675,6 +684,48 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(title="Greta private service", lifespan=lifespan)
 app.include_router(phone_control.router)
+
+
+class Aht20Reading(BaseModel):
+    sample_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+    temperature_c: float = Field(ge=-40, le=85, allow_inf_nan=False)
+    humidity_pct: float = Field(ge=0, le=100, allow_inf_nan=False)
+
+
+def require_aht20_token(authorization: str | None = Header(default=None)) -> None:
+    token = os.getenv("AHT20_DEVICE_TOKEN", "")
+    if not 24 <= len(token) <= 128:
+        raise HTTPException(503, "AHT20 token is not configured")
+    prefix = "Bearer "
+    if not authorization or not authorization.startswith(prefix) or not secrets.compare_digest(
+        authorization[len(prefix):].encode(), token.encode()
+    ):
+        raise HTTPException(401, "Invalid AHT20 token")
+
+
+@app.post("/v1/sensors/aht20/readings", dependencies=[Depends(require_aht20_token)])
+def store_aht20_reading(reading: Aht20Reading) -> dict[str, Any]:
+    with connect() as db:
+        db.execute(
+            "INSERT INTO aht20_reading (sample_id, temperature_c, humidity_pct, received_at) "
+            "VALUES (?, ?, ?, ?) ON CONFLICT(sample_id) DO NOTHING",
+            (reading.sample_id, reading.temperature_c, reading.humidity_pct, utc_now()),
+        )
+        stored = db.execute(
+            "SELECT * FROM aht20_reading WHERE sample_id = ?", (reading.sample_id,),
+        ).fetchone()
+        if (stored["temperature_c"], stored["humidity_pct"]) != (reading.temperature_c, reading.humidity_pct):
+            raise HTTPException(409, "Sample ID already belongs to another reading")
+    return dict(stored)
+
+
+@app.get("/v1/sensors/aht20/readings", dependencies=[Depends(require_aht20_token)])
+def list_aht20_readings(limit: int = Query(24, ge=1, le=168)) -> dict[str, Any]:
+    with connect() as db:
+        rows = db.execute(
+            "SELECT * FROM aht20_reading ORDER BY received_at DESC LIMIT ?", (limit,),
+        ).fetchall()
+    return {"readings": [dict(row) for row in rows]}
 
 
 @app.post('/v1/phone-control/tasks', dependencies=[Depends(phone_control.admin)])

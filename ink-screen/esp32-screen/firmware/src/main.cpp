@@ -1,338 +1,309 @@
 #include <Arduino.h>
-#include <WiFi.h>
+#include <ArduinoJson.h>
 #include <HTTPClient.h>
 #include <Preferences.h>
-#include <ArduinoJson.h>
 #include <TFT_eSPI.h>
-#include <BLEDevice.h>
-#include <BLEServer.h>
-#include <BLEHIDDevice.h>
-#include <BLESecurity.h>
-#include <BLE2902.h>
-#include <atomic>
+#include <WiFi.h>
+#include <Wire.h>
+#include <esp_system.h>
 
-// E32R32P: https://www.lcdwiki.com/3.2inch_ESP32-32E_Display
-TFT_eSPI screen;
-TFT_eSprite lineBuffer(&screen);
-String drawnLines[13];
-bool displayInitialized=false;
+namespace {
+constexpr int kSda = 32;
+constexpr int kScl = 25;
+constexpr uint8_t kSensorAddress = 0x38;
+constexpr uint8_t kCalibrated = 0x08;
+constexpr uint8_t kBusy = 0x80;
+constexpr uint32_t kSampleInterval = 3600000;
+constexpr uint32_t kRetryInterval = 30000;
+constexpr size_t kQueueSize = 24;
+
+struct Reading {
+  char id[33];
+  float temperature;
+  float humidity;
+};
+
 Preferences prefs;
-BLEHIDDevice *hid;
-BLECharacteristic *keyboardReport, *mouseReport;
-std::atomic<bool> bleConnected(false);
-std::atomic<int> lastNotifyStatus(-1);
-bool armed=false, serverOK=false;
-String ssid, password, baseURL, token, bootID, lastID, lastResult;
-String logs[6];
-uint32_t lastDraw=0, lastPoll=0;
-bool lastButton=true;
-uint32_t buttonChanged=0;
+TFT_eSPI screen;
+String serverUrl;
+String token;
+bool wifiConfigured = false;
+bool wireReady = false;
+Reading latest{};
+Reading pending[kQueueSize];
+size_t queueStart = 0;
+size_t queueCount = 0;
+uint32_t nextSample = 0;
+uint32_t nextUpload = 0;
+const char *sensorState = "Starting";
+String uploadState = "Waiting for reading";
 
-static uint8_t reportMap[] = {
-  // Keyboard, report 1, boot-compatible 8-byte report.
-  0x05,0x01,0x09,0x06,0xA1,0x01,0x85,0x01,
-  0x05,0x07,0x19,0xE0,0x29,0xE7,0x15,0x00,0x25,0x01,
-  0x75,0x01,0x95,0x08,0x81,0x02,0x95,0x01,0x75,0x08,0x81,0x01,
-  0x95,0x05,0x75,0x01,0x05,0x08,0x19,0x01,0x29,0x05,0x91,0x02,
-  0x95,0x01,0x75,0x03,0x91,0x01,
-  0x95,0x06,0x75,0x08,0x15,0x00,0x25,0x65,0x05,0x07,
-  0x19,0x00,0x29,0x65,0x81,0x00,0xC0,
-  // Relative mouse with three buttons and wheel, report 2.
-  0x05,0x01,0x09,0x02,0xA1,0x01,0x85,0x02,0x09,0x01,0xA1,0x00,
-  0x05,0x09,0x19,0x01,0x29,0x03,0x15,0x00,0x25,0x01,
-  0x95,0x03,0x75,0x01,0x81,0x02,0x95,0x01,0x75,0x05,0x81,0x01,
-  0x05,0x01,0x09,0x30,0x09,0x31,0x09,0x38,0x15,0x81,0x25,0x7F,
-  0x75,0x08,0x95,0x03,0x81,0x06,0xC0,0xC0
-};
+bool due(uint32_t now, uint32_t deadline) {
+  return static_cast<int32_t>(now - deadline) >= 0;
+}
 
-void logLine(String s) {
-  Serial.println(s);
-  for(int i=0;i<5;i++) logs[i]=logs[i+1];
-  logs[5]=s.substring(0,48);
+bool sendCommand(const uint8_t *command, size_t size) {
+  Wire.beginTransmission(kSensorAddress);
+  Wire.write(command, size);
+  return Wire.endTransmission() == 0;
 }
-class ReportCallbacks: public BLECharacteristicCallbacks {
-  void onStatus(BLECharacteristic*, Status status, uint32_t) override {
-    lastNotifyStatus=(int)status;
+
+bool readSensor(Reading &reading) {
+  if (!wireReady) {
+    wireReady = Wire.begin(kSda, kScl, 100000);
+    Wire.setTimeOut(50);
+    if (!wireReady) return false;
   }
-};
-bool notifyReport(BLECharacteristic *report,uint8_t *data,size_t size) {
-  lastNotifyStatus=-1;
-  report->setValue(data,size);report->notify();
-  return lastNotifyStatus==(int)BLECharacteristicCallbacks::SUCCESS_NOTIFY;
-}
-bool releaseAll() {
-  if(!bleConnected) return false;
-  uint8_t k[8]={0}, m[4]={0};
-  bool keyOK=notifyReport(keyboardReport,k,8);
-  bool mouseOK=notifyReport(mouseReport,m,4);
-  return keyOK && mouseOK;
-}
-class Callbacks: public BLEServerCallbacks {
-  void onConnect(BLEServer*) override {
-    // Bluedroid's local CCCD flags are not restored on bonded reconnects.
-    // Match the reconnect compatibility handling in ESP32-BLE-Keyboard.
-    ((BLE2902*)keyboardReport->getDescriptorByUUID((uint16_t)0x2902))->setNotifications(true);
-    ((BLE2902*)mouseReport->getDescriptorByUUID((uint16_t)0x2902))->setNotifications(true);
-    bleConnected=true;
+
+  const uint8_t status = 0x71;
+  if (!sendCommand(&status, 1) || Wire.requestFrom(kSensorAddress, uint8_t{1}) != 1) {
+    return false;
   }
-  void onDisconnect(BLEServer*) override {
-    bleConnected=false;
-    ((BLE2902*)keyboardReport->getDescriptorByUUID((uint16_t)0x2902))->setNotifications(false);
-    ((BLE2902*)mouseReport->getDescriptorByUUID((uint16_t)0x2902))->setNotifications(false);
-    // Advertising restarts in loop; never touch TFT or Strings from BLE task.
+  if (!(Wire.read() & kCalibrated)) {
+    const uint8_t initialize[] = {0xBE, 0x08, 0x00};
+    if (!sendCommand(initialize, sizeof(initialize))) return false;
+    delay(10);
   }
-};
-void setupBLE() {
-  BLEDevice::init("Pixel-Control");
-  auto server=BLEDevice::createServer();
-  server->setCallbacks(new Callbacks());
-  hid=new BLEHIDDevice(server);
-  keyboardReport=hid->inputReport(1);
-  hid->outputReport(1);
-  mouseReport=hid->inputReport(2);
-  keyboardReport->setCallbacks(new ReportCallbacks());
-  mouseReport->setCallbacks(new ReportCallbacks());
-  hid->manufacturer()->setValue("ESP32 Phone Control");
-  hid->pnp(0x02,0x303A,0x4001,0x0100);
-  hid->hidInfo(0x00,0x01);
-  auto security=new BLESecurity();
-  security->setAuthenticationMode(ESP_LE_AUTH_BOND);
-  security->setCapability(ESP_IO_CAP_NONE);
-  security->setInitEncryptionKey(ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK);
-  hid->reportMap(reportMap,sizeof(reportMap));
-  hid->startServices(); hid->setBatteryLevel(100);
-  auto adv=server->getAdvertising();
-  adv->setAppearance(0x03C0);
-  adv->addServiceUUID(hid->hidService()->getUUID());
-  adv->setScanResponse(true); adv->start();
-}
-void drawStatus() {
-  // Paint the background once. Compose each changed line off-screen, then
-  // transfer it in one SPI operation; never clear the visible screen in loop.
-  if(!displayInitialized) {
-    screen.fillScreen(TFT_BLACK);
-    screen.drawFastHLine(8,155,224,TFT_DARKGREY);
-    displayInitialized=true;
-  }
-  String lines[13];
-  lines[0]="PIXEL CONTROL";
-  lines[1]=armed?"ARMED / BOOT to pause":"PAUSED / BOOT to arm";
-  lines[2]=bleConnected?"BLE: connected":"BLE: pair Pixel-Control";
-  lines[3]=WiFi.status()==WL_CONNECTED?"IP: "+WiFi.localIP().toString():"WiFi: not connected";
-  lines[4]=serverOK?"Server: online":"Server: waiting";
-  lines[5]="Heap: "+String(ESP.getFreeHeap());
-  for(int i=0;i<6;i++) lines[6+i]=logs[i].substring(0,36);
-  lines[12]="USB serial: 115200";
-  const int y[]={8,34,58,82,106,130,168,188,208,228,248,268,298};
-  for(int i=0;i<13;i++) {
-    if(lines[i]==drawnLines[i]) continue;
-    uint16_t color=i==0?TFT_CYAN:(i==1?(armed?TFT_GREEN:TFT_YELLOW):TFT_WHITE);
-    lineBuffer.fillSprite(TFT_BLACK);
-    lineBuffer.setTextColor(color,TFT_BLACK);
-    lineBuffer.drawString(lines[i],0,0,i<6?2:1);
-    lineBuffer.pushSprite(8,y[i]);
-    drawnLines[i]=lines[i];
-  }
-}
-// US keyboard mapping only; reject unsupported characters before any side effect.
-bool asciiKey(char c,uint8_t &key,uint8_t &mod) {
-  mod=0;
-  if(c>='a' && c<='z') {key=c-'a'+4;return true;}
-  if(c>='A' && c<='Z') {key=c-'A'+4;mod=2;return true;}
-  if(c>='1' && c<='9') {key=c-'1'+30;return true;}
-  if(c=='0') {key=39;return true;}
-  if(c=='\n') {key=40;return true;}
-  if(c=='\t') {key=43;return true;}
-  if(c==' ') {key=44;return true;}
-  if(c=='\'') {key=52;return true;}
-  const char *symbols="-=[]\\;`,./";
-  const uint8_t keys[]={45,46,47,48,49,51,53,54,55,56};
-  for(int i=0;i<10;i++) if(c==symbols[i]) {key=keys[i];return true;}
-  const char *shifted="!@#$%^&*()_+{}|:\"~<>?";
-  const uint8_t shiftKeys[]={30,31,32,33,34,35,36,37,38,39,45,46,47,48,49,51,52,53,54,55,56};
-  for(int i=0;i<21;i++) if(c==shifted[i]) {key=shiftKeys[i];mod=2;return true;}
-  return false;
-}
-bool sendKey(uint8_t key,uint8_t mod) {
-  uint8_t k[8]={mod,0,key,0,0,0,0,0};
-  bool pressed=notifyReport(keyboardReport,k,8);delay(30);
-  memset(k,0,8);bool released=notifyReport(keyboardReport,k,8);delay(30);
-  return pressed && released;
-}
-String execute(JsonObject a) {
-  if(!armed || !bleConnected) return "not_ready";
-  String type=a["type"] | "";
-  if(type=="move") {
-    int dx=a["dx"] | 0,dy=a["dy"] | 0,w=a["wheel"] | 0;
-    if(dx < -127 || dx>127 || dy < -127 || dy>127 || w < -127 || w>127) return "invalid_move";
-    uint8_t m[]={0,(uint8_t)(int8_t)dx,(uint8_t)(int8_t)dy,(uint8_t)(int8_t)w};
-    if(!notifyReport(mouseReport,m,4)) return "mouse_notify_error";
-  } else if(type=="click") {
-    int button=a["button"] | 1;
-    if(button!=1 && button!=2 && button!=4) return "invalid_button";
-    uint8_t m[]={(uint8_t)button,0,0,0};
-    bool pressed=notifyReport(mouseReport,m,4);delay(30);
-    bool released=releaseAll();
-    if(!pressed || !released) return "mouse_notify_error";
-  } else if(type=="key") {
-    int key=a["usage"] | 0,mod=a["modifiers"] | 0;
-    if(key<4 || key>101 || mod<0 || mod>255) return "invalid_key";
-    if(!sendKey(key,mod)) return "keyboard_notify_error";
-  } else if(type=="text") {
-    String text=a["text"] | "";
-    if(text.length()>160) return "text_too_long";
-    uint8_t key,mod;
-    for(size_t i=0;i<text.length();i++) if(!asciiKey(text[i],key,mod)) return "ascii_only";
-    for(size_t i=0;i<text.length();i++) {
-      // Physical stop is sampled even during a text command.
-      if(digitalRead(0)==LOW || !bleConnected) {
-        armed=false;lastButton=digitalRead(0);buttonChanged=millis();
-        releaseAll();return "interrupted";
-      }
-      asciiKey(text[i],key,mod);
-      if(!sendKey(key,mod)) {releaseAll();return "keyboard_notify_error";}
+
+  const uint8_t measure[] = {0xAC, 0x33, 0x00};
+  if (!sendCommand(measure, sizeof(measure))) return false;
+  delay(80);
+  uint8_t data[7];
+  const uint32_t started = millis();
+  do {
+    if (Wire.requestFrom(kSensorAddress, sizeof(data), true) != sizeof(data)) return false;
+    for (uint8_t &byte : data) byte = Wire.read();
+    if (!(data[0] & kBusy)) break;
+    delay(10);
+  } while (millis() - started < 150);
+  if ((data[0] & kBusy) || !(data[0] & kCalibrated)) return false;
+
+  uint8_t crc = 0xFF;
+  for (size_t i = 0; i < sizeof(data) - 1; ++i) {
+    crc ^= data[i];
+    for (int bit = 0; bit < 8; ++bit) {
+      crc = (crc & 0x80) ? (crc << 1) ^ 0x31 : crc << 1;
     }
-  } else if(type=="release") {if(!releaseAll()) return "release_notify_error";}
-  else return "invalid_action";
-  return "ok";
+  }
+  if (crc != data[6]) return false;
+
+  const uint32_t humidity = (uint32_t(data[1]) << 12) | (uint32_t(data[2]) << 4) | (data[3] >> 4);
+  const uint32_t temperature = (uint32_t(data[3] & 0x0F) << 16) | (uint32_t(data[4]) << 8) | data[5];
+  reading.temperature = temperature * (200.0f / 1048576.0f) - 50.0f;
+  reading.humidity = humidity * (100.0f / 1048576.0f);
+  return reading.temperature >= -40.0f && reading.temperature <= 85.0f;
 }
-void status(JsonDocument &d) {
-  d["boot_id"]=bootID;d["ble_connected"]=bleConnected.load();d["armed"]=armed;
-  d["ip"]=WiFi.localIP().toString();d["heap"]=ESP.getFreeHeap();d["uptime_ms"]=millis();
-  d["firmware"]="0.1.1";
-  JsonArray arr=d.createNestedArray("logs");for(auto &s:logs) arr.add(s);
-  if(lastID.length()) {auto ack=d.createNestedObject("ack");ack["id"]=lastID;ack["result"]=lastResult;}
+
+bool sample() {
+  Reading reading{};
+  if (!readSensor(reading)) {
+    sensorState = "Read failed";
+    Serial.println("AHT20 read failed (I2C, calibration, or CRC)");
+    return false;
+  }
+  uint32_t id[4];
+  esp_fill_random(id, sizeof(id));
+  snprintf(reading.id, sizeof(reading.id), "%08lx%08lx%08lx%08lx",
+           static_cast<unsigned long>(id[0]), static_cast<unsigned long>(id[1]),
+           static_cast<unsigned long>(id[2]), static_cast<unsigned long>(id[3]));
+  latest = reading;
+  sensorState = "OK";
+  Serial.printf("AHT20: %.2f C, %.2f %%RH\n", reading.temperature, reading.humidity);
+
+  if (queueCount == kQueueSize) {
+    queueStart = (queueStart + 1) % kQueueSize;
+    --queueCount;
+    Serial.println("Upload queue full; oldest reading dropped");
+  }
+  if (queueCount == 0) nextUpload = millis();
+  pending[(queueStart + queueCount) % kQueueSize] = reading;
+  ++queueCount;
+  return true;
 }
-void pollServer() {
-  if(WiFi.status()!=WL_CONNECTED || !baseURL.length() || !token.length()) {serverOK=false;return;}
+
+void upload() {
+  const Reading &reading = pending[queueStart];
+  StaticJsonDocument<256> body;
+  body["sample_id"] = reading.id;
+  body["temperature_c"] = reading.temperature;
+  body["humidity_pct"] = reading.humidity;
+  String payload;
+  serializeJson(body, payload);
+
+  WiFiClient client;
   HTTPClient http;
-  if(!http.begin(baseURL+"/v1/phone-control/device/poll")) return;
-  http.setTimeout(1200);http.addHeader("Content-Type","application/json");
-  http.addHeader("Authorization","Bearer "+token);
-  StaticJsonDocument<1536> body;status(body);String payload;serializeJson(body,payload);
-  int code=http.POST(payload);
-  serverOK=(code==200);
-  static int previousCode=0;
-  if(code!=previousCode) {
-    previousCode=code;
-    logLine("Server HTTP: "+String(code));
+  http.setConnectTimeout(2500);
+  http.setTimeout(2500);
+  int status = -1;
+  if (http.begin(client, serverUrl + "/v1/sensors/aht20/readings")) {
+    http.addHeader("Content-Type", "application/json");
+    http.addHeader("Authorization", "Bearer " + token);
+    status = http.POST(payload);
+    http.end();
   }
-  if(code==200 && http.getSize()<=1536) {
-    // Keep the loop task's 8KB stack well below its limit during HID execution.
-    StaticJsonDocument<1024> response;
-    auto err=deserializeJson(response,http.getStream());
-    if(!err && response["command"].is<JsonObject>()) {
-      JsonObject cmd=response["command"];
-      String id=cmd["id"] | "";
-      if(id.length() && id!=lastID) {
-        // Save before executing. No automatic retries of input side effects.
-        lastID=id;lastResult="interrupted";
-        lastResult=execute(cmd["action"].as<JsonObject>());
-        logLine(String(cmd["action"]["type"] | "action")+": "+lastResult);
-      }
-    }
+
+  if (status == 200 || status == 201) {
+    queueStart = (queueStart + 1) % kQueueSize;
+    --queueCount;
+    uploadState = "OK";
+    nextUpload = millis();
+  } else {
+    uploadState = status > 0 ? "HTTP " + String(status) : "Connection error";
+    nextUpload = millis() + kRetryInterval;
   }
-  http.end();
+  Serial.printf("Upload: %s (%u pending)\n", uploadState.c_str(), unsigned(queueCount));
 }
-void readConfig() {
+
+void drawStatus() {
+  screen.setTextFont(2);
+  screen.setTextColor(TFT_WHITE, TFT_BLACK);
+  screen.fillRect(8, 36, 224, 160, TFT_BLACK);
+  if (latest.id[0]) {
+    screen.drawString("Temperature: " + String(latest.temperature, 1) + " C", 8, 36);
+    screen.drawString("Humidity: " + String(latest.humidity, 1) + " %RH", 8, 58);
+  }
+  screen.drawString("Sensor: " + String(sensorState), 8, 80);
+  screen.drawString(WiFi.isConnected() ? "Wi-Fi: " + WiFi.localIP().toString() : "Wi-Fi: offline", 8, 102);
+  screen.drawString("Upload: " + uploadState, 8, 124);
+  screen.drawString("Pending: " + String(queueCount), 8, 146);
+}
+
+void handleSerial(const String &line) {
+  StaticJsonDocument<1536> config;
+  if (deserializeJson(config, line)) {
+    Serial.println("Invalid JSON");
+    return;
+  }
+  if (config["op"] == "status") {
+    Serial.printf("Sensor: %s | Wi-Fi: %s | IP: %s | MAC: %s | Upload: %s | Pending: %u\n",
+                  sensorState, WiFi.isConnected() ? "online" : "offline",
+                  WiFi.localIP().toString().c_str(), WiFi.macAddress().c_str(),
+                  uploadState.c_str(), unsigned(queueCount));
+    if (latest.id[0]) {
+      Serial.printf("Latest: %.2f C, %.2f %%RH\n", latest.temperature, latest.humidity);
+    }
+    return;
+  }
+  if (config["op"] == "network" && config["ip"].is<const char *>() &&
+      config["ip"] == "") {
+    if (prefs.isKey("static_ip") && !prefs.remove("static_ip")) {
+      Serial.println("Could not reset static IP");
+      return;
+    }
+    Serial.println("DHCP enabled. Restarting.");
+    Serial.flush();
+    ESP.restart();
+    return;
+  }
+  if (config["op"] != "config") {
+    Serial.println("Expected config or status");
+    return;
+  }
+  String url = config["server"] | "";
+  const String key = config["token"] | "";
+  const String ssid = config["ssid"] | "";
+  const String password = config["password"] | "";
+  while (url.endsWith("/")) url.remove(url.length() - 1);
+  if (!url.startsWith("http://") || url.length() <= 7 || url.length() >= 200 ||
+      ssid.isEmpty() || ssid.length() > 32 || password.length() > 63 ||
+      key.length() < 24 || key.length() > 128) {
+    Serial.println("Invalid Wi-Fi, LAN HTTP server URL, or token");
+    return;
+  }
+  const bool passwordSaved = password.isEmpty()
+      ? (!prefs.isKey("password") || prefs.remove("password"))
+      : prefs.putString("password", password) > 0;
+  if (!passwordSaved || !prefs.putString("ssid", ssid) ||
+      !prefs.putString("server", url) || !prefs.putString("aht20_token", key)) {
+    Serial.println("Configuration write failed");
+    return;
+  }
+  Serial.println("Configuration saved. Restarting.");
+  Serial.flush();
+  ESP.restart();
+}
+
+void readSerial() {
   static String line;
-  while(Serial.available()) {
-    char c=Serial.read();
-    if(c=='\n') {
-      StaticJsonDocument<1536> d;
-      auto error=deserializeJson(d,line);
-      if(!error && d["op"]=="status") {
-        StaticJsonDocument<1536> report;status(report);
-        report["wifi_mac"]=WiFi.macAddress();
-        report["wifi_rssi"]=WiFi.RSSI();
-        report["wifi_status"]=(int)WiFi.status();
-        report["keyboard_notify"]=((BLE2902*)keyboardReport->getDescriptorByUUID((uint16_t)0x2902))->getNotifications();
-        report["mouse_notify"]=((BLE2902*)mouseReport->getDescriptorByUUID((uint16_t)0x2902))->getNotifications();
-        report["last_notify_status"]=lastNotifyStatus.load();
-        serializeJson(report,Serial);Serial.println();
-      } else if(!error && d["op"]=="network") {
-        String ip=d["ip"] | "";
-        String gateway=d["gateway"] | "";
-        String mask=d["mask"] | "255.255.255.0";
-        IPAddress address,router,subnet;
-        if(ip=="") {
-          prefs.remove("static_ip");prefs.remove("gateway");prefs.remove("mask");
-        } else if(address.fromString(ip) && router.fromString(gateway) && subnet.fromString(mask)
-                  && address[0]!=0 && address[0]<224 && address[3]!=0 && address[3]!=255) {
-          prefs.putString("static_ip",ip);prefs.putString("gateway",gateway);prefs.putString("mask",mask);
-        } else {logLine("Invalid static network config");line="";continue;}
-        logLine("Network config saved. Restarting.");delay(200);ESP.restart();
-      } else if(!error && d["op"]=="config") {
-        String url=d["server"] | "";
-        String key=d["token"] | "";
-        String net=d["ssid"] | "";
-        if(url.startsWith("http://") && url.length()<200 && key.length()>=24 && net.length()<=32) {
-          while(url.endsWith("/")) url.remove(url.length()-1);
-          prefs.putString("ssid",net);prefs.putString("password",d["password"] | "");
-          prefs.putString("server",url);prefs.putString("token",key);
-          logLine("Configuration saved. Restarting.");delay(200);ESP.restart();
-        } else logLine("Invalid config (HTTP LAN / token)");
-      } else logLine("Expected config JSON");
-      line="";
-    } else if(c!='\r') {
-      if(line.length()<1536) line+=c;else line="";
+  static bool tooLong = false;
+  while (Serial.available()) {
+    const char c = Serial.read();
+    if (c == '\n') {
+      if (!tooLong && line.length()) handleSerial(line);
+      line = "";
+      tooLong = false;
+    } else if (c != '\r' && !tooLong) {
+      if (line.length() < 1536) line += c;
+      else tooLong = true;
     }
   }
 }
-void setup() {
-  Serial.begin(115200);pinMode(0,INPUT_PULLUP);
-  pinMode(33,OUTPUT);digitalWrite(33,HIGH); // deselect shared-bus touch
-  pinMode(5,OUTPUT);digitalWrite(5,HIGH); // deselect SD
-  pinMode(4,OUTPUT);digitalWrite(4,HIGH); // audio amplifier off
-  screen.init();screen.setRotation(0);pinMode(27,OUTPUT);digitalWrite(27,HIGH);
-  lineBuffer.setColorDepth(16);
-  if(!lineBuffer.createSprite(224,20)) {
-    Serial.println("Display line buffer allocation failed");
-    while(true) delay(1000);
+
+void startWiFi() {
+  WiFi.persistent(false);
+  WiFi.mode(WIFI_STA);
+  WiFi.setAutoReconnect(true);
+  if (prefs.isKey("static_ip")) {
+    IPAddress ip, gateway, mask;
+    if (ip.fromString(prefs.getString("static_ip")) &&
+        gateway.fromString(prefs.getString("gateway")) &&
+        mask.fromString(prefs.getString("mask", "255.255.255.0"))) {
+      WiFi.config(ip, gateway, mask, gateway);
+    }
   }
-  logLine("Starting firmware 0.1.1");drawStatus();
-  prefs.begin("phone-control",false);
-  if(prefs.isKey("ssid")) ssid=prefs.getString("ssid");
-  if(prefs.isKey("password")) password=prefs.getString("password");
-  if(prefs.isKey("server")) baseURL=prefs.getString("server");
-  if(prefs.isKey("token")) token=prefs.getString("token");
-  bootID=String(esp_random(),HEX)+String(esp_random(),HEX);
-  setupBLE();logLine("BLE: Pixel-Control");
-  // Classic ESP32 requires modem sleep for Wi-Fi/Bluetooth coexistence.
-  WiFi.mode(WIFI_STA);WiFi.setSleep(true);
-  if(prefs.isKey("static_ip")) {
-    IPAddress ip,gateway,mask;
-    ip.fromString(prefs.getString("static_ip"));
-    gateway.fromString(prefs.getString("gateway"));
-    mask.fromString(prefs.getString("mask","255.255.255.0"));
-    if(WiFi.config(ip,gateway,mask,gateway)) logLine("Static IP: "+ip.toString());
-    else logLine("Static IP config failed");
-  }
-  if(ssid.length()) {WiFi.begin(ssid.c_str(),password.c_str());logLine("Connecting WiFi...");}
-  else logLine("Use tools/configure.py over USB");
-  logLine("BOOT button arms / pauses");
+
+  const String ssid = prefs.getString("ssid", "");
+  wifiConfigured = !ssid.isEmpty();
+  if (wifiConfigured) WiFi.begin(ssid.c_str(), prefs.getString("password", "").c_str());
 }
+}  // namespace
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(33, OUTPUT);
+  digitalWrite(33, HIGH);  // Deselect touch controller.
+  pinMode(5, OUTPUT);
+  digitalWrite(5, HIGH);   // Deselect SD card.
+  pinMode(4, OUTPUT);
+  digitalWrite(4, HIGH);   // Disable audio amplifier.
+  screen.init();
+  screen.setRotation(0);
+  pinMode(27, OUTPUT);
+  digitalWrite(27, HIGH);
+  screen.fillScreen(TFT_BLACK);
+  screen.setTextColor(TFT_WHITE, TFT_BLACK);
+  screen.drawString("AHT20 Room Sensor", 8, 8, 2);
+  prefs.begin("phone-control", false);  // Reuse existing Wi-Fi and static IP.
+  serverUrl = prefs.getString("server", "");
+  token = prefs.getString("aht20_token", "");
+  if (serverUrl.isEmpty() || token.isEmpty()) uploadState = "USB setup required";
+  startWiFi();
+  delay(40);
+  nextSample = millis();
+}
+
 void loop() {
-  readConfig();
-  static bool previousWiFi=false;
-  bool online=WiFi.status()==WL_CONNECTED;
-  if(online!=previousWiFi) {
-    previousWiFi=online;
-    logLine(online?"WiFi IP: "+WiFi.localIP().toString():"WiFi disconnected");
+  readSerial();
+  const uint32_t now = millis();
+  if (due(now, nextSample)) {
+    nextSample = now + (sample() ? kSampleInterval : kRetryInterval);
+    drawStatus();
   }
-  bool b=digitalRead(0);
-  if(b!=lastButton && millis()-buttonChanged>200) {
-    buttonChanged=millis();lastButton=b;
-    if(!b) {armed=!armed;releaseAll();logLine(armed?"Control armed":"Control paused");}
+
+  static bool wasOnline = false;
+  static uint32_t lastReconnect = 0;
+  const bool online = WiFi.isConnected();
+  if (online != wasOnline) {
+    wasOnline = online;
+    drawStatus();
   }
-  static bool previousBLE=false;
-  bool connected=bleConnected;
-  if(connected!=previousBLE) {
-    previousBLE=connected;
-    if(!connected) {armed=false;BLEDevice::startAdvertising();}
-    logLine(connected?"BLE connected":"BLE disconnected; paused");
+  if (!online && wifiConfigured && now - lastReconnect >= kRetryInterval) {
+    lastReconnect = now;
+    WiFi.reconnect();
   }
-  if(millis()-lastPoll>750) {lastPoll=millis();pollServer();}
-  if(millis()-lastDraw>1200) {lastDraw=millis();drawStatus();}
-  delay(5);
+  if (online && queueCount && !serverUrl.isEmpty() && !token.isEmpty() && due(millis(), nextUpload)) {
+    upload();
+    drawStatus();
+  }
+  delay(20);
 }

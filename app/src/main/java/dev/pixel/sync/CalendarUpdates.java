@@ -39,8 +39,8 @@ public final class CalendarUpdates extends BroadcastReceiver {
                 Intent open=new Intent(context,CalendarActivity.class).putExtra("date",due.date).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_CLEAR_TOP);
                 PendingIntent pi=PendingIntent.getActivity(context,due.id.hashCode(),open,PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
                 boolean discreet=due.privateContent&&store.preferences().optBoolean("private_notifications",true);
-                Notification publicVersion=new Notification.Builder(context,"calendar").setSmallIcon(R.drawable.ic_chat_history).setContentTitle("Greta · 日历").setContentText("你有一条日历提醒").build();
-                Notification note=new Notification.Builder(context,"calendar").setSmallIcon(R.drawable.ic_chat_history).setContentTitle("Greta · 日历").setContentText(discreet?"你有一条日历提醒":due.body).setStyle(new Notification.BigTextStyle().bigText(discreet?"进入日历查看详情":due.body)).setVisibility(Notification.VISIBILITY_PRIVATE).setPublicVersion(publicVersion).setContentIntent(pi).setOnlyAlertOnce(true).setAutoCancel(true).build();
+                Notification publicVersion=new Notification.Builder(context,"calendar").setSmallIcon(R.drawable.ic_stat_greta).setContentTitle("Greta · 日历").setContentText("你有一条日历提醒").build();
+                Notification note=new Notification.Builder(context,"calendar").setSmallIcon(R.drawable.ic_stat_greta).setContentTitle("Greta · 日历").setContentText(discreet?"你有一条日历提醒":due.body).setStyle(new Notification.BigTextStyle().bigText(discreet?"进入日历查看详情":due.body)).setVisibility(Notification.VISIBILITY_PRIVATE).setPublicVersion(publicVersion).setContentIntent(pi).setOnlyAlertOnce(true).setAutoCancel(true).build();
                 manager.notify("calendar:"+due.id,due.id.hashCode(),note);store.markDelivered(due.id);
             }
             AlarmManager alarms=context.getSystemService(AlarmManager.class);PendingIntent alarm=PendingIntent.getBroadcast(context,0,new Intent(context,CalendarUpdates.class).setAction("dev.pixel.sync.CALENDAR_TICK"),PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
