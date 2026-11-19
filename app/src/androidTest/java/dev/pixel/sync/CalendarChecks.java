@@ -25,6 +25,21 @@ final class CalendarChecks {
         context=test.getTargetContext();Bundle result=new Bundle();int code=Activity.RESULT_OK;
         try{
             expect(Build.HARDWARE.equals("ranchu")||Build.HARDWARE.equals("goldfish"),"Use an independent emulator");context.deleteDatabase("calendar-tests.db");store=new CalendarStore(context,"calendar-tests.db");
+            check("endingCycleUpdatesExistingRecord",()->{
+                context.deleteDatabase("calendar-end-ui-tests.db");
+                Activity activity=test.startActivitySync(new Intent(context,CalendarActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));test.waitForIdleSync();
+                try{test.runOnMainSync(()->{try{
+                    java.lang.reflect.Field storeField=CalendarActivity.class.getDeclaredField("store");storeField.setAccessible(true);((CalendarStore)storeField.get(activity)).close();
+                    CalendarStore isolated=new CalendarStore(context,"calendar-end-ui-tests.db");storeField.set(activity,isolated);
+                    JSONObject original=isolated.write("cycle",new JSONObject().put("start",LocalDate.now().minusDays(6).toString()),UUID.randomUUID().toString()).getJSONObject("record");
+                    java.lang.reflect.Method method=CalendarActivity.class.getDeclaredMethod("cycleEditor",JSONObject.class,boolean.class);method.setAccessible(true);method.invoke(activity,original,true);
+                    java.lang.reflect.Field editor=CalendarActivity.class.getDeclaredField("editor");editor.setAccessible(true);View content=((Dialog)editor.get(activity)).getWindow().getDecorView();
+                    expect(((Switch)find(content,"本次已经结束")).isChecked(),"end action did not select ended");find(content,"保存").performClick();
+                    List<JSONObject> records=isolated.cycles();expect(records.size()==1,"end action created another record");JSONObject ended=records.get(0);
+                    expect(ended.getString("id").equals(original.getString("id"))&&ended.getInt("revision")==2&&ended.getString("start").equals(original.getString("start"))&&ended.getString("end").equals(LocalDate.now().toString()),"end action did not update original dates");
+                    isolated.close();
+                }catch(Exception error){throw new RuntimeException(error);}});}finally{test.runOnMainSync(activity::finish);test.waitForIdleSync();context.deleteDatabase("calendar-end-ui-tests.db");}
+            });
             check("dailyWeeklyBiweeklyAnchors",()->{
                 for(String repeat:new String[]{"daily","weekly","biweekly"})next(task("2026-10-26",repeat),"2026-10-01","2026-10-26");
                 next(task("2026-10-26","daily"),"2026-10-27","2026-10-27");next(task("2026-10-26","weekly"),"2026-10-27","2026-11-02");next(task("2026-10-26","biweekly"),"2026-11-02","2026-11-09");next(task("2026-10-26","biweekly"),"2026-11-09","2026-11-09");
