@@ -8,21 +8,37 @@
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <WebServer.h>
+#include <DNSServer.h>
 #include <time.h>
 #include "trusted_roots.h"
 
 
 #include "calibration.h"
 #include "touch_gesture.h"
+#include "ui_controls.h"
+#include "frame_diff.h"
 
 namespace {
-TFT_eSPI lcd;
+TFT_eSPI display;
+TFT_eSprite lcd(&display);
+bool frameDirty=true;
+uint32_t frameTiles[300]={};
+bool firstFrame=true;
+void flushFrame(){
+ if(!frameDirty)return;frameDirty=false;
+ for(int ty=0;ty<15;++ty)for(int tx=0;tx<20;++tx){
+  uint32_t hash=adventure::tileHash([](int x,int y){return lcd.readPixelValue(x,y);},tx,ty);
+  int index=ty*20+tx;if(firstFrame||frameTiles[index]!=hash){lcd.pushSprite(tx*16,ty*16,tx*16,ty*16,16,16);frameTiles[index]=hash;}
+ }
+ firstFrame=false;
+}
 U8g2_for_TFT_eSPI chinese;
 Preferences prefs;
 constexpr uint16_t cream = 0xFF9A, green = 0x346C, ink = 0x2947;
 constexpr uint16_t pale = 0xD718, blue = 0x8D9F, gold = 0xFE48;
-struct Button { int x, y, w, h, action; bool primary; };
-Button buttons[8];
+using Button=adventure::ButtonRect;
+Button buttons[16];
+static_assert(sizeof(buttons)/sizeof(buttons[0])>=13,"Pairing keypad requires thirteen touch buttons");
 uint8_t buttonCount = 0;
 bool dirty = true, held = false;
 adventure::TouchGesture gesture;
@@ -36,6 +52,7 @@ const int targets[4][2] = {{24,48}, {296,48}, {24,212}, {296,212}};
 bool touchEnabled = false, inputDown=false, suppressTouch=false;
 
 void text(const char *s, int x, int baseline, uint16_t color = ink) {
+  frameDirty=true;
   if (x < 0 || x + chinese.getUTF8Width(s) > 320 || baseline > 236) Serial.printf("TEXT OVERFLOW x=%d y=%d: %s\n",x,baseline,s);
   chinese.setForegroundColor(color);
   chinese.setCursor(x, baseline);
@@ -48,9 +65,10 @@ void button(int x, int y, int w, const char *label, int action, bool primary = t
   lcd.fillRoundRect(x, y + 2, w, 44, 11, primary ? ink : 0xC671);
   lcd.fillRoundRect(x, y, w, 44, 11, primary ? green : pale);
   text(label, x + (w - chinese.getUTF8Width(label)) / 2, y + 28, primary ? TFT_WHITE : ink);
-  if (buttonCount < 8) buttons[buttonCount++] = {x,y,w,44,action,primary};
+  adventure::registerButton(buttons,buttonCount,{x,y,w,44,action,primary});
 }
 void face(int x, int y, bool wizard, bool blink = false) {
+  frameDirty=true;
   lcd.fillCircle(x, y, 23, wizard ? 0xFE96 : 0x9ED5);
   if (blink) {
     lcd.drawFastHLine(x-10, y-2, 5, ink); lcd.drawFastHLine(x+5, y-2, 5, ink);
@@ -74,7 +92,7 @@ void star(int x, int y, bool filled) {
 
 void draw() {if(inputDown){suppressTouch=true;gesture=adventure::TouchGesture{};}online::render();}
 void drawCalibration(const char *message = "请轻点十字中心，再松手") {
-  lcd.fillScreen(cream); buttonCount=0;
+  lcd.fillSprite(cream); buttonCount=0;
   centered("触摸校准",24);
   centered(message,126);
   const int x=targets[calibrationStep][0], y=targets[calibrationStep][1];
@@ -92,19 +110,13 @@ void action(int id) {
   if(id==41) {beginCalibration();return;}
   online::handle(id);
 }
-int hit(int x,int y) {
-  for (int i=0;i<buttonCount;++i) {
-    const auto &b=buttons[i];
-    if(x>=b.x && x<b.x+b.w && y>=b.y && y<b.y+b.h) return i;
-  }
-  return -1;
-}
+int hit(int x,int y) {return adventure::hitButton(buttons,buttonCount,x,y);}
 void readTouch() {
   if (!touchEnabled || millis()-lastTouch<20) return;
   lastTouch=millis();
   uint16_t rx=0,ry=0;
-  bool down=lcd.getTouchRawZ()>350;
-  if(down) { lcd.getTouchRaw(&rx,&ry); down=rx>30 && rx<4065 && ry>30 && ry<4065; }
+  bool down=display.getTouchRawZ()>350;
+  if(down) { display.getTouchRaw(&rx,&ry); down=rx>30 && rx<4065 && ry>30 && ry<4065; }
   if(calibrating) {
     if(down) {
       if(samples<12) {sampleX+=rx; sampleY+=ry; ++samples;}
@@ -138,11 +150,11 @@ void readTouch() {
   }
   const auto update=gesture.update(down,target,millis());
   // Restore only the old border; blank taps and cancelled gestures never clear the screen.
-  if(update.restore>=0) {
+  if(update.restore>=0) {frameDirty=true;
     const auto &b=buttons[update.restore];
     lcd.drawRoundRect(b.x,b.y,b.w,b.h,11,b.primary?green:pale);
   }
-  if(update.highlight>=0) {
+  if(update.highlight>=0) {frameDirty=true;
     const auto &b=buttons[update.highlight];
     lcd.drawRoundRect(b.x,b.y,b.w,b.h,11,gold);
   }
@@ -155,7 +167,9 @@ void serialControl() {
   if(c=='C')beginCalibration();
   if(c=='W')online::startPortal();
   if(c=='R')online::sync();
-  if(c=='D')Serial.printf("ONLINE wifi=%d ready=%d tasks=%u pending=%d mode=%s\n",int(WiFi.status()),online::ready,unsigned(online::tasks().size()),!online::pendingBody.isEmpty(),online::mode.c_str());
+  if(c=='D')Serial.printf("ONLINE wifi=%d configured=%d screen=%d heap=%u ready=%d tasks=%u pending=%d\n",int(WiFi.status()),online::wifiConfiguredOnline(),online::screen,ESP.getFreeHeap(),online::ready,unsigned(online::tasks().size()),!online::pendingBody.isEmpty());
+  if(c=='P')online::beginPair();
+  if(c=='V')Serial.printf("FRAME width=%d height=%d corner=%u expected=%u\n",lcd.width(),lcd.height(),lcd.readPixelValue(319,239),unsigned((cream&0xE000)>>8|(cream&0x0700)>>6|(cream&0x0018)>>3));
   if(c=='H'){calibrating=false;online::screen=0;dirty=true;}
 }
 
@@ -168,7 +182,10 @@ void setup() {
   for(int pin : {22,16,17}) {pinMode(pin,OUTPUT);digitalWrite(pin,HIGH);}
   pinMode(27,OUTPUT);digitalWrite(27,HIGH);
   pinMode(0,INPUT_PULLUP);
-  lcd.init();lcd.setRotation(1);
+  display.init();display.setRotation(1);
+  lcd.setColorDepth(8);
+  if(!lcd.createSprite(320,240)){Serial.println("FRAMEBUFFER ALLOCATION FAILED");while(true)delay(1000);}
+
   chinese.begin(lcd);chinese.setFont(u8g2_font_wqy16_t_gb2312);chinese.setFontMode(1);
   prefs.begin("math-playtest",false);
   touchEnabled=true;
@@ -176,7 +193,7 @@ void setup() {
   online::init();
   if(!calibration.valid()) beginCalibration();
   else draw();
-  Serial.println("MATH ADVENTURE v0.4 ONLINE READY; h=help. Server-authoritative tasks and rewards.");
+  Serial.println("MATH ADVENTURE v0.4.3 ONLINE READY; h=help. Server-authoritative tasks and rewards.");
 }
 void loop() {
   serialControl();online::tick();readTouch();
@@ -186,5 +203,6 @@ void loop() {
     bool blink=phase>3700;
     if(blink!=(lastBlink!=0)) {face(54,107,true,blink);lastBlink=blink?1:0;}
   }
+  flushFrame();
   delay(5);
 }

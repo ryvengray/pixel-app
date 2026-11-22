@@ -3,6 +3,9 @@
 namespace online {
 Preferences config;
 WebServer portal(80);
+DNSServer captiveDns;
+String configuredSsid;
+bool wifiConfiguredOnline(){return adventure::configuredNetwork(configuredSsid.length(),WiFi.status()==WL_CONNECTED,WiFi.SSID()==configuredSsid,WiFi.localIP()!=IPAddress(0,0,0,0));}
 struct Work { String url, token, path, body; };
 struct Result { int status; String path, body; };
 QueueHandle_t jobs, replies;
@@ -13,7 +16,7 @@ uint32_t nextPoll=0, nextRetry=0, setupUntil=0;
 DynamicJsonDocument state(24576);
 int selected=0, screen=0, contentPage=0; // home, map, question, method/hint, settings
 String detail, resumeTask, pairSecret, pairBody, pairCode, pairVerification;
-bool pairWaiting=false;uint32_t pairPoll=0;
+bool pairWaiting=false,backendReachable=false,pairOpenRequested=false;uint32_t pairPoll=0,backendChecked=0;
 int xp=0, coins=0;
 
 String escape(String s) {
@@ -53,7 +56,7 @@ void statusHeader() {
   text(busy?"同步中":(pendingBody.length()?"待同步":(mode=="live"?"正式":(mode=="practice"?"试玩":"联网"))),260,20);
 }
 bool send(const String &path,const String &body="") {
-  if(busy||base.isEmpty()||(credential.isEmpty()&&!path.startsWith("/api/math/pair/"))||WiFi.status()!=WL_CONNECTED) return false;
+  if(busy||base.isEmpty()||(credential.isEmpty()&&!path.startsWith("/api/math/pair/")&&path!="/health")||WiFi.status()!=WL_CONNECTED) return false;
   Work *w=new Work{base,path.startsWith("/api/math/pair/")?pairSecret:credential,path,body};
   if(xQueueSend(jobs,&w,0)!=pdTRUE) {delete w;return false;}
   busy=true;statusHeader();return true;
@@ -78,12 +81,16 @@ void submit(const char *path,int answer=-1) {
   send(pendingPath,pendingBody);dirty=true;
 }
 void startPortal() {
+  if(setupActive){setupUntil=millis()+600000;screen=4;dirty=true;return;}
   if(apPassword.isEmpty()) {
-    char pass[16];snprintf(pass,sizeof(pass),"%08lx",(unsigned long)esp_random());apPassword=pass;
+    apPassword=config.getString("ap-password","");if(apPassword.length()<8){char pass[16];snprintf(pass,sizeof(pass),"%08lx%04lx",(unsigned long)esp_random(),(unsigned long)(esp_random()&0xffff));apPassword=pass;config.putString("ap-password",apPassword);}
     char name[32];snprintf(name,sizeof(name),"Math-Setup-%04lx",(unsigned long)(ESP.getEfuseMac()&0xffff));apName=name;
     char key[32];snprintf(key,sizeof(key),"%08lx%08lx",(unsigned long)esp_random(),(unsigned long)esp_random());csrf=key;
   }
-  WiFi.mode(WIFI_AP_STA);WiFi.softAP(apName.c_str(),apPassword.c_str());setupActive=true;setupUntil=millis()+600000;
+  WiFi.setAutoReconnect(false);
+  if(WiFi.status()!=WL_CONNECTED)WiFi.disconnect(false);
+  WiFi.mode(WIFI_AP_STA);WiFi.softAPConfig(IPAddress(192,168,4,1),IPAddress(192,168,4,1),IPAddress(255,255,255,0));
+  WiFi.softAP(apName.c_str(),apPassword.c_str());captiveDns.stop();captiveDns.start(53,"*",WiFi.softAPIP());setupActive=true;setupUntil=millis()+600000;
   screen=4;dirty=true;
 }
 void init() {
@@ -98,7 +105,7 @@ void init() {
     message="网络初始化失败，请重启";return;
   }
   WiFi.mode(WIFI_STA);WiFi.setAutoReconnect(true);
-  String ssid=config.getString("ssid","");
+  String ssid=config.getString("ssid","");configuredSsid=ssid;
   if(ssid.length()) WiFi.begin(ssid.c_str(),config.getString("wifi","").c_str());else WiFi.begin();
   configTime(0,0,"pool.ntp.org","ntp.aliyun.com");
   portal.on("/networks",HTTP_GET,[](){
@@ -122,7 +129,7 @@ void init() {
     }
     String json;serializeJson(response,json);portal.sendHeader("Cache-Control","no-store");portal.send(200,"application/json",json);
   });
-  portal.on("/",HTTP_GET,[](){
+  auto configPage=[](){
     if(!setupActive||portal.client().localIP()!=WiFi.softAPIP()) {portal.send(403);return;}
     String html="<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width'><h2>数学冒险岛配网</h2><p>连接2.4GHz Wi-Fi。先连接家庭Wi-Fi，再在屏幕进行四位码配对。</p><form method=post action=/save>";
     html+="<input type=hidden name=csrf value='"+csrf+"'><p>附近Wi-Fi <select id=networks name=ssid required disabled><option value=''>正在扫描附近网络…</option></select> <button id=rescan type=button>重新扫描</button></p><p id=scanStatus role=status></p><p>Wi-Fi密码 <input name=wifi type=password maxlength=64></p><p>后端地址 <input name=base required value='"+escape(base)+"'></p><p>连接Wi-Fi后，在屏幕上输入家长网页的四位配对码即可绑定，无需复制令牌。</p><p>同一网络的密码留空保留原值。开放Wi-Fi请勾选<input type=checkbox name=open>无密码</p><button>保存并连接</button></form>";
@@ -153,6 +160,16 @@ async function scan(){
 rescan.addEventListener('click',scan);scan();
 </script>)HTML";
     portal.sendHeader("Cache-Control","no-store");portal.send(200,"text/html; charset=utf-8",html);
+  };
+  portal.on("/",HTTP_GET,configPage);
+  portal.on("/hotspot-detect.html",HTTP_GET,configPage);
+  portal.on("/library/test/success.html",HTTP_GET,configPage);
+  portal.on("/generate_204",HTTP_GET,configPage);
+  portal.on("/gen_204",HTTP_GET,configPage);
+  portal.on("/connecttest.txt",HTTP_GET,configPage);
+  portal.onNotFound([](){
+    if(!setupActive||portal.client().localIP()!=WiFi.softAPIP()){portal.send(403);return;}
+    portal.sendHeader("Location","http://192.168.4.1/",true);portal.sendHeader("Cache-Control","no-store");portal.send(302,"text/plain","");
   });
   portal.on("/save",HTTP_POST,[](){
     if(!setupActive||portal.client().localIP()!=WiFi.softAPIP()||portal.arg("csrf")!=csrf) {portal.send(403);return;}
@@ -167,35 +184,55 @@ rescan.addEventListener('click',scan);scan();
     if(pass.isEmpty()&&!portal.hasArg("open")) {portal.send(422,"text/plain; charset=utf-8","新选择的网络需要填写密码。");return;}
     if(!validUrl(url)||ssid.isEmpty()||ssid.length()>32||pass.length()>64) {portal.send(422,"text/plain; charset=utf-8","请检查地址、Wi-Fi与设备令牌");return;}
     config.putString("base",url);config.putString("device",tok);config.putString("ssid",ssid);config.putString("wifi",pass);
-    base=url;credential=tok;ready=false;state.clear();
+    base=url;credential=tok;configuredSsid=ssid;ready=false;state.clear();
     portal.send(200,"text/html; charset=utf-8","已保存，可以回到屏幕等待同步。热点将在十分钟后关闭。");
-    WiFi.disconnect(false);WiFi.begin(ssid.c_str(),pass.c_str());screen=0;message="正在连接小伙伴";nextPoll=0;dirty=true;
+    WiFi.disconnect(false);WiFi.setAutoReconnect(true);WiFi.begin(ssid.c_str(),pass.c_str());screen=0;message="正在连接小伙伴";nextPoll=0;dirty=true;
   });
   portal.begin();
   if(base.isEmpty()||credential.isEmpty())startPortal();
 }
-void beginPair() {
-  if(WiFi.status()!=WL_CONNECTED){message="请先连接家庭Wi-Fi";screen=4;dirty=true;return;}
+void preparePair() {
+  if(!wifiConfiguredOnline()){message="请先连接家庭Wi-Fi";screen=4;dirty=true;return;}
   if(busy||pendingBody.length())return;
   if(pairSecret.isEmpty()) {char secret[65];snprintf(secret,sizeof(secret),"%08lx%08lx%08lx%08lx%08lx%08lx%08lx%08lx",(unsigned long)esp_random(),(unsigned long)esp_random(),(unsigned long)esp_random(),(unsigned long)esp_random(),(unsigned long)esp_random(),(unsigned long)esp_random(),(unsigned long)esp_random(),(unsigned long)esp_random());pairSecret=secret;config.putString("pair-secret",pairSecret);}
   screen=5;pairCode="";dirty=true;
 }
+void beginPair() {
+  pairOpenRequested=false;screen=7;dirty=true;
+  if(!wifiConfiguredOnline()){backendReachable=false;message="Wi-Fi未连接，请先配网";return;}
+  if(busy||pendingBody.length()){message="正在处理提交，请稍后再试";return;}
+  message="正在检查服务器连接";
+  pairOpenRequested=send("/health");
+}
 void claimPair() {
+  if(pairCode.length()!=4)return;
+  if(!adventure::pairingNetworkReady(wifiConfiguredOnline(),backendReachable,backendChecked,millis())) {
+    message="网络未连通，请重新检查";screen=7;dirty=true;return;
+  }
   DynamicJsonDocument body(1024);body["secret"]=pairSecret;body["name"]=apName.length()?apName:"Math-ESP32";body["code"]=pairCode;
   pairBody="";serializeJson(body,pairBody);config.putString("pair-body",pairBody);screen=6;pairPoll=0;dirty=true;
 }
 void tick() {
+  if(setupActive)captiveDns.processNextRequest();
   portal.handleClient();
-  if(setupActive && (int32_t)(millis()-setupUntil)>=0) {WiFi.softAPdisconnect(true);setupActive=false;dirty=true;}
+  if(screen==5&&!wifiConfiguredOnline()){backendReachable=false;screen=7;message="Wi-Fi断开，请先恢复连接";dirty=true;}
+  if(setupActive && (int32_t)(millis()-setupUntil)>=0 && WiFi.softAPgetStationNum()==0) {captiveDns.stop();WiFi.softAPdisconnect(true);WiFi.setAutoReconnect(true);setupActive=false;dirty=true;}
   Result *r=nullptr;
   if(replies && xQueueReceive(replies,&r,0)==pdTRUE) {
+    if(r->path=="/health") {
+      busy=false;DynamicJsonDocument health(512);
+      backendReachable=r->status==200&&!deserializeJson(health,r->body)&&health["ok"]==true&&health["service"]=="math-adventure";
+      backendChecked=millis();
+      if(pairOpenRequested){pairOpenRequested=false;if(backendReachable)preparePair();else{screen=7;message="服务器不可达，请检查网络";}}
+      delete r;dirty=true;return;
+    }
     if(r->path.startsWith("/api/math/pair/")) {
       busy=false;DynamicJsonDocument result(1024);bool valid=!deserializeJson(result,r->body)&&result["state"].is<const char*>();
       if(r->status==200&&valid) {
         String status=result["state"].as<String>();
         pairVerification=result["verification"]|"";
         if(status=="approved") {credential=pairSecret;config.putString("device",credential);pairSecret="";pairBody="";pairWaiting=false;config.remove("pair-secret");config.remove("pair-body");ready=false;screen=0;nextPoll=0;message="配对成功，正在同步";}
-        else if(status=="claimed") {pairBody="";config.remove("pair-body");pairWaiting=true;screen=6;}
+        else if(status=="claimed") {pairBody="";config.remove("pair-body");pairWaiting=true;if(screen==5||screen==6)screen=6;}
         else {pairBody="";pairSecret="";pairWaiting=false;config.remove("pair-secret");config.remove("pair-body");screen=4;message="配对已结束，请重新开启";}
       } else if(r->status==400||r->status==404||r->status==429) {pairBody="";config.remove("pair-body");pairWaiting=false;screen=4;message="配对码无效或操作太频繁";}
       pairPoll=millis()+3000;delete r;dirty=true;return;
@@ -265,12 +302,18 @@ void wrap(String s) {
   if(line.length()&&lineCount<64)lines[lineCount++]=line;
 }
 void render() {
-  dirty=false;buttonCount=0;lcd.fillScreen(cream);lcd.fillRect(0,0,320,28,pale);
+  dirty=false;buttonCount=0;lcd.fillSprite(cream);lcd.fillRect(0,0,320,28,pale);
   text("小语冒险岛",8,20);if(busy||pendingBody.length())text("同步中",260,20);else text(mode=="live"?"正式":(mode=="practice"?"试玩":"联网"),276,20);
   if(screen==5) {
     lcd.fillRect(0,0,320,28,pale);text("输入四位配对码",8,20);text(pairCode.c_str(),248,20);
-    for(int i=0;i<9;++i){String digit=String(i+1);button(8+(i%3)*104,40+(i/3)*48,96,digit.c_str(),150+i);}
-    button(8,188,96,"返回",104,false);button(112,188,96,"0",159);button(216,188,96,"删除",160,false);return;
+    for(int i=0;i<9;++i){String digit=String(i+1);button(8+(i%3)*80,40+(i/3)*48,72,digit.c_str(),150+i);}
+    button(88,188,152,"0",159);
+    button(248,40,64,"返回",104,false);button(248,88,64,"删除",160,false);button(248,136,64,"确认",161);return;
+  }
+  if(screen==7){
+    centered("配对前先连通网络",62);centered(message.c_str(),108);
+    button(8,136,148,"检查连接",140,false);button(164,136,148,"Wi-Fi设置",104,false);
+    button(72,188,176,"返回首页",100);return;
   }
   if(screen==6) {
     centered("请在家长网页确认设备",60);centered(apName.length()?apName.c_str():"Math-ESP32",92);
@@ -328,10 +371,11 @@ void render() {
 }
 void handle(int id) {
   if(id==140) {beginPair();return;}
-  if(screen==5&&id>=150&&id<=159) {if(pairCode.length()<4)pairCode+=String(id==159?0:id-149);if(pairCode.length()==4)claimPair();dirty=true;return;}
+  if(screen==5&&id>=150&&id<=159) {if(pairCode.length()<4)pairCode+=String(id==159?0:id-149);dirty=true;return;}
+  if(id==161&&screen==5){if(!busy)claimPair();return;}
   if(id==160) {if(pairCode.length())pairCode.remove(pairCode.length()-1);dirty=true;return;}
-  if(id==100) {screen=0;dirty=true;return;}
-  if(id==104) {startPortal();return;}
+  if(id==100) {pairOpenRequested=false;screen=0;dirty=true;return;}
+  if(id==104) {pairOpenRequested=false;startPortal();return;}
   if(id==103) {startPortal();return;}
   if(id==101) {screen=1;dirty=true;sync();return;}
   if(id==102) {sync();return;}
