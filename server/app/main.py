@@ -693,9 +693,9 @@ class Aht20Reading(BaseModel):
 
 
 def require_aht20_token(authorization: str | None = Header(default=None)) -> None:
-    token = os.getenv("AHT20_DEVICE_TOKEN", "")
-    if not 24 <= len(token) <= 128:
-        raise HTTPException(503, "AHT20 token is not configured")
+    token = os.getenv("INK_TOKEN", "")
+    if not token:
+        raise HTTPException(503, "INK_TOKEN is not configured")
     prefix = "Bearer "
     if not authorization or not authorization.startswith(prefix) or not secrets.compare_digest(
         authorization[len(prefix):].encode(), token.encode()
