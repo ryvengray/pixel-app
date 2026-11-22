@@ -1,0 +1,259 @@
+from concurrent.futures import ThreadPoolExecutor
+import json
+import sqlite3
+from uuid import uuid4
+
+from fastapi.testclient import TestClient
+import pytest
+
+from app.main import check_question, create_app
+
+ADMIN = 'test-parent-credential-32-characters'
+PARENT = {'Authorization': 'Bearer '+ADMIN}
+
+@pytest.fixture
+def system(tmp_path):
+    path = tmp_path / 'math.db'
+    app = create_app(path, ADMIN)
+    with TestClient(app) as client:
+        yield client, path
+
+def device(client, mode='practice'):
+    r = client.post('/api/math/parent/devices', headers=PARENT, json={'name': '测试ESP32', 'mode': mode})
+    assert r.status_code == 201, r.text
+    d = r.json()
+    return {'Authorization': 'Bearer '+d['token']}, d
+
+def questions(client):
+    return client.get('/api/math/parent/questions', headers=PARENT).json()
+
+def publish(client, qid):
+    assert client.post(f'/api/math/parent/questions/{qid}/check', headers=PARENT).json()['passed']
+    r = client.post(f'/api/math/parent/questions/{qid}/publish', headers=PARENT,
+                    json={'reviewer': '测试用虚构审核人', 'comment': '仅在隔离测试库中模拟人工确认', 'independently_solved': True})
+    assert r.status_code == 200, r.text
+
+def plan(client, auth):
+    r = client.get('/api/math/adventure/today', headers=auth)
+    assert r.status_code == 200, r.text
+    return r.json()
+
+def answer(client, auth, task, option, request_id=None):
+    return client.post('/api/math/answers', headers=auth, json={
+        'task_id': task['id'], 'answer': option, 'duration_seconds': 10, 'request_id': request_id or uuid4().hex})
+
+def counts(path):
+    with sqlite3.connect(path) as db:
+        return tuple(db.execute('SELECT COUNT(*) FROM '+t).fetchone()[0] for t in ('attempts','rewards','requests'))
+
+def test_fail_closed(tmp_path):
+    with pytest.raises(RuntimeError, match='24 characters'):
+        with TestClient(create_app(tmp_path/'missing.db', 'short')):
+            pass
+
+def test_auth_and_separate_scopes(system):
+    c, path = system
+    assert c.get('/health').json()['ok']
+    assert c.get('/').status_code == 200
+    assert c.get('/api/math/parent/questions').status_code == 401
+    assert c.get('/api/math/device/state', headers=PARENT).status_code == 401
+    auth, d = device(c)
+    assert c.get('/api/math/parent/questions', headers=auth).status_code == 401
+    assert c.get('/api/math/parent/devices', headers=PARENT).json()[0].get('token_hash') is None
+    with sqlite3.connect(path) as db:
+        assert d['token'] not in db.execute('SELECT token_hash FROM devices').fetchone()[0]
+    assert c.post(f'/api/math/parent/devices/{d["id"]}/revoke', headers=PARENT).status_code == 200
+    assert c.get('/api/math/device/state', headers=auth).status_code == 401
+
+def test_drafts_are_not_live_and_samples_check(system):
+    c, _ = system
+    rows = questions(c)
+    assert len(rows) == 10
+    assert all(q['status']=='draft' and q['data']['source_type']=='ai_draft' for q in rows)
+    assert all(check_question(q['data'])['passed'] for q in rows)
+    live, _ = device(c, 'live')
+    assert plan(c, live)['tasks'] == []
+    practice, _ = device(c)
+    p = plan(c, practice)
+    assert len(p['tasks']) == 3 and p['mode'] == 'practice'
+    for t in p['tasks']:
+        assert not t['reviewed']
+        assert not {'answer', 'explanation', 'hints', 'expression'}.intersection(t['question'])
+    assert plan(c, practice)['tasks'] == p['tasks']
+
+def test_review_and_invalid_expression(system):
+    c, _ = system
+    row = questions(c)[0]
+    qid = row['id']
+    body = {'reviewer':'test','comment':'test','independently_solved':True}
+    assert c.post(f'/api/math/parent/questions/{qid}/publish',headers=PARENT,json=body).status_code == 409
+    c.post(f'/api/math/parent/questions/{qid}/check', headers=PARENT)
+    body['independently_solved'] = False
+    assert c.post(f'/api/math/parent/questions/{qid}/publish',headers=PARENT,json=body).status_code == 409
+    assert c.post(f'/api/math/parent/questions/{qid}/reject',headers=PARENT,json={'comment':'表述待改'}).status_code == 200
+    publish(c, qid)
+    assert next(q for q in questions(c) if q['id']==qid)['reviewer']
+    data = row['data']
+    data['expression'] = '__import__("os").system("false")'
+    r = c.post('/api/math/parent/questions',headers=PARENT,json=data)
+    bad_id = r.json()['id']
+    assert not c.post(f'/api/math/parent/questions/{bad_id}/check',headers=PARENT).json()['passed']
+    assert c.post(f'/api/math/parent/questions/{bad_id}/publish',headers=PARENT,json=body).status_code == 409
+    data['expression'] = '1+1'
+    data['answer'] = 0
+    assert not check_question(data)['passed']
+
+def test_new_draft_does_not_hide_published_and_disabled_does_not_fallback(system):
+    c, _ = system
+    row = questions(c)[0]
+    publish(c, row['id'])
+    revised = c.post(f'/api/math/parent/questions/{row["id"]}/versions',headers=PARENT,json=row['data']).json()
+    assert revised['version'] == 2 and revised['status'] == 'draft'
+    auth, _ = device(c,'live')
+    first = plan(c,auth)
+    assert [t['question_id'] for t in first['tasks']] == [row['id']]
+    publish(c,revised['id'])
+    assert plan(c,auth)['tasks'][0]['question_id'] == row['id'] # Existing plan keeps its version.
+    c.post(f'/api/math/parent/questions/{row["id"]}/disable',headers=PARENT,json={'comment':'错误停用'})
+    assert not plan(c,auth)['tasks'][0]['available']
+    t=first['tasks'][0]
+    assert answer(c,auth,t,row['data']['answer']).status_code == 409
+
+def test_idempotence_conflicts_and_duplicate_rewards(system):
+    c,path = system
+    auth, _ = device(c)
+    task = plan(c,auth)['tasks'][0]
+    key = {q['id']:q for q in questions(c)}
+    right = key[task['question_id']]['data']['answer']
+    rid=uuid4().hex
+    first=answer(c,auth,task,right,rid)
+    assert first.status_code == 200, first.text
+    assert first.json()['reward'] == {'xp':20,'coins':5}
+    assert answer(c,auth,task,right,rid).json() == first.json()
+    assert answer(c,auth,task,(right+1)%3,rid).status_code == 409
+    assert answer(c,auth,task,right).json()['reward'] == {'xp':0,'coins':0}
+    assert counts(path)[:2] == (1,1)
+    assert c.post('/api/math/tasks/skip',headers=auth,json={'task_id':task['id'],'request_id':rid}).status_code == 409
+
+def test_hint_wrong_answer_skip_and_daily_bonus(system):
+    c,path=system
+    auth,_=device(c)
+    tasks=plan(c,auth)['tasks']
+    answers={q['id']:q['data']['answer'] for q in questions(c)}
+    t=tasks[0]
+    operation={'task_id':t['id'],'request_id':uuid4().hex}
+    assert c.post('/api/math/tasks/hint',headers=auth,json=operation).status_code==200
+    c.post('/api/math/tasks/hint',headers=auth,json=operation)
+    assert plan(c,auth)['tasks'][0]['hint_count']==1
+    wrong=answer(c,auth,t,(answers[t['question_id']]+1)%3).json()
+    assert wrong['reward']=={'xp':0,'coins':0} and 'explanation' not in wrong
+    c.post('/api/math/tasks/skip',headers=auth,json={'task_id':t['id'],'request_id':uuid4().hex})
+    assert plan(c,auth)['tasks'][0]['state']=='skipped'
+    assert answer(c,auth,t,answers[t['question_id']]).json()['reward']=={'xp':20,'coins':0}
+    for t in tasks[1:]:
+        assert answer(c,auth,t,answers[t['question_id']]).status_code==200
+    state=plan(c,auth)
+    assert state['finished']
+    assert state['player']['xp']==70 and state['player']['coins']==10
+    assert c.get('/api/math/parent/dashboard',headers=PARENT).json()['player']['xp']==0
+    dashboard=c.get('/api/math/parent/dashboard?mode=practice',headers=PARENT).json()
+    assert len(dashboard['attempts'])==4 and dashboard['skills'] and dashboard['trend']
+    with sqlite3.connect(path) as db:
+        assert db.execute("SELECT COUNT(*) FROM rewards WHERE business_key LIKE 'daily:%'").fetchone()[0]==1
+
+def test_other_mode_cannot_use_task_or_question(system):
+    c,_=system
+    practice,_=device(c)
+    live,_=device(c,'live')
+    t=plan(c,practice)['tasks'][0]
+    assert answer(c,live,t,0).status_code==404
+    assert c.get('/api/math/questions/'+t['question_id'],headers=live).status_code==404
+    public=c.get('/api/math/questions/'+t['question_id'],headers=practice).json()
+    assert 'answer' not in public['question']
+
+def test_concurrent_retry_and_concurrent_new_requests(system):
+    c,path=system
+    auth,_=device(c)
+    t=plan(c,auth)['tasks'][0]
+    right=next(q for q in questions(c) if q['id']==t['question_id'])['data']['answer']
+    rid=uuid4().hex
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        responses=list(pool.map(lambda _:answer(c,auth,t,right,rid),range(8)))
+    assert all(r.status_code==200 for r in responses)
+    assert all(r.json()==responses[0].json() for r in responses)
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        responses=list(pool.map(lambda _:answer(c,auth,t,right),range(8)))
+    assert all(r.status_code==200 for r in responses)
+    assert counts(path)[:2]==(1,1)
+
+def test_restart_and_expired_task_replay(system):
+    c,path=system
+    auth,_=device(c)
+    t=plan(c,auth)['tasks'][0]
+    right=next(q for q in questions(c) if q['id']==t['question_id'])['data']['answer']
+    rid=uuid4().hex
+    result=answer(c,auth,t,right,rid).json()
+    with sqlite3.connect(path) as db:
+        db.execute("UPDATE tasks SET day='2000-01-01' WHERE id=?",(t['id'],))
+    assert answer(c,auth,t,right,rid).json()==result # Lost response can still be recovered.
+    assert answer(c,auth,t,right).status_code==409
+    with TestClient(create_app(path,ADMIN)) as restarted:
+        dashboard=restarted.get('/api/math/parent/dashboard?mode=practice',headers=PARENT).json()
+        assert dashboard['player']['xp']==20
+        assert len(questions(restarted))==10
+        assert restarted.post('/api/math/device/heartbeat',headers=auth).status_code==200
+
+def test_live_reviewed_tasks_and_input_validation(system):
+    c,_=system
+    for q in questions(c)[:3]:
+        publish(c,q['id'])
+    auth,_=device(c,'live')
+    tasks=plan(c,auth)['tasks']
+    assert len(tasks)==3 and all(t['reviewed'] for t in tasks)
+    assert answer(c,auth,tasks[0],99).status_code==422
+    bad=questions(c)[0]['data']
+    bad['answer']=2;bad['options']=['1','2']
+    assert c.post('/api/math/parent/questions',headers=PARENT,json=bad).status_code==422
+    assert c.post('/api/math/parent/devices',headers=PARENT,json={'name':'bad','mode':'other'}).status_code==422
+    assert c.get('/api/math/parent/dashboard?mode=other',headers=PARENT).status_code==422
+
+
+def test_parent_does_not_assign_during_question_review(system):
+    c,_=system
+    rows=questions(c)
+    publish(c,rows[0]['id'])
+    assert c.get('/api/math/parent/dashboard',headers=PARENT).json()['tasks']==[]
+    for q in rows[1:3]:
+        publish(c,q['id'])
+    generated=c.post('/api/math/parent/tasks/generate',headers=PARENT).json()
+    assert len(generated['tasks'])==3
+    assert c.post('/api/math/parent/tasks/generate',headers=PARENT).json()['tasks']==generated['tasks']
+    assert c.get('/api/math/parent/rewards',headers=PARENT).json()==[]
+
+
+def test_disabled_latest_version_does_not_resurrect_old_version(system):
+    c,path=system
+    row=questions(c)[0]
+    publish(c,row['id'])
+    revised=c.post(f'/api/math/parent/questions/{row["id"]}/versions',headers=PARENT,json=row['data']).json()
+    publish(c,revised['id'])
+    c.post(f'/api/math/parent/questions/{revised["id"]}/disable',headers=PARENT,json={'comment':'最新题目有误'})
+    auth,_=device(c,'live')
+    assert plan(c,auth)['tasks']==[]
+
+
+def test_cross_day_repeat_has_no_second_question_reward(system):
+    c,path=system
+    auth,_=device(c)
+    tasks=plan(c,auth)['tasks']
+    answers={q['id']:q['data']['answer'] for q in questions(c)}
+    for t in tasks:
+        answer(c,auth,t,answers[t['question_id']])
+    with sqlite3.connect(path) as db:
+        db.execute("UPDATE tasks SET day='2000-01-01' WHERE player_id='practice'")
+    new_tasks=plan(c,auth)['tasks']
+    assert {t['id'] for t in tasks}.isdisjoint(t['id'] for t in new_tasks)
+    for t in new_tasks:
+        r=answer(c,auth,t,answers[t['question_id']]).json()
+        assert r['reward']=={'xp':0,'coins':0} # Same date's daily bonus was already paid too.
+    assert plan(c,auth)['player']['xp']==70

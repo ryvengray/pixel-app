@@ -1,0 +1,420 @@
+from __future__ import annotations
+
+import ast
+import hashlib
+import json
+import os
+import secrets
+from contextlib import asynccontextmanager
+from datetime import datetime
+from pathlib import Path
+from uuid import uuid4
+from zoneinfo import ZoneInfo
+
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
+from fastapi.responses import FileResponse
+
+from .models import Answer, DeviceInput, Note, Operation, PlayerInput, QuestionInput, Review
+from .samples import seed
+from .store import Store, encode, now
+
+
+def token_hash(value):
+    return hashlib.sha256(value.encode()).hexdigest()
+
+
+def check_question(data):
+    q = QuestionInput.model_validate(data)
+    errors = []
+    if q.expression:
+        # A deliberately small numeric grammar: no names, functions or Python evaluation.
+        def calculate(node):
+            if isinstance(node, ast.Constant) and type(node.value) in (int, float) and abs(node.value) <= 10000:
+                return node.value
+            if isinstance(node, ast.BinOp) and type(node.op) in (ast.Add, ast.Sub, ast.Mult, ast.Div):
+                left, right = calculate(node.left), calculate(node.right)
+                result = {ast.Add: lambda: left+right, ast.Sub: lambda: left-right,
+                          ast.Mult: lambda: left*right, ast.Div: lambda: left/right}[type(node.op)]()
+                if abs(result) > 1000000:
+                    raise ValueError('计算结果超出范围')
+                return result
+            raise ValueError('仅支持非负数字和加减乘除表达式')
+        try:
+            expected = calculate(ast.parse(q.expression, mode='eval').body)
+            if float(q.options[q.answer]) != expected:
+                errors.append('选项答案与计算表达式不一致')
+        except (SyntaxError, ValueError, TypeError, ZeroDivisionError, OverflowError, RecursionError):
+            errors.append('计算表达式或数字答案无效')
+    return {'passed': not errors, 'errors': errors,
+            'scope': '结构及可选计算核验；语言、逻辑、唯一性和小屏适配仍需人工审核'}
+
+
+def create_app(db_path=None, admin_token=None):
+    store = Store(db_path or os.getenv('DATABASE_PATH', '/data/math-adventure.db'))
+    expected_admin = admin_token if admin_token is not None else os.getenv('MATH_ADMIN_TOKEN', '')
+    tz = ZoneInfo(os.getenv('MATH_TIMEZONE', 'Asia/Shanghai'))
+
+    @asynccontextmanager
+    async def lifespan(app):
+        if len(expected_admin) < 24:
+            raise RuntimeError('MATH_ADMIN_TOKEN must contain at least 24 characters')
+        store.setup()
+        with store.connect(write=True) as db:
+            seed(db)
+        yield
+
+    app = FastAPI(title='小语数学冒险岛', version='0.1.0', lifespan=lifespan, root_path=os.getenv('MATH_ROOT_PATH', ''))
+    app.state.store = store
+
+    @app.middleware('http')
+    async def headers(request, call_next):
+        response = await call_next(request)
+        response.headers['Cache-Control'] = 'no-store'
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+        response.headers['Referrer-Policy'] = 'no-referrer'
+        response.headers['X-Frame-Options'] = 'DENY'
+        return response
+
+    def bearer(authorization):
+        if not authorization or not authorization.startswith('Bearer '):
+            raise HTTPException(401, '请提供有效的访问凭证')
+        return authorization[7:]
+
+    def parent(authorization: str | None = Header(default=None)):
+        if len(expected_admin) < 24:
+            raise HTTPException(503, '家长凭证尚未配置')
+        if not secrets.compare_digest(bearer(authorization).encode(), expected_admin.encode()):
+            raise HTTPException(401, '家长凭证无效')
+
+    def device(authorization: str | None = Header(default=None)):
+        digest = token_hash(bearer(authorization))
+        with store.connect(write=True) as db:
+            row = db.execute('SELECT d.*,p.mode FROM devices d JOIN players p ON p.id=d.player_id '
+                             'WHERE token_hash=? AND revoked=0', (digest,)).fetchone()
+            if row is None:
+                raise HTTPException(401, '设备凭证无效或已撤销')
+            db.execute('UPDATE devices SET last_seen_at=? WHERE id=?', (now(), row['id']))
+            return dict(row)
+
+    def day():
+        return datetime.now(tz).date().isoformat()
+
+    def player(db, player_id):
+        row = dict(db.execute('SELECT * FROM players WHERE id=?', (player_id,)).fetchone())
+        row['level'] = row['xp'] // 100 + 1
+        return row
+
+    def audit(db, action, subject, details):
+        db.execute('INSERT INTO audit(action,subject,details,created_at) VALUES(?,?,?,?)',
+                   (action, subject, encode(details), now()))
+
+    def question_row(db, question_id):
+        row = db.execute('SELECT * FROM questions WHERE id=?', (question_id,)).fetchone()
+        if row is None:
+            raise HTTPException(404, '题目不存在')
+        return row
+
+    def admin_question(row):
+        result = dict(row)
+        result['data'] = json.loads(result['data'])
+        result['checks'] = json.loads(result['checks']) if result['checks'] else None
+        return result
+
+    def usable(row, mode):
+        return row['status'] == 'published' and row['active'] or (
+            mode == 'practice' and row['status'] in ('draft', 'pending') and
+            check_question(json.loads(row['data']))['passed'])
+
+    def ensure_tasks(db, player_id, mode):
+        existing = db.execute('SELECT COUNT(*) FROM tasks WHERE player_id=? AND day=?', (player_id, day())).fetchone()[0]
+        if existing:
+            return
+        # A new draft must not hide the last published version from live tasks.
+        # A disabled published revision must not silently fall back to an older revision.
+        statuses = "('draft','pending','published','disabled')" if mode == 'practice' else "('published','disabled')"
+        candidates = db.execute(
+            f'SELECT * FROM questions q WHERE status IN {statuses} AND version='
+            f'(SELECT MAX(version) FROM questions WHERE question_key=q.question_key AND status IN {statuses}) '
+            'ORDER BY question_key').fetchall()
+        eligible = [q for q in candidates if usable(q, mode)]
+        # Stable within the day; rotates available versions across days.
+        if eligible:
+            offset = datetime.now(tz).date().toordinal() % len(eligible)
+            eligible = eligible[offset:] + eligible[:offset]
+        for i, q in enumerate(eligible[:3]):
+            db.execute('INSERT INTO tasks(id,player_id,day,question_id,ordinal,created_at) VALUES(?,?,?,?,?,?)',
+                       (uuid4().hex, player_id, day(), q['id'], i, now()))
+
+    def task_view(db, row, mode):
+        result = dict(row)
+        qrow = question_row(db, row['question_id'])
+        q = json.loads(qrow['data'])
+        available = bool(usable(qrow, mode))
+        result['available'] = available
+        result['reviewed'] = qrow['status'] == 'published'
+        result['question'] = ({'id': qrow['id'], 'version': qrow['version'], 'title': q['title'],
+                               'content': q['content'], 'options': q['options'], 'topic': q['topic'],
+                               'skill_tags': q['skill_tags']} if available else None)
+        if row['state'] == 'solved':
+            result['explanation'] = q['explanation']
+        return result
+
+    def today_view(db, player_id, mode):
+        rows = db.execute('SELECT * FROM tasks WHERE player_id=? AND day=? ORDER BY ordinal', (player_id, day())).fetchall()
+        tasks = [task_view(db, row, mode) for row in rows]
+        active = [t for t in tasks if t['available']]
+        return {'day': day(), 'timezone': str(tz), 'mode': mode, 'player': player(db, player_id), 'tasks': tasks,
+                'finished': bool(active) and all(t['state'] in ('solved', 'skipped') for t in active),
+                'message': ('试玩数据独立保存，不计入正式学习记录' if mode == 'practice' else
+                            ('今天的冒险已准备好' if active else '今天的冒险还在准备中，请家长审核并发布题目'))}
+
+    @app.get('/health')
+    def health():
+        with store.connect() as db:
+            db.execute('SELECT 1').fetchone()
+        return {'ok': True, 'service': 'math-adventure'}
+
+    @app.get('/', include_in_schema=False)
+    def page():
+        return FileResponse(Path(__file__).with_name('parent.html'))
+
+    @app.get('/api/math/parent/questions', dependencies=[Depends(parent)])
+    def questions():
+        with store.connect() as db:
+            return [admin_question(q) for q in db.execute('SELECT * FROM questions ORDER BY question_key,version DESC')]
+
+    @app.post('/api/math/parent/questions', dependencies=[Depends(parent)], status_code=201)
+    def new_question(body: QuestionInput):
+        key = uuid4().hex
+        with store.connect(write=True) as db:
+            qid = f'{key}-v1'
+            db.execute('INSERT INTO questions(id,question_key,version,data,created_at) VALUES(?,?,1,?,?)',
+                       (qid, key, encode(body.model_dump()), now()))
+            audit(db, 'draft', qid, {})
+            return admin_question(question_row(db, qid))
+
+    @app.post('/api/math/parent/questions/{qid}/versions', dependencies=[Depends(parent)], status_code=201)
+    def revise(qid: str, body: QuestionInput):
+        with store.connect(write=True) as db:
+            old = question_row(db, qid)
+            version = db.execute('SELECT MAX(version)+1 FROM questions WHERE question_key=?', (old['question_key'],)).fetchone()[0]
+            new_id = f'{old["question_key"]}-v{version}'
+            db.execute('INSERT INTO questions(id,question_key,version,data,created_at) VALUES(?,?,?,?,?)',
+                       (new_id, old['question_key'], version, encode(body.model_dump()), now()))
+            audit(db, 'revision', new_id, {'from': qid})
+            return admin_question(question_row(db, new_id))
+
+    @app.post('/api/math/parent/questions/{qid}/check', dependencies=[Depends(parent)])
+    def check(qid: str):
+        with store.connect(write=True) as db:
+            row = question_row(db, qid)
+            if row['status'] not in ('draft', 'pending'):
+                raise HTTPException(409, '仅草稿或待审核题目可以自动检查')
+            result = check_question(json.loads(row['data']))
+            db.execute('UPDATE questions SET checks=?,status=? WHERE id=?',
+                       (encode(result), 'pending' if result['passed'] else 'draft', qid))
+            audit(db, 'check', qid, result)
+            return result
+
+    @app.post('/api/math/parent/questions/{qid}/publish', dependencies=[Depends(parent)])
+    def publish(qid: str, body: Review):
+        with store.connect(write=True) as db:
+            row = question_row(db, qid)
+            if row['status'] != 'pending' or not body.independently_solved:
+                raise HTTPException(409, '须先通过自动检查，并由审核者独立解题确认')
+            if not check_question(json.loads(row['data']))['passed']:
+                raise HTTPException(409, '题目自动检查未通过')
+            latest = db.execute('SELECT MAX(version) FROM questions WHERE question_key=?', (row['question_key'],)).fetchone()[0]
+            if row['version'] != latest:
+                raise HTTPException(409, '请审核最新版本')
+            # Keep already assigned historical versions valid; disable them explicitly if erroneous.
+            db.execute("UPDATE questions SET status='published',active=1,reviewer=?,reviewed_at=?,review_comment=?,published_at=? WHERE id=?",
+                       (body.reviewer, now(), body.comment, now(), qid))
+            audit(db, 'publish', qid, body.model_dump())
+            return admin_question(question_row(db, qid))
+
+    @app.post('/api/math/parent/questions/{qid}/reject', dependencies=[Depends(parent)])
+    def reject(qid: str, body: Note):
+        with store.connect(write=True) as db:
+            row = question_row(db, qid)
+            if row['status'] not in ('draft', 'pending'):
+                raise HTTPException(409, '已发布题目请先停用或创建新版本')
+            db.execute("UPDATE questions SET status='draft',review_comment=? WHERE id=?", (body.comment, qid))
+            audit(db, 'reject', qid, body.model_dump())
+            return {'ok': True}
+
+    @app.post('/api/math/parent/questions/{qid}/disable', dependencies=[Depends(parent)])
+    def disable(qid: str, body: Note):
+        with store.connect(write=True) as db:
+            question_row(db, qid)
+            db.execute("UPDATE questions SET active=0,status='disabled' WHERE id=?", (qid,))
+            audit(db, 'disable', qid, body.model_dump())
+            return {'ok': True}
+
+    @app.post('/api/math/parent/devices', dependencies=[Depends(parent)], status_code=201)
+    def register(body: DeviceInput):
+        value, did = secrets.token_urlsafe(32), uuid4().hex
+        with store.connect(write=True) as db:
+            db.execute('INSERT INTO devices(id,name,player_id,token_hash) VALUES(?,?,?,?)',
+                       (did, body.name, body.mode, token_hash(value)))
+            audit(db, 'device_create', did, {'name': body.name, 'mode': body.mode})
+        return {'id': did, 'token': value, 'mode': body.mode, 'message': '令牌仅显示一次，请妥善保存'}
+
+    @app.get('/api/math/parent/devices', dependencies=[Depends(parent)])
+    def devices():
+        with store.connect() as db:
+            return [dict(row) for row in db.execute('SELECT id,name,player_id,revoked,last_seen_at,firmware_version FROM devices')]
+
+    @app.post('/api/math/parent/devices/{did}/revoke', dependencies=[Depends(parent)])
+    def revoke(did: str):
+        with store.connect(write=True) as db:
+            if not db.execute('UPDATE devices SET revoked=1 WHERE id=?', (did,)).rowcount:
+                raise HTTPException(404, '设备不存在')
+            audit(db, 'device_revoke', did, {})
+        return {'ok': True}
+
+    @app.patch('/api/math/parent/player', dependencies=[Depends(parent)])
+    def rename(body: PlayerInput, mode: str = Query('live', pattern='^(live|practice)$')):
+        with store.connect(write=True) as db:
+            db.execute('UPDATE players SET nickname=? WHERE id=?', (body.nickname, mode))
+            return player(db, mode)
+
+    @app.get('/api/math/parent/dashboard', dependencies=[Depends(parent)])
+    def dashboard(mode: str = Query('live', pattern='^(live|practice)$')):
+        with store.connect() as db:
+            result = today_view(db, mode, mode)
+            result['attempts'] = [dict(r) for r in db.execute(
+                'SELECT a.*,t.question_id,t.day,q.data FROM attempts a JOIN tasks t ON t.id=a.task_id '
+                'JOIN questions q ON q.id=t.question_id WHERE t.player_id=? ORDER BY a.id DESC LIMIT 100', (mode,))]
+            for a in result['attempts']:
+                q = json.loads(a.pop('data'))
+                a['title'], a['content'], a['selected'] = q['title'], q['content'], q['options'][a['answer']]
+            result['trend'] = [dict(r) for r in db.execute(
+                'SELECT t.day,COUNT(*) AS attempts,SUM(a.correct) AS correct,SUM(a.duration_seconds) AS seconds '
+                'FROM attempts a JOIN tasks t ON t.id=a.task_id WHERE t.player_id=? '
+                'GROUP BY t.day ORDER BY t.day DESC LIMIT 14', (mode,))]
+            result['skills'] = [dict(r) for r in db.execute(
+                "SELECT json_extract(q.data,'$.topic') AS topic,COUNT(*) AS practiced,SUM(t.state='solved') AS solved "
+                'FROM tasks t JOIN questions q ON q.id=t.question_id WHERE t.player_id=? GROUP BY topic', (mode,))]
+            return result
+
+    @app.post('/api/math/parent/tasks/generate', dependencies=[Depends(parent)])
+    def generate(mode: str = Query('live', pattern='^(live|practice)$')):
+        with store.connect(write=True) as db:
+            ensure_tasks(db, mode, mode)
+            return today_view(db, mode, mode)
+
+    @app.get('/api/math/parent/rewards', dependencies=[Depends(parent)])
+    def reward_ledger(mode: str = Query('live', pattern='^(live|practice)$')):
+        with store.connect() as db:
+            return [dict(r) for r in db.execute(
+                'SELECT * FROM rewards WHERE player_id=? ORDER BY id DESC LIMIT 100', (mode,))]
+
+    @app.get('/api/math/parent/audit', dependencies=[Depends(parent)])
+    def audit_log():
+        with store.connect() as db:
+            return [dict(r) for r in db.execute('SELECT * FROM audit ORDER BY id DESC LIMIT 100')]
+
+    @app.get('/api/math/adventure/today')
+    @app.get('/api/math/device/state')
+    def today(dev=Depends(device)):
+        with store.connect(write=True) as db:
+            ensure_tasks(db, dev['player_id'], dev['mode'])
+            return today_view(db, dev['player_id'], dev['mode'])
+
+    @app.get('/api/math/questions/{qid}')
+    def assigned_question(qid: str, dev=Depends(device)):
+        with store.connect() as db:
+            row = db.execute('SELECT * FROM tasks WHERE question_id=? AND player_id=? AND day=?',
+                             (qid, dev['player_id'], day())).fetchone()
+            if row is None:
+                raise HTTPException(404, '题目未分配给该设备')
+            return task_view(db, row, dev['mode'])
+
+    @app.post('/api/math/device/heartbeat')
+    def heartbeat(dev=Depends(device)):
+        return {'ok': True, 'server_time': now(), 'mode': dev['mode']}
+
+    def reward(db, player_id, key, xp, coins):
+        cursor = db.execute('INSERT OR IGNORE INTO rewards(player_id,business_key,xp,coins,created_at) VALUES(?,?,?,?,?)',
+                            (player_id, key, xp, coins, now()))
+        if cursor.rowcount:
+            db.execute('UPDATE players SET xp=xp+?,coins=coins+? WHERE id=?', (xp, coins, player_id))
+            return xp, coins
+        return 0, 0
+
+    def operate(body, kind, dev):
+        payload = encode({'kind': kind, **body.model_dump()})
+        with store.connect(write=True) as db:
+            cached = db.execute('SELECT * FROM requests WHERE device_id=? AND request_id=?',
+                                (dev['id'], body.request_id)).fetchone()
+            if cached:
+                if cached['payload'] != payload:
+                    raise HTTPException(409, '同一请求ID不可用于不同内容或操作')
+                return json.loads(cached['response'])
+            task = db.execute('SELECT * FROM tasks WHERE id=? AND player_id=?', (body.task_id, dev['player_id'])).fetchone()
+            if task is None:
+                raise HTTPException(404, '任务不存在')
+            if task['day'] != day():
+                raise HTTPException(409, '这不是今天的任务，请重新同步')
+            qrow = question_row(db, task['question_id'])
+            if not usable(qrow, dev['mode']):
+                raise HTTPException(409, '题目已停用，请重新同步')
+            q = json.loads(qrow['data'])
+            response = {'task_id': task['id'], 'mode': dev['mode'], 'reward': {'xp': 0, 'coins': 0}}
+            if kind == 'answer':
+                if body.answer >= len(q['options']):
+                    raise HTTPException(422, '选项不存在')
+                correct = body.answer == q['answer']
+                response.update(correct=correct, task_completed=task['state'] == 'solved' or correct)
+                # Completed tasks are read-only, even with a new request ID.
+                if task['state'] != 'solved':
+                    db.execute('INSERT INTO attempts(task_id,answer,correct,hint_count,duration_seconds,created_at) VALUES(?,?,?,?,?,?)',
+                               (task['id'], body.answer, int(correct), task['hint_count'], body.duration_seconds, now()))
+                    if correct:
+                        db.execute("UPDATE tasks SET state='solved',completed_at=? WHERE id=?", (now(), task['id']))
+                        first = db.execute('SELECT COUNT(*) FROM attempts WHERE task_id=?', (task['id'],)).fetchone()[0] == 1
+                        xp, coins = reward(db, dev['player_id'], 'question:'+qrow['question_key'], 20,
+                                           5 if first and task['hint_count'] == 0 else 0)
+                        response['reward'] = {'xp': xp, 'coins': coins}
+                        current = today_view(db, dev['player_id'], dev['mode'])
+                        active = [t for t in current['tasks'] if t['available']]
+                        if active and all(t['state'] == 'solved' for t in active):
+                            bonus, _ = reward(db, dev['player_id'], 'daily:'+day(), 10, 0)
+                            response['reward']['xp'] += bonus
+                if correct or task['state'] == 'solved':
+                    response['explanation'] = q['explanation']
+                response['message'] = '好办法！谢谢你' if correct else '再想一想，你可以的'
+            elif kind == 'hint':
+                if task['state'] == 'solved':
+                    response['hint'] = q['explanation']
+                else:
+                    n = min(task['hint_count'], len(q['hints'])-1)
+                    response['hint'] = q['hints'][n]
+                    db.execute('UPDATE tasks SET hint_count=hint_count+1 WHERE id=?', (task['id'],))
+            elif kind == 'skip':
+                if task['state'] != 'solved':
+                    db.execute("UPDATE tasks SET state='skipped' WHERE id=?", (task['id'],))
+                response['message'] = '进度存好啦，之后再想想'
+            response['player'] = player(db, dev['player_id'])
+            response['state'] = db.execute('SELECT state FROM tasks WHERE id=?', (task['id'],)).fetchone()[0]
+            db.execute('INSERT INTO requests(device_id,request_id,payload,response,created_at) VALUES(?,?,?,?,?)',
+                       (dev['id'], body.request_id, payload, encode(response), now()))
+            return response
+
+    @app.post('/api/math/answers')
+    def answer(body: Answer, dev=Depends(device)):
+        return operate(body, 'answer', dev)
+
+    @app.post('/api/math/tasks/hint')
+    def hint(body: Operation, dev=Depends(device)):
+        return operate(body, 'hint', dev)
+
+    @app.post('/api/math/tasks/skip')
+    def skip(body: Operation, dev=Depends(device)):
+        return operate(body, 'skip', dev)
+
+    return app
+
+
+app = create_app()

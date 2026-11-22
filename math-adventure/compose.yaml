@@ -1,0 +1,27 @@
+services:
+  math-api:
+    build:
+      context: ./backend
+    restart: unless-stopped
+    ports:
+      - "${MATH_BIND_ADDRESS:-127.0.0.1}:${MATH_PORT:-8788}:8788"
+    environment:
+      DATABASE_PATH: /data/math-adventure.db
+      MATH_ADMIN_TOKEN: ${MATH_ADMIN_TOKEN:?请在math-adventure/.env中配置至少24位随机家长令牌}
+      MATH_TIMEZONE: ${MATH_TIMEZONE:-Asia/Shanghai}
+      MATH_ROOT_PATH: ${MATH_ROOT_PATH:-}
+    volumes:
+      - math-data:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8788/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+volumes:
+  math-data:
