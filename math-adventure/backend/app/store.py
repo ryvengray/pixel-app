@@ -10,8 +10,7 @@ INSERT OR IGNORE INTO schema_version VALUES(1);
 CREATE TABLE IF NOT EXISTS players(
  id TEXT PRIMARY KEY, nickname TEXT NOT NULL, mode TEXT NOT NULL UNIQUE,
  xp INTEGER NOT NULL DEFAULT 0 CHECK(xp>=0), coins INTEGER NOT NULL DEFAULT 0 CHECK(coins>=0));
-INSERT OR IGNORE INTO players(id,nickname,mode) VALUES('live','小勇士','live');
-INSERT OR IGNORE INTO players(id,nickname,mode) VALUES('practice','试玩小勇士','practice');
+
 CREATE TABLE IF NOT EXISTS questions(
  id TEXT PRIMARY KEY, question_key TEXT NOT NULL, version INTEGER NOT NULL,
  data TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'draft', active INTEGER NOT NULL DEFAULT 0,
@@ -78,3 +77,22 @@ class Store:
             db.execute('PRAGMA journal_mode=WAL')
             # Idempotent initial migration; future changes add versioned migrations.
             db.executescript(SCHEMA)
+
+    def upgrade_owners(self):
+        # Rebuild only the v1 players table to remove its single-family mode UNIQUE constraint.
+        with self.connect() as db:
+            columns={r['name'] for r in db.execute('PRAGMA table_info(players)')}
+            if 'owner' not in columns:
+                db.execute('PRAGMA foreign_keys=OFF')
+                db.executescript('''BEGIN IMMEDIATE;
+                CREATE TABLE players_v2(id TEXT PRIMARY KEY,nickname TEXT NOT NULL,mode TEXT NOT NULL,owner TEXT NOT NULL,
+                  xp INTEGER NOT NULL DEFAULT 0 CHECK(xp>=0),coins INTEGER NOT NULL DEFAULT 0 CHECK(coins>=0),UNIQUE(owner,mode));
+                INSERT INTO players_v2 SELECT id,nickname,mode,'administrator',xp,coins FROM players;
+                DROP TABLE players;
+                ALTER TABLE players_v2 RENAME TO players;
+                COMMIT;''')
+            for table in ('questions','audit'):
+                columns={r['name'] for r in db.execute('PRAGMA table_info('+table+')')}
+                if 'owner' not in columns:db.execute("ALTER TABLE "+table+" ADD COLUMN owner TEXT NOT NULL DEFAULT 'administrator'")
+            db.execute('INSERT OR IGNORE INTO schema_version VALUES(2)')
+            if db.execute('PRAGMA foreign_key_check').fetchone():raise RuntimeError('Ownership migration failed foreign-key validation')

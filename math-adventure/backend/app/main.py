@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 
+from .access import Access
 from .models import Answer, DeviceInput, Note, Operation, PlayerInput, QuestionInput, Review
 from .samples import seed
 from .store import Store, encode, now
@@ -52,6 +53,7 @@ def check_question(data):
 def create_app(db_path=None, admin_token=None):
     store = Store(db_path or os.getenv('DATABASE_PATH', '/data/math-adventure.db'))
     expected_admin = admin_token if admin_token is not None else os.getenv('MATH_ADMIN_TOKEN', '')
+    access = Access(store, expected_admin)
     tz = ZoneInfo(os.getenv('MATH_TIMEZONE', 'Asia/Shanghai'))
 
     @asynccontextmanager
@@ -59,7 +61,11 @@ def create_app(db_path=None, admin_token=None):
         if len(expected_admin) < 24:
             raise RuntimeError('MATH_ADMIN_TOKEN must contain at least 24 characters')
         store.setup()
+        store.upgrade_owners()
+        access.setup()
         with store.connect(write=True) as db:
+            db.execute("INSERT OR IGNORE INTO players(id,nickname,mode,owner) VALUES('live','小勇士','live','administrator')")
+            db.execute("INSERT OR IGNORE INTO players(id,nickname,mode,owner) VALUES('practice','试玩小勇士','practice','administrator')")
             seed(db)
         yield
 
@@ -80,11 +86,21 @@ def create_app(db_path=None, admin_token=None):
             raise HTTPException(401, '请提供有效的访问凭证')
         return authorization[7:]
 
-    def parent(authorization: str | None = Header(default=None)):
-        if len(expected_admin) < 24:
-            raise HTTPException(503, '家长凭证尚未配置')
-        if not secrets.compare_digest(bearer(authorization).encode(), expected_admin.encode()):
-            raise HTTPException(401, '家长凭证无效')
+    def parent(request: Request, authorization: str | None = Header(default=None)):
+        return access.parent(request, authorization)
+
+    def ensure_player(db, owner, mode):
+        pid=mode if owner=='administrator' else token_hash(owner)[:24]+'-'+mode
+        db.execute('INSERT OR IGNORE INTO players(id,nickname,mode,owner) VALUES(?,?,?,?)',
+                   (pid,'小勇士' if mode=='live' else '试玩小勇士',mode,owner))
+        seed(db,owner)
+        return pid
+
+    def owner_player(owner, mode):
+        with store.connect(write=True) as db:
+            return ensure_player(db,owner,mode)
+
+    access.install(app, parent, ensure_player)
 
     def device(authorization: str | None = Header(default=None)):
         digest = token_hash(bearer(authorization))
@@ -101,16 +117,17 @@ def create_app(db_path=None, admin_token=None):
 
     def player(db, player_id):
         row = dict(db.execute('SELECT * FROM players WHERE id=?', (player_id,)).fetchone())
+        row.pop('owner',None)
         row['level'] = row['xp'] // 100 + 1
         return row
 
-    def audit(db, action, subject, details):
-        db.execute('INSERT INTO audit(action,subject,details,created_at) VALUES(?,?,?,?)',
-                   (action, subject, encode(details), now()))
+    def audit(db, action, subject, details, owner="administrator"):
+        db.execute('INSERT INTO audit(action,subject,details,created_at,owner) VALUES(?,?,?,?,?)',
+                   (action, subject, encode(details), now(),owner))
 
-    def question_row(db, question_id):
+    def question_row(db, question_id, owner=None):
         row = db.execute('SELECT * FROM questions WHERE id=?', (question_id,)).fetchone()
-        if row is None:
+        if row is None or (owner is not None and row['owner']!=owner):
             raise HTTPException(404, '题目不存在')
         return row
 
@@ -133,9 +150,9 @@ def create_app(db_path=None, admin_token=None):
         # A disabled published revision must not silently fall back to an older revision.
         statuses = "('draft','pending','published','disabled')" if mode == 'practice' else "('published','disabled')"
         candidates = db.execute(
-            f'SELECT * FROM questions q WHERE status IN {statuses} AND version='
+            f'SELECT * FROM questions q WHERE owner=? AND status IN {statuses} AND version='
             f'(SELECT MAX(version) FROM questions WHERE question_key=q.question_key AND status IN {statuses}) '
-            'ORDER BY question_key').fetchall()
+            'ORDER BY question_key', (db.execute('SELECT owner FROM players WHERE id=?',(player_id,)).fetchone()[0],)).fetchall()
         eligible = [q for q in candidates if usable(q, mode)]
         # Stable within the day; rotates available versions across days.
         if eligible:
@@ -179,47 +196,48 @@ def create_app(db_path=None, admin_token=None):
         return FileResponse(Path(__file__).with_name('parent.html'))
 
     @app.get('/api/math/parent/questions', dependencies=[Depends(parent)])
-    def questions():
+    def questions(owner=Depends(parent)):
+        owner_player(owner,"live")
         with store.connect() as db:
-            return [admin_question(q) for q in db.execute('SELECT * FROM questions ORDER BY question_key,version DESC')]
+            return [admin_question(q) for q in db.execute('SELECT * FROM questions WHERE owner=? ORDER BY question_key,version DESC',(owner,))]
 
     @app.post('/api/math/parent/questions', dependencies=[Depends(parent)], status_code=201)
-    def new_question(body: QuestionInput):
+    def new_question(body: QuestionInput, owner=Depends(parent)):
         key = uuid4().hex
         with store.connect(write=True) as db:
             qid = f'{key}-v1'
-            db.execute('INSERT INTO questions(id,question_key,version,data,created_at) VALUES(?,?,1,?,?)',
-                       (qid, key, encode(body.model_dump()), now()))
-            audit(db, 'draft', qid, {})
-            return admin_question(question_row(db, qid))
+            db.execute('INSERT INTO questions(id,question_key,version,data,created_at,owner) VALUES(?,?,1,?,?,?)',
+                       (qid, key, encode(body.model_dump()), now(),owner))
+            audit(db, 'draft', qid, {}, owner=owner)
+            return admin_question(question_row(db, qid, owner))
 
     @app.post('/api/math/parent/questions/{qid}/versions', dependencies=[Depends(parent)], status_code=201)
-    def revise(qid: str, body: QuestionInput):
+    def revise(qid: str, body: QuestionInput, owner=Depends(parent)):
         with store.connect(write=True) as db:
-            old = question_row(db, qid)
+            old = question_row(db, qid, owner)
             version = db.execute('SELECT MAX(version)+1 FROM questions WHERE question_key=?', (old['question_key'],)).fetchone()[0]
             new_id = f'{old["question_key"]}-v{version}'
-            db.execute('INSERT INTO questions(id,question_key,version,data,created_at) VALUES(?,?,?,?,?)',
-                       (new_id, old['question_key'], version, encode(body.model_dump()), now()))
-            audit(db, 'revision', new_id, {'from': qid})
+            db.execute('INSERT INTO questions(id,question_key,version,data,created_at,owner) VALUES(?,?,?,?,?,?)',
+                       (new_id, old['question_key'], version, encode(body.model_dump()), now(),owner))
+            audit(db, 'revision', new_id, {'from': qid}, owner=owner)
             return admin_question(question_row(db, new_id))
 
     @app.post('/api/math/parent/questions/{qid}/check', dependencies=[Depends(parent)])
-    def check(qid: str):
+    def check(qid: str, owner=Depends(parent)):
         with store.connect(write=True) as db:
-            row = question_row(db, qid)
+            row = question_row(db, qid, owner)
             if row['status'] not in ('draft', 'pending'):
                 raise HTTPException(409, '仅草稿或待审核题目可以自动检查')
             result = check_question(json.loads(row['data']))
             db.execute('UPDATE questions SET checks=?,status=? WHERE id=?',
                        (encode(result), 'pending' if result['passed'] else 'draft', qid))
-            audit(db, 'check', qid, result)
+            audit(db, 'check', qid, result, owner=owner)
             return result
 
     @app.post('/api/math/parent/questions/{qid}/publish', dependencies=[Depends(parent)])
-    def publish(qid: str, body: Review):
+    def publish(qid: str, body: Review, owner=Depends(parent)):
         with store.connect(write=True) as db:
-            row = question_row(db, qid)
+            row = question_row(db, qid, owner)
             if row['status'] != 'pending' or not body.independently_solved:
                 raise HTTPException(409, '须先通过自动检查，并由审核者独立解题确认')
             if not check_question(json.loads(row['data']))['passed']:
@@ -230,90 +248,94 @@ def create_app(db_path=None, admin_token=None):
             # Keep already assigned historical versions valid; disable them explicitly if erroneous.
             db.execute("UPDATE questions SET status='published',active=1,reviewer=?,reviewed_at=?,review_comment=?,published_at=? WHERE id=?",
                        (body.reviewer, now(), body.comment, now(), qid))
-            audit(db, 'publish', qid, body.model_dump())
-            return admin_question(question_row(db, qid))
+            audit(db, 'publish', qid, body.model_dump(), owner=owner)
+            return admin_question(question_row(db, qid, owner))
 
     @app.post('/api/math/parent/questions/{qid}/reject', dependencies=[Depends(parent)])
-    def reject(qid: str, body: Note):
+    def reject(qid: str, body: Note, owner=Depends(parent)):
         with store.connect(write=True) as db:
-            row = question_row(db, qid)
+            row = question_row(db, qid, owner)
             if row['status'] not in ('draft', 'pending'):
                 raise HTTPException(409, '已发布题目请先停用或创建新版本')
             db.execute("UPDATE questions SET status='draft',review_comment=? WHERE id=?", (body.comment, qid))
-            audit(db, 'reject', qid, body.model_dump())
+            audit(db, 'reject', qid, body.model_dump(), owner=owner)
             return {'ok': True}
 
     @app.post('/api/math/parent/questions/{qid}/disable', dependencies=[Depends(parent)])
-    def disable(qid: str, body: Note):
+    def disable(qid: str, body: Note, owner=Depends(parent)):
         with store.connect(write=True) as db:
-            question_row(db, qid)
+            question_row(db, qid, owner)
             db.execute("UPDATE questions SET active=0,status='disabled' WHERE id=?", (qid,))
-            audit(db, 'disable', qid, body.model_dump())
+            audit(db, 'disable', qid, body.model_dump(), owner=owner)
             return {'ok': True}
 
     @app.post('/api/math/parent/devices', dependencies=[Depends(parent)], status_code=201)
-    def register(body: DeviceInput):
+    def register(body: DeviceInput, owner=Depends(parent)):
         value, did = secrets.token_urlsafe(32), uuid4().hex
         with store.connect(write=True) as db:
             db.execute('INSERT INTO devices(id,name,player_id,token_hash) VALUES(?,?,?,?)',
-                       (did, body.name, body.mode, token_hash(value)))
-            audit(db, 'device_create', did, {'name': body.name, 'mode': body.mode})
+                       (did, body.name, ensure_player(db,owner,body.mode), token_hash(value)))
+            audit(db, 'device_create', did, {'name': body.name, 'mode': body.mode}, owner=owner)
         return {'id': did, 'token': value, 'mode': body.mode, 'message': '令牌仅显示一次，请妥善保存'}
 
     @app.get('/api/math/parent/devices', dependencies=[Depends(parent)])
-    def devices():
+    def devices(owner=Depends(parent)):
         with store.connect() as db:
-            return [dict(row) for row in db.execute('SELECT id,name,player_id,revoked,last_seen_at,firmware_version FROM devices')]
+            return [dict(row) for row in db.execute('SELECT id,name,player_id,revoked,last_seen_at,firmware_version FROM devices WHERE player_id IN (SELECT id FROM players WHERE owner=?)',(owner,))]
 
     @app.post('/api/math/parent/devices/{did}/revoke', dependencies=[Depends(parent)])
-    def revoke(did: str):
+    def revoke(did: str, owner=Depends(parent)):
         with store.connect(write=True) as db:
-            if not db.execute('UPDATE devices SET revoked=1 WHERE id=?', (did,)).rowcount:
+            if not db.execute('UPDATE devices SET revoked=1 WHERE id=? AND player_id IN (SELECT id FROM players WHERE owner=?)', (did,owner)).rowcount:
                 raise HTTPException(404, '设备不存在')
-            audit(db, 'device_revoke', did, {})
+            audit(db, 'device_revoke', did, {}, owner=owner)
         return {'ok': True}
 
     @app.patch('/api/math/parent/player', dependencies=[Depends(parent)])
-    def rename(body: PlayerInput, mode: str = Query('live', pattern='^(live|practice)$')):
+    def rename(body: PlayerInput, mode: str = Query('live', pattern='^(live|practice)$'), owner=Depends(parent)):
+        pid=owner_player(owner,mode)
         with store.connect(write=True) as db:
-            db.execute('UPDATE players SET nickname=? WHERE id=?', (body.nickname, mode))
-            return player(db, mode)
+            db.execute('UPDATE players SET nickname=? WHERE id=?', (body.nickname, pid))
+            return player(db, pid)
 
     @app.get('/api/math/parent/dashboard', dependencies=[Depends(parent)])
-    def dashboard(mode: str = Query('live', pattern='^(live|practice)$')):
+    def dashboard(mode: str = Query('live', pattern='^(live|practice)$'), owner=Depends(parent)):
+        pid=owner_player(owner,mode)
         with store.connect() as db:
-            result = today_view(db, mode, mode)
+            result = today_view(db, pid, mode)
             result['attempts'] = [dict(r) for r in db.execute(
                 'SELECT a.*,t.question_id,t.day,q.data FROM attempts a JOIN tasks t ON t.id=a.task_id '
-                'JOIN questions q ON q.id=t.question_id WHERE t.player_id=? ORDER BY a.id DESC LIMIT 100', (mode,))]
+                'JOIN questions q ON q.id=t.question_id WHERE t.player_id=? ORDER BY a.id DESC LIMIT 100', (pid,))]
             for a in result['attempts']:
                 q = json.loads(a.pop('data'))
                 a['title'], a['content'], a['selected'] = q['title'], q['content'], q['options'][a['answer']]
             result['trend'] = [dict(r) for r in db.execute(
                 'SELECT t.day,COUNT(*) AS attempts,SUM(a.correct) AS correct,SUM(a.duration_seconds) AS seconds '
                 'FROM attempts a JOIN tasks t ON t.id=a.task_id WHERE t.player_id=? '
-                'GROUP BY t.day ORDER BY t.day DESC LIMIT 14', (mode,))]
+                'GROUP BY t.day ORDER BY t.day DESC LIMIT 14', (pid,))]
             result['skills'] = [dict(r) for r in db.execute(
                 "SELECT json_extract(q.data,'$.topic') AS topic,COUNT(*) AS practiced,SUM(t.state='solved') AS solved "
-                'FROM tasks t JOIN questions q ON q.id=t.question_id WHERE t.player_id=? GROUP BY topic', (mode,))]
+                'FROM tasks t JOIN questions q ON q.id=t.question_id WHERE t.player_id=? GROUP BY topic', (pid,))]
             return result
 
     @app.post('/api/math/parent/tasks/generate', dependencies=[Depends(parent)])
-    def generate(mode: str = Query('live', pattern='^(live|practice)$')):
+    def generate(mode: str = Query('live', pattern='^(live|practice)$'), owner=Depends(parent)):
+        pid=owner_player(owner,mode)
         with store.connect(write=True) as db:
-            ensure_tasks(db, mode, mode)
-            return today_view(db, mode, mode)
+            ensure_tasks(db, pid, mode)
+            return today_view(db, pid, mode)
 
     @app.get('/api/math/parent/rewards', dependencies=[Depends(parent)])
-    def reward_ledger(mode: str = Query('live', pattern='^(live|practice)$')):
+    def reward_ledger(mode: str = Query('live', pattern='^(live|practice)$'), owner=Depends(parent)):
+        pid=owner_player(owner,mode)
         with store.connect() as db:
             return [dict(r) for r in db.execute(
-                'SELECT * FROM rewards WHERE player_id=? ORDER BY id DESC LIMIT 100', (mode,))]
+                'SELECT * FROM rewards WHERE player_id=? ORDER BY id DESC LIMIT 100', (pid,))]
 
     @app.get('/api/math/parent/audit', dependencies=[Depends(parent)])
-    def audit_log():
+    def audit_log(owner=Depends(parent)):
         with store.connect() as db:
-            return [dict(r) for r in db.execute('SELECT * FROM audit ORDER BY id DESC LIMIT 100')]
+            return [dict(r) for r in db.execute('SELECT * FROM audit WHERE owner=? ORDER BY id DESC LIMIT 100',(owner,))]
 
     @app.get('/api/math/adventure/today')
     @app.get('/api/math/device/state')

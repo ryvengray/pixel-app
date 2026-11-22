@@ -9,6 +9,14 @@ services:
       DATABASE_PATH: /data/math-adventure.db
       MATH_ADMIN_TOKEN: ${MATH_ADMIN_TOKEN:?请在math-adventure/.env中配置至少24位随机家长令牌}
       MATH_TIMEZONE: ${MATH_TIMEZONE:-Asia/Shanghai}
+      MAIL_HOST: ${MAIL_HOST:-smtp.163.com}
+      MAIL_PORT: ${MAIL_PORT:-465}
+      MAIL_SSL_ENABLED: ${MAIL_SSL_ENABLED:-true}
+      MAIL_USERNAME: ${MAIL_USERNAME:-}
+      MAIL_PASSWORD: ${MAIL_PASSWORD:-}
+      MAIL_FROM: ${MAIL_FROM:-}
+      MATH_PARENT_EMAILS: ${MATH_PARENT_EMAILS:-}
+      MATH_COOKIE_SECURE: ${MATH_COOKIE_SECURE:-true}
       MATH_ROOT_PATH: ${MATH_ROOT_PATH:-}
     volumes:
       - math-data:/data

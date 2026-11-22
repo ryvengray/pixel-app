@@ -15,12 +15,14 @@ RAW = [
  ('分组魔法','24颗星星每6颗放一盒，能装满几盒？',['3','4','6'],1,['想一想几个6合起来是24。'],'6+6+6+6=24，所以能装满4盒。','数量关系','分组','24/6'),
 ]
 
-def seed(db):
+def seed(db, owner="administrator"):
+    import hashlib
+    prefix="" if owner=="administrator" else hashlib.sha256(owner.encode()).hexdigest()[:24]+"-"
     for i, (title, content, options, answer, hints, explanation, topic, skill, expression) in enumerate(RAW, 1):
-        key = f'sample-{i:02d}'
+        key = prefix+f'sample-{i:02d}'
         q = QuestionInput(title=title, content=content, options=options, answer=answer,
                           hints=hints, explanation=explanation, topic=topic, skill_tags=[skill],
                           source_type='ai_draft', source_note='Codex辅助起草，需家长独立解题并人工审核。',
                           expression=expression)
-        db.execute('INSERT OR IGNORE INTO questions(id,question_key,version,data,created_at) VALUES(?,?,1,?,?)',
-                   (f'{key}-v1', key, encode(q.model_dump()), now()))
+        db.execute('INSERT OR IGNORE INTO questions(id,question_key,version,data,created_at,owner) VALUES(?,?,1,?,?,?)',
+                   (f'{key}-v1', key, encode(q.model_dump()), now(), owner))

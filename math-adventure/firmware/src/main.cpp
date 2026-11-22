@@ -176,7 +176,7 @@ void setup() {
   online::init();
   if(!calibration.valid()) beginCalibration();
   else draw();
-  Serial.println("MATH ADVENTURE v0.3 ONLINE READY; h=help. Server-authoritative tasks and rewards.");
+  Serial.println("MATH ADVENTURE v0.4 ONLINE READY; h=help. Server-authoritative tasks and rewards.");
 }
 void loop() {
   serialControl();online::tick();readTouch();
