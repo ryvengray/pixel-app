@@ -3,16 +3,22 @@
 #include <TFT_eSPI.h>
 #include <U8g2_for_TFT_eSPI.h>
 #include <math.h>
-#include "adventure.h"
+#include <ArduinoJson.h>
+#include <HTTPClient.h>
+#include <WiFi.h>
+#include <WiFiClientSecure.h>
+#include <WebServer.h>
+#include <time.h>
+#include "trusted_roots.h"
+
+
 #include "calibration.h"
 #include "touch_gesture.h"
 
 namespace {
-using adventure::Page;
 TFT_eSPI lcd;
 U8g2_for_TFT_eSPI chinese;
 Preferences prefs;
-adventure::Game game;
 constexpr uint16_t cream = 0xFF9A, green = 0x346C, ink = 0x2947;
 constexpr uint16_t pale = 0xD718, blue = 0x8D9F, gold = 0xFE48;
 struct Button { int x, y, w, h, action; bool primary; };
@@ -27,7 +33,7 @@ bool calibrating = false;
 uint8_t calibrationStep = 0, samples = 0;
 float rawX[3], rawY[3], sampleX = 0, sampleY = 0;
 const int targets[4][2] = {{24,48}, {296,48}, {24,212}, {296,212}};
-bool touchEnabled = false;
+bool touchEnabled = false, inputDown=false, suppressTouch=false;
 
 void text(const char *s, int x, int baseline, uint16_t color = ink) {
   if (x < 0 || x + chinese.getUTF8Width(s) > 320 || baseline > 236) Serial.printf("TEXT OVERFLOW x=%d y=%d: %s\n",x,baseline,s);
@@ -64,86 +70,9 @@ void star(int x, int y, bool filled) {
   lcd.fillTriangle(x,y-9,x-8,y+7,x+8,y+7,color);
   lcd.fillTriangle(x-10,y-3,x+10,y-3,x,y+10,color);
 }
-void save() { prefs.putBytes("progress", &game.state, sizeof(game.state)); }
-void show(Page page) { game.page = page; dirty = true; }
-void draw() {
-  dirty = false; buttonCount = 0;
-  lcd.fillScreen(cream);
-  lcd.fillRect(0,0,320,28,pale);
-  text("小语冒险岛",8,20);
-  text("试玩",276,20);
-  const auto &q = game.question();
-  char progress[48];
-  switch (game.page) {
-    case Page::Home:
-      lcd.fillRoundRect(8,42,304,130,18,0xF757);
-      face(61,112,true);
-      text("你好，小勇士！",106,70);
-      text("今天帮帮森林朋友吧",106,96);
-      snprintf(progress,sizeof(progress),"找到 %u / 3 颗星星",game.solved());
-      text(progress,106,122);
-      for (int i=0;i<3;++i) star(126+i*32,148,game.isSolved(i));
-      button(8,188,96,"小设置",40,false);
-      button(112,188,200,game.finished()?"看看今日收获":"开始冒险",1);
-      break;
-    case Page::Map:
-      text("选一位朋友，解开谜题",8,54);
-      for (int i=0;i<3;++i) {
-        int x=8+i*104;
-        face(x+48,87,false);
-        if (game.isSolved(i)) star(x+76,72,true);
-        text(adventure::questions[i].name,x+16,128);
-        button(x,140,96,game.isSolved(i)?"看方法":((game.state.skipped&(1<<i))?"再想想":"帮帮它"),10+i,!game.isSolved(i));
-      }
-      button(8,188,96,"回家",0,false);
-      button(112,188,200,"保存并休息",30,false);
-      break;
-    case Page::Question:
-      text(q.name,8,51);
-      face(282,68,false);
-      text(q.line1,12,79); text(q.line2,12,105);
-      for (int i=0;i<3;++i) button(8+i*104,124,96,q.options[i],20+i);
-      button(8,188,148,"想一想",23,false);
-      button(164,188,148,"稍后再想",24,false);
-      break;
-    case Page::Retry:
-    case Page::Hint:
-      face(46,96,false);
-      text(game.page==Page::Hint?"一起找个好办法":"再想想，你可以的",86,62);
-      text(q.hint1,86,99); text(q.hint2,86,127);
-      button(8,188,148,"保存并休息",30,false);
-      button(164,188,148,"再试一次",25);
-      break;
-    case Page::Win:
-      // Keep the complete question visible while reviewing the solution.
-      lcd.fillRoundRect(8,36,304,56,10,0xF757);
-      text(q.line1,16,58); text(q.line2,16,82);
-      text("好办法，一起回顾",16,116);
-      star(288,110,true);
-      text(q.method1,16,142); text(q.method2,16,168);
-      button(8,188,96,"回家",0,false);
-      button(112,188,200,game.finished()?"看看今日收获":"回到地图",26);
-      break;
-    case Page::Summary:
-      centered(game.finished()?"今天的冒险结束啦":"进度存好啦，休息一下",58);
-      for (int i=0;i<3;++i) star(112+i*48,88,game.isSolved(i));
-      snprintf(progress,sizeof(progress),"解决 %u 题，%u 题稍后再想",game.solved(),game.skipped());
-      centered(progress,133);
-      centered("可以和家人说说你的好办法",160);
-      button(72,188,176,"回家休息",0);
-      break;
-    case Page::Settings:
-      centered("试玩进度只保存在这块板子",57);
-      centered("不发放正式经验或金币",82);
-      button(8,96,148,"校准触摸",41,false);
-      button(164,96,148,"重玩试玩",42,false);
-      centered("串口也可控制，按 h 查看帮助",171);
-      button(72,188,176,"返回首页",0);
-      break;
-  }
-  Serial.printf("PAGE %u solved=%u skipped=%u current=%u heap=%u\n",
-    unsigned(game.page),game.solved(),game.skipped(),game.state.current,ESP.getFreeHeap());
-}
+#include "online.h"
+
+void draw() {if(inputDown){suppressTouch=true;gesture=adventure::TouchGesture{};}online::render();}
 void drawCalibration(const char *message = "请轻点十字中心，再松手") {
   lcd.fillScreen(cream); buttonCount=0;
   centered("触摸校准",24);
@@ -160,20 +89,8 @@ void beginCalibration() {
 bool solveCalibration() { return calibration.fit(rawX,rawY); }
 void point(float rx,float ry,int &x,int &y) { calibration.map(rx,ry,x,y); }
 void action(int id) {
-  switch(id) {
-    case 0: show(Page::Home); break;
-    case 1: show(game.finished()?Page::Summary:Page::Map); break;
-    case 10: case 11: case 12: game.select(id-10); dirty=true; save(); break;
-    case 20: case 21: case 22: game.answer(id-20); dirty=true; save(); break;
-    case 23: game.hint(); dirty=true; save(); break;
-    case 24: game.skip(); dirty=true; save(); break;
-    case 25: show(Page::Question); break;
-    case 26: show(game.finished()?Page::Summary:Page::Map); break;
-    case 30: show(Page::Summary); break;
-    case 40: show(Page::Settings); break;
-    case 41: beginCalibration(); break;
-    case 42: game.reset(); dirty=true; save(); break;
-  }
+  if(id==41) {beginCalibration();return;}
+  online::handle(id);
 }
 int hit(int x,int y) {
   for (int i=0;i<buttonCount;++i) {
@@ -204,7 +121,7 @@ void readTouch() {
           int sx,sy; point(x,y,sx,sy);
           if(abs(sx-296)<=22 && abs(sy-212)<=22) {
             prefs.putBytes("calibration",&calibration,sizeof(calibration));
-            calibrating=false; show(Page::Home); Serial.println("CALIBRATION OK");
+            calibrating=false; online::screen=0;dirty=true; Serial.println("CALIBRATION OK");
           } else {calibrationStep=0; drawCalibration("再来一次，轻点十字中心");}
         }
       }
@@ -212,6 +129,8 @@ void readTouch() {
     }
     return;
   }
+  inputDown=down;
+  if(suppressTouch){if(!down)suppressTouch=false;return;}
   int target=-1;
   if(down) {
     int x,y; point(rx,ry,x,y);
@@ -230,28 +149,16 @@ void readTouch() {
   if(update.activate>=0) action(buttons[update.activate].action);
 }
 void serialControl() {
-  if(!Serial.available()) return;
+  if(!Serial.available())return;
   char c=Serial.read();
-  if(c=='h') Serial.println("MATH ADVENTURE LOCAL PLAYTEST. h help; 0 home; 1 map; a/b/c choose; n continue; t hint; s skip; r retry; C calibrate; x reset playtest; d raw touch diagnostics. No real rewards/API.");
-  if(c=='0') {calibrating=false; show(Page::Home);}
-  if(c=='1') {calibrating=false;show(Page::Map);}
-  if(c=='C') beginCalibration();
-  if(c=='d') {uint16_t x,y;lcd.getTouchRaw(&x,&y);Serial.printf("RAW x=%u y=%u pressure=%u\n",x,y,lcd.getTouchRawZ());}
-  if(calibrating) return;
-  if(c=='x') action(42);
-  if(c=='a'||c=='b'||c=='c') {
-    int i=c-'a';
-    if(game.page==Page::Map) action(10+i);
-    else if(game.page==Page::Question) action(20+i);
-  }
-  if(c=='t' && game.page==Page::Question) action(23);
-  if(c=='s' && game.page==Page::Question) action(24);
-  if(c=='r' && (game.page==Page::Hint||game.page==Page::Retry)) action(25);
-  if(c=='n') {
-    if(game.page==Page::Home) action(1);
-    else if(game.page==Page::Win) action(26);
-  }
+  if(c=='h')Serial.println("MATH ONLINE v0.3: C calibrate; W Wi-Fi setup; R sync; H home. Configure device token via local setup portal; no secrets in serial output.");
+  if(c=='C')beginCalibration();
+  if(c=='W')online::startPortal();
+  if(c=='R')online::sync();
+  if(c=='D')Serial.printf("ONLINE wifi=%d ready=%d tasks=%u pending=%d mode=%s\n",int(WiFi.status()),online::ready,unsigned(online::tasks().size()),!online::pendingBody.isEmpty(),online::mode.c_str());
+  if(c=='H'){calibrating=false;online::screen=0;dirty=true;}
 }
+
 } // namespace
 
 void setup() {
@@ -264,24 +171,20 @@ void setup() {
   lcd.init();lcd.setRotation(1);
   chinese.begin(lcd);chinese.setFont(u8g2_font_wqy16_t_gb2312);chinese.setFontMode(1);
   prefs.begin("math-playtest",false);
-  if(prefs.getBytesLength("progress")==sizeof(game.state)) {
-    adventure::Saved saved;
-    prefs.getBytes("progress",&saved,sizeof(saved));
-    if(adventure::valid(saved)) game.state=saved;
-  }
   touchEnabled=true;
   if(prefs.getBytesLength("calibration")==sizeof(calibration)) prefs.getBytes("calibration",&calibration,sizeof(calibration));
+  online::init();
   if(!calibration.valid()) beginCalibration();
   else draw();
-  Serial.println("MATH ADVENTURE v0.2.2 PLAYTEST READY; h=help. No sensor uploads, network or real rewards.");
+  Serial.println("MATH ADVENTURE v0.3 ONLINE READY; h=help. Server-authoritative tasks and rewards.");
 }
 void loop() {
-  serialControl();readTouch();
+  serialControl();online::tick();readTouch();
   if(dirty && !calibrating) draw();
-  if(!calibrating && game.page==Page::Home) {
+  if(!calibrating && online::screen==0) {
     uint32_t phase=millis()%4000;
     bool blink=phase>3700;
-    if(blink!=(lastBlink!=0)) {face(61,112,true,blink);lastBlink=blink?1:0;}
+    if(blink!=(lastBlink!=0)) {face(54,107,true,blink);lastBlink=blink?1:0;}
   }
   delay(5);
 }
