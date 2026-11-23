@@ -91,8 +91,8 @@ def test_review_and_invalid_expression(system):
     body['independently_solved'] = False
     assert c.post(f'/api/math/parent/questions/{qid}/publish',headers=PARENT,json=body).status_code == 409
     assert c.post(f'/api/math/parent/questions/{qid}/reject',headers=PARENT,json={'comment':'表述待改'}).status_code == 200
-    publish(c, qid)
-    assert next(q for q in questions(c) if q['id']==qid)['reviewer']
+    assert all(q['id'] != qid for q in questions(c))
+    assert c.post(f'/api/math/parent/questions/{qid}/check', headers=PARENT).status_code == 404
     data = row['data']
     data['expression'] = '__import__("os").system("false")'
     r = c.post('/api/math/parent/questions',headers=PARENT,json=data)
@@ -288,3 +288,20 @@ def test_atomic_batch_import(system):
     assert all(row['status']=='draft' and not row['active'] for row in r.json())
     assert r.json()[0]['data']['difficulty'] == 2
     assert len(questions(c)) == len(original)+2
+
+
+def test_rejected_question_removed_without_breaking_tasks(system):
+    c, path = system
+    auth, _ = device(c)
+    task = plan(c, auth)['tasks'][0]
+    qid = task['question_id']
+    url = f'/api/math/parent/questions/{qid}'
+    assert c.post(url+'/reject', headers=PARENT, json={'comment':'难度不合适'}).status_code == 200
+    assert all(q['id'] != qid for q in questions(c))
+    assert not next(t for t in plan(c, auth)['tasks'] if t['id']==task['id'])['available']
+    assert c.post(url+'/versions', headers=PARENT, json=questions(c)[0]['data']).status_code == 404
+    with sqlite3.connect(path) as db:
+        from app.samples import seed
+        seed(db)
+        assert db.execute('SELECT status FROM questions WHERE id=?', (qid,)).fetchone()[0] == 'deleted'
+    assert all(q['id'] != qid for q in questions(c))

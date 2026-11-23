@@ -67,6 +67,8 @@ def create_app(db_path=None, admin_token=None):
             db.execute("INSERT OR IGNORE INTO players(id,nickname,mode,owner) VALUES('live','小勇士','live','administrator')")
             db.execute("INSERT OR IGNORE INTO players(id,nickname,mode,owner) VALUES('practice','试玩小勇士','practice','administrator')")
             seed(db)
+            # Retire drafts rejected before deletion became the default workflow.
+            db.execute("UPDATE questions SET status='deleted',active=0 WHERE status='draft' AND COALESCE(review_comment,'')<>''")
         yield
 
     app = FastAPI(title='小语数学冒险岛', version='0.1.0', lifespan=lifespan, root_path=os.getenv('MATH_ROOT_PATH', ''))
@@ -127,7 +129,7 @@ def create_app(db_path=None, admin_token=None):
 
     def question_row(db, question_id, owner=None):
         row = db.execute('SELECT * FROM questions WHERE id=?', (question_id,)).fetchone()
-        if row is None or (owner is not None and row['owner']!=owner):
+        if row is None or (owner is not None and (row['owner']!=owner or row['status']=='deleted')):
             raise HTTPException(404, '题目不存在')
         return row
 
@@ -199,7 +201,7 @@ def create_app(db_path=None, admin_token=None):
     def questions(owner=Depends(parent)):
         owner_player(owner,"live")
         with store.connect() as db:
-            return [admin_question(q) for q in db.execute('SELECT * FROM questions WHERE owner=? ORDER BY question_key,version DESC',(owner,))]
+            return [admin_question(q) for q in db.execute("SELECT * FROM questions WHERE owner=? AND status<>'deleted' ORDER BY question_key,version DESC",(owner,))]
 
     @app.post('/api/math/parent/questions', dependencies=[Depends(parent)], status_code=201)
     def new_question(body: QuestionInput, owner=Depends(parent)):
@@ -271,7 +273,7 @@ def create_app(db_path=None, admin_token=None):
             row = question_row(db, qid, owner)
             if row['status'] not in ('draft', 'pending'):
                 raise HTTPException(409, '已发布题目请先停用或创建新版本')
-            db.execute("UPDATE questions SET status='draft',review_comment=? WHERE id=?", (body.comment, qid))
+            db.execute("UPDATE questions SET status='deleted',active=0,review_comment=? WHERE id=?", (body.comment, qid))
             audit(db, 'reject', qid, body.model_dump(), owner=owner)
             return {'ok': True}
 
