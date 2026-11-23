@@ -14,6 +14,8 @@ String apName, apPassword, csrf;
 bool busy=false, ready=false, setupActive=false, refreshAfter=false;
 uint32_t nextPoll=0, nextRetry=0, setupUntil=0;
 DynamicJsonDocument state(24576);
+int serverPage=0, mapOffset=0;
+String exploreTaskId, mapMessage;
 int selected=0, screen=0, contentPage=0; // home, map, question, method/hint, settings
 DynamicJsonDocument outbox(24576);
 String numberInput;
@@ -65,7 +67,7 @@ bool send(const String &path,const String &body="") {
   if(xQueueSend(jobs,&w,0)!=pdTRUE) {delete w;return false;}
   busy=true;statusHeader();return true;
 }
-void sync() { send("/api/math/device/state"); }
+void sync() { send(String("/api/math/device/state?page=")+serverPage); }
 JsonArray tasks() {return state["tasks"].as<JsonArray>();}
 JsonObject task() {return tasks()[selected].as<JsonObject>();}
 JsonObject question() {return task()["question"].as<JsonObject>();}
@@ -97,7 +99,7 @@ void submit(const char *path,int answer=-1,bool numeric=false) {
     bool correct=value==solution["answer"].as<double>();
     detailKind=correct?0:2;
     detail=correct?solution["explanation"].as<String>():"没关系，换个办法再试试。可以先找一找题目里的条件，也可以请小向导给个提示。";
-    if(correct){task()["state"]="solved";task()["explanation"]=solution["explanation"];}
+    if(correct){if(task()["state"]!="solved"&&state.containsKey("solved_total"))state["solved_total"]=state["solved_total"].as<int>()+1;task()["state"]="solved";task()["explanation"]=solution["explanation"];}
     screen=correct?9:3;
   }else if(String(path)=="/api/math/tasks/hint"){
     detailKind=1;int n=task()["hint_count"]|0;auto hints=solution["hints"].as<JsonArray>();
@@ -105,6 +107,15 @@ void submit(const char *path,int answer=-1,bool numeric=false) {
     task()["hint_count"]=n+1;screen=3;
   }else{task()["state"]="skipped";screen=1;}
   cacheState();contentPage=0;message="已保存，后台同步中";dirty=true;nextRetry=0;
+}
+void requestExploration(){
+  for(auto entry:outbox.as<JsonArray>())if(entry["path"]=="/api/math/adventure/explore"){message="正在寻找新关卡";dirty=true;return;}
+  if(outbox.size()>=60){message="请先联网同步记录";dirty=true;return;}
+  char id[40];snprintf(id,sizeof(id),"%08lx%08lx%08lx%08lx",(unsigned long)esp_random(),(unsigned long)esp_random(),(unsigned long)esp_random(),(unsigned long)esp_random());
+  DynamicJsonDocument body(256);body["request_id"]=id;String serialized;serializeJson(body,serialized);
+  auto entry=outbox.createNestedObject();entry["path"]="/api/math/adventure/explore";entry["body"]=serialized;
+  if(outbox.overflowed()||!saveOutbox()){outbox.remove(outbox.size()-1);message="保存失败，请稍后再试";dirty=true;return;}
+  loadPending();nextRetry=0;message="正在寻找新关卡";mapMessage=message;dirty=true;
 }
 void startPortal() {
   if(setupActive){setupUntil=millis()+600000;screen=4;dirty=true;return;}
@@ -130,7 +141,7 @@ void init() {
   if(!outbox.size()&&pendingBody.length()){auto e=outbox.createNestedObject();e["path"]=pendingPath;e["body"]=pendingBody;saveOutbox();}
   loadPending();
   if(!deserializeJson(state,config.getString("cached-state",""))&&state["tasks"].is<JsonArray>()){
-    ready=true;mode=state["mode"].as<String>();day=state["day"].as<String>();xp=state["player"]["xp"]|0;coins=state["player"]["coins"]|0;
+    ready=true;serverPage=state["page"]|0;mode=state["mode"].as<String>();day=state["day"].as<String>();xp=state["player"]["xp"]|0;coins=state["player"]["coins"]|0;
   }
   jobs=xQueueCreate(1,sizeof(Work*));replies=xQueueCreate(1,sizeof(Result*));
   if(!jobs||!replies||xTaskCreate(worker,"math-http",12288,nullptr,1,nullptr)!=pdPASS) {
@@ -273,23 +284,34 @@ void tick() {
     DynamicJsonDocument data(24576);bool parsed=!deserializeJson(data,r->body);
     if(parsed) {
       parsed=data["player"]["xp"].is<int>()&&data["player"]["coins"].is<int>()&&data["mode"].is<const char*>();
-      if(r->path=="/api/math/device/state") parsed=parsed&&data["tasks"].is<JsonArray>()&&data["tasks"].size()<=3&&data["day"].is<const char*>();
+      if(r->path.startsWith("/api/math/device/state")) parsed=parsed&&data["tasks"].is<JsonArray>()&&data["tasks"].size()<=5&&data["day"].is<const char*>();
+      else if(r->path=="/api/math/adventure/explore") parsed=parsed&&data["found"].is<bool>();
       else {
         DynamicJsonDocument saved(512);deserializeJson(saved,pendingBody);
         parsed=parsed&&data["task_id"].as<String>()==saved["task_id"].as<String>()&&data["state"].is<const char*>();
       }
     }
     if(r->status==200&&parsed) {
-      if(r->path=="/api/math/device/state") {
+      if(r->path=="/api/math/adventure/explore"){
+        acknowledge();message=data["message"].as<String>();mapMessage=message;
+        if(data["found"]==true){serverPage=data["page"]|0;mapOffset=((data["index"]|0)/2)*2;exploreTaskId=data["task_id"].as<String>();refreshAfter=true;}
+        nextRetry=0;redraw=true;
+      }else if(r->path.startsWith("/api/math/device/state")) {
+        if(data["page"].as<int>()!=serverPage){refreshAfter=true;nextRetry=0;delete r;return;}
+        if(!data["tasks"].size()&&serverPage>0){serverPage=0;mapOffset=0;refreshAfter=true;nextRetry=0;delete r;return;}
         String before,after;serializeJson(state,before);serializeJson(data,after);redraw=!ready||before!=after;
         String oldDay=day, oldId=resumeTask.length()?resumeTask:task()["id"].as<String>();resumeTask="";
         if(outbox.size()){delete r;return;}
-        state=data;cacheState();mode=state["mode"].as<String>();day=state["day"].as<String>();ready=true;
+        state=data;serverPage=state["page"]|0;if(mapOffset>=(int)tasks().size())mapOffset=0;cacheState();mode=state["mode"].as<String>();day=state["day"].as<String>();ready=true;
         xp=state["player"]["xp"]|0;coins=state["player"]["coins"]|0;
         selected=0;
         for(unsigned i=0;i<tasks().size();++i)if(tasks()[i]["id"].as<String>()==oldId) selected=i;
         if(oldDay.length()&&oldDay!=day){screen=0;contentPage=0;}
         message=tasks().size()?"冒险已同步":"请家长审核并安排题目";
+        if(exploreTaskId.length()){
+          for(unsigned i=0;i<tasks().size();++i)if(tasks()[i]["id"].as<String>()==exploreTaskId){selected=i;screen=2;contentPage=0;detailKind=0;}
+          exploreTaskId="";mapMessage="";
+        }
       } else {
         // Acknowledge uploads without interrupting the child's current screen.
         acknowledge();
@@ -303,6 +325,7 @@ void tick() {
       else if(r->status==409||r->status==404||r->status==422) {
         message="任务已变化，记录保留待处理";nextRetry=millis()+30000;
       } else message=WiFi.status()!=WL_CONNECTED?"网络断开，正在重新连接":"同步未成功，稍后自动重试";
+      if(r->path=="/api/math/adventure/explore")mapMessage="网络暂时没连上，稍后再试";
       nextRetry=millis()+5000;
     }
     delete r;if(redraw||previousMessage!=message)dirty=true;statusHeader();
@@ -330,8 +353,8 @@ void wrap(String s) {
   }
   if(line.length()&&lineCount<64)lines[lineCount++]=line;
 }
-int solvedCount(){int count=0;for(auto t:tasks())if(t["available"]==true&&t["state"]=="solved")++count;return count;}
-int availableCount(){int count=0;for(auto t:tasks())if(t["available"]==true)++count;return count;}
+int solvedCount(){if(state.containsKey("solved_total"))return state["solved_total"].as<int>();int count=0;for(auto t:tasks())if(t["available"]==true&&t["state"]=="solved")++count;return count;}
+int availableCount(){if(state.containsKey("available_total"))return state["available_total"].as<int>();int count=0;for(auto t:tasks())if(t["available"]==true)++count;return count;}
 bool allSolved(){return availableCount()>0&&solvedCount()==availableCount();}
 void openTask(int index){
   if(index<0||index>=(int)tasks().size())return;
@@ -342,7 +365,7 @@ void openTask(int index){
 }
 void continueAdventure(){
   for(int step=1;step<=(int)tasks().size();++step){int index=(selected+step)%tasks().size();if(tasks()[index]["available"]==true&&tasks()[index]["state"]!="solved"){openTask(index);return;}}
-  screen=1;
+  screen=1;mapOffset=(selected/2)*2;
 }
 void render() {
   dirty=false;buttonCount=0;lcd.fillSprite(cream);lcd.fillRect(0,0,320,28,pale);
@@ -383,7 +406,7 @@ void render() {
     text("你找到好办法啦",104,94);
     String progress=String(solvedCount())+" / "+String(availableCount())+" 颗冒险星";
     text(progress.c_str(),104,123);
-    for(int i=0;i<availableCount();++i)star(133+i*42,153,i<solvedCount());
+    for(int i=0;i<min(availableCount(),5);++i)star(115+i*36,153,i<solvedCount());
     button(8,188,96,"看方法",191,false);button(112,188,200,allSolved()?"看看星星地图":"继续冒险",190);return;
   }
   if(screen==0) {
@@ -397,24 +420,30 @@ void render() {
   }
   if(screen==1) {
     lcd.fillRect(0,0,320,28,pale);text(allSolved()?"星星集齐，休息一下吧":"今日星星地图",8,20);
-    for(int i=0;i<availableCount();++i)star(250+i*24,14,i<solvedCount());
-    if(!tasks().size()){face(160,112,false);centered("等家长准备新冒险",165);}
-    if(tasks().size()>1)lcd.drawFastVLine(23,58,(tasks().size()-1)*48,0x9ED5);
-    for(unsigned i=0;i<tasks().size()&&i<3;++i) {
+    String progress=String(solvedCount())+" / "+availableCount();text(progress.c_str(),250,20);
+    if(!tasks().size())centered("等家长准备新冒险",90);
+    if((int)tasks().size()>mapOffset+1)lcd.drawFastVLine(23,58,48,0x9ED5);
+    for(unsigned i=mapOffset;i<tasks().size()&&i<(unsigned)(mapOffset+2);++i) {
+      int row=i-mapOffset;
       auto t=tasks()[i];String title=t["question"]["title"]|"暂时休息";
       String shortTitle;
       for(unsigned j=0;j<title.length();) {unsigned char c=title[j];int n=c<128?1:(c<224?2:3);String next=title.substring(j,j+n);if(chinese.getUTF8Width((shortTitle+next).c_str())>124)break;shortTitle+=next;j+=n;}
-      String st=t["state"]|"pending";star(23,53+i*48,st=="solved");
-      text(shortTitle.c_str(),42,53+i*48);
-      button(180,32+i*48,132,!t["available"].as<bool>()?"暂时休息":st=="solved"?"已点亮·看方法":(st=="skipped"?"回来试试":"出发闯关"),110+i,st!="solved");
+      String st=t["state"]|"pending";star(23,53+row*48,st=="solved");
+      text(shortTitle.c_str(),42,53+row*48);
+      button(180,32+row*48,132,!t["available"].as<bool>()?"暂时休息":st=="solved"?"已点亮·看方法":(st=="skipped"?"回来试试":"出发闯关"),110+i,st!="solved");
     }
+    bool previous=mapOffset>0||serverPage>0,next=mapOffset+2<(int)tasks().size()||state["has_more"]==true;
+    if(previous)button(8,140,72,"上一页",193,false);
+    button(88,140,144,"随机探索",192);
+    if(next)button(240,140,72,"下一页",194,false);
+    text(mapMessage.length()?mapMessage.c_str():busy?"正在同步，可继续查看当前关卡":"随机探索一题，发现新挑战",8,132,0x5B6B);
     button(8,188,148,"回家休息",100,false);button(164,188,148,"更新地图",102,false);return;
   }
   lineCount=0;
   if(screen!=3)wrap(question()["content"].as<String>());
   if(screen!=3)for(unsigned i=0;i<question()["options"].size();++i) wrap(String(char('A'+i))+". "+question()["options"][i].as<String>());
   lcd.fillRect(0,0,320,28,pale);
-  String caption=screen==3?(detailKind==1?"小向导的提示":detailKind==2?"换个办法，再试一次":"一起看看好方法"):String("第 ")+(selected+1)+" 关 · "+(question()["question_type"]=="number"?"填一填":"选一选");
+  String caption=screen==3?(detailKind==1?"小向导的提示":detailKind==2?"换个办法，再试一次":"一起看看好方法"):(task()["kind"]=="explore"?String("探索 · "):String("第 ")+(serverPage*5+selected+1)+" 关 · ")+(question()["question_type"]=="number"?"填一填":"选一选");
   text(caption.c_str(),8,20);
   if(screen==3)wrap(detail);
   int pages=(lineCount+3)/4;if(pages<1)pages=1;if(contentPage>=pages)contentPage=0;
@@ -456,6 +485,9 @@ void handle(int id) {
   if(id==101) {screen=1;dirty=true;if(!ready)sync();return;}
   if(id==102) {sync();return;}
 
+  if(id==192){requestExploration();return;}
+  if(id==193){if(mapOffset>0)mapOffset-=2;else if(serverPage>0){--serverPage;mapOffset=4;refreshAfter=true;nextRetry=0;}dirty=true;return;}
+  if(id==194){if(mapOffset+2<(int)tasks().size())mapOffset+=2;else if(state["has_more"]==true){++serverPage;mapOffset=0;refreshAfter=true;nextRetry=0;}dirty=true;return;}
   if(id==190){continueAdventure();dirty=true;return;}
   if(id==191){detail=question()["solution"]["explanation"].as<String>();detailKind=0;contentPage=0;screen=3;dirty=true;return;}
   if(id==185){numberInput="";screen=8;dirty=true;return;}
@@ -468,11 +500,11 @@ void handle(int id) {
     if(id==184&&numberInput!=""&&numberInput!="-"&&numberInput!="."&&numberInput!="-.")submit("/api/math/answers",-1,true);
     dirty=true;return;
   }
-  if(id>=110&&id<113)openTask(id-110);
+  if(id>=110&&id<115)openTask(id-110);
   if(id>=120&&id<123)submit("/api/math/answers",id-120);
   if(id==130)submit("/api/math/tasks/hint");
   if(id==131)submit("/api/math/tasks/skip");
-  if(id==132||id==135)screen=1;
+  if(id==132||id==135){screen=1;mapOffset=(selected/2)*2;}
   if(id==136)contentPage++;
   if(id==133){screen=2;contentPage=0;}
   if(id==134){if(lineCount>4)contentPage++;else screen=1;}

@@ -19,11 +19,11 @@ def login(c,sent,email):
     assert 'HttpOnly' in r.headers['set-cookie'];token=c.cookies.get('math_parent_session');c.cookies.clear()
     return {'Cookie':'math_parent_session='+token,'X-Math-Request':'1'}
 
-def test_users_isolated(system):
+def test_shared_library_and_private_accounts(system):
     c,path,sent=system;a=login(c,sent,'a@example.test');b=login(c,sent,'b@example.test')
     qa=c.get('/api/math/parent/questions',headers=a).json();qb=c.get('/api/math/parent/questions',headers=b).json()
-    assert len(qa)==len(qb)==10;assert {q['id'] for q in qa}.isdisjoint(q['id'] for q in qb)
-    assert c.post('/api/math/parent/questions/'+qa[0]['id']+'/check',headers=b).status_code==404
+    assert len(qa)==len(qb)==10;assert {q['id'] for q in qa}=={q['id'] for q in qb}
+    assert c.post('/api/math/parent/questions/'+qa[0]['id']+'/check',headers=b).json()['passed']
     assert c.get('/api/math/auth/session',headers=a).json()['email']=='a@example.test'
     assert c.post('/api/math/parent/devices',headers=a,json={'name':'A的设备','mode':'practice'}).status_code==201
     da=c.get('/api/math/parent/devices',headers=a).json();assert len(da)==1
@@ -104,3 +104,32 @@ def test_login_remains_valid_after_thirty_days(system, monkeypatch):
     assert c.get('/api/math/auth/session',headers=headers).status_code==200
     assert c.post('/api/math/auth/logout',headers=headers).status_code==200
     assert c.get('/api/math/auth/session',headers=headers).status_code==401
+
+
+def test_admin_import_is_shared_but_device_history_is_private(system):
+    from uuid import uuid4
+    c,path,sent=system
+    a=login(c,sent,'reader-a@example.test');b=login(c,sent,'reader-b@example.test')
+    admin={'Authorization':'Bearer parent-test-secret-at-least-32-chars'}
+    q=c.get('/api/math/parent/questions',headers=admin).json()[0]['data']
+    imported=c.post('/api/math/parent/questions/import',headers=admin,json={'questions':[dict(q,title='全局共享新题')]}).json()[0]
+    qid=imported['id']
+    for auth in [a,b]:
+        assert qid in {r['id'] for r in c.get('/api/math/parent/questions',headers=auth).json()}
+    assert c.post(f'/api/math/parent/questions/{qid}/check',headers=a).json()['passed']
+    assert c.post(f'/api/math/parent/questions/{qid}/publish',headers=b,json={'independently_solved':True}).status_code==200
+    auths=[]
+    for auth in [a,b]:
+        c.post('/api/math/parent/tasks/select',headers=auth,json={'question_ids':[qid]})
+        d=c.post('/api/math/parent/devices',headers=auth,json={'name':'ESP32','mode':'live'}).json()
+        auths.append({'Authorization':'Bearer '+d['token']})
+    task=c.get('/api/math/device/state',headers=auths[0]).json()['tasks'][0]
+    response=c.post('/api/math/answers',headers=auths[0],json={'request_id':uuid4().hex,'task_id':task['id'],'answer':q['answer']})
+    assert response.json()['correct']
+    assert c.get('/api/math/device/state',headers=auths[1]).json()['tasks'][0]['state']=='pending'
+    assert c.get('/api/math/parent/dashboard',headers=b).json()['attempts']==[]
+    stats_a=next(r for r in c.get('/api/math/parent/questions',headers=a).json() if r['id']==qid)
+    stats_b=next(r for r in c.get('/api/math/parent/questions',headers=b).json() if r['id']==qid)
+    assert stats_a['attempt_count']==1 and stats_b['attempt_count']==0
+    with sqlite3.connect(path) as db:
+        assert db.execute("SELECT COUNT(*) FROM questions WHERE owner<>'shared'").fetchone()[0]==0

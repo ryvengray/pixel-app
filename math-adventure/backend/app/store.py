@@ -80,6 +80,8 @@ class Store:
             columns = {r['name'] for r in db.execute('PRAGMA table_info(tasks)')}
             if 'archived' not in columns:
                 db.execute('ALTER TABLE tasks ADD COLUMN archived INTEGER NOT NULL DEFAULT 0')
+            if 'kind' not in columns:
+                db.execute("ALTER TABLE tasks ADD COLUMN kind TEXT NOT NULL DEFAULT 'base'")
             db.execute('INSERT OR IGNORE INTO schema_version VALUES(3)')
 
     def upgrade_owners(self):
@@ -99,4 +101,7 @@ class Store:
                 columns={r['name'] for r in db.execute('PRAGMA table_info('+table+')')}
                 if 'owner' not in columns:db.execute("ALTER TABLE "+table+" ADD COLUMN owner TEXT NOT NULL DEFAULT 'administrator'")
             db.execute('INSERT OR IGNORE INTO schema_version VALUES(2)')
+            db.execute('CREATE TABLE IF NOT EXISTS day_plans(player_id TEXT NOT NULL REFERENCES players(id), day TEXT NOT NULL, manual INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(player_id,day))')
+            db.execute("UPDATE questions SET owner='shared' WHERE owner<>'shared'")
+            db.execute('INSERT OR IGNORE INTO schema_version VALUES(4)')
             if db.execute('PRAGMA foreign_key_check').fetchone():raise RuntimeError('Ownership migration failed foreign-key validation')

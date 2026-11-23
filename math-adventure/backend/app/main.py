@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse
 from pydantic import ValidationError
 
 from .access import Access
-from .models import Answer, DeviceInput, Note, Operation, PlayerInput, QuestionInput, QuestionBatch, Review, TaskSelection
+from .models import Answer, DeviceInput, Note, Operation, PlayerInput, QuestionInput, QuestionBatch, Review, TaskSelection, Exploration
 from .samples import seed
 from .store import Store, encode, now
 
@@ -81,7 +81,6 @@ def create_app(db_path=None, admin_token=None):
         pid=mode if owner=='administrator' else token_hash(owner)[:24]+'-'+mode
         db.execute('INSERT OR IGNORE INTO players(id,nickname,mode,owner) VALUES(?,?,?,?)',
                    (pid,'小勇士' if mode=='live' else '试玩小勇士',mode,owner))
-        seed(db,owner)
         return pid
 
     def owner_player(owner, mode):
@@ -115,7 +114,7 @@ def create_app(db_path=None, admin_token=None):
 
     def question_row(db, question_id, owner=None):
         row = db.execute('SELECT * FROM questions WHERE id=?', (question_id,)).fetchone()
-        if row is None or (owner is not None and (row['owner']!=owner or row['status']=='deleted')):
+        if row is None or (owner is not None and row['status']=='deleted'):
             raise HTTPException(404, '题目不存在')
         return row
 
@@ -139,25 +138,30 @@ def create_app(db_path=None, admin_token=None):
     def history(db, player_id, key):
         return dict(db.execute('SELECT COUNT(*) AS attempt_count,COALESCE(SUM(a.correct=0),0) AS wrong_count,COALESCE(SUM(a.correct=1),0) AS correct_count FROM attempts a JOIN tasks t ON t.id=a.task_id JOIN questions q ON q.id=t.question_id WHERE t.player_id=? AND q.question_key=?', (player_id, key)).fetchone())
 
-    def ensure_tasks(db, player_id, mode):
-        existing = db.execute('SELECT COUNT(*) FROM tasks WHERE player_id=? AND day=? AND archived=0', (player_id, day())).fetchone()[0]
-        if existing:
-            return
-        # A new draft must not hide the last published version from live tasks.
-        # A disabled published revision must not silently fall back to an older revision.
+    def candidates(db, mode):
         statuses = "('draft','pending','published','disabled')" if mode == 'practice' else "('published','disabled')"
-        candidates = db.execute(
-            f'SELECT * FROM questions q WHERE owner=? AND status IN {statuses} AND version='
+        return [q for q in db.execute(
+            f'SELECT * FROM questions q WHERE status IN {statuses} AND version='
             f'(SELECT MAX(version) FROM questions WHERE question_key=q.question_key AND status IN {statuses}) '
-            'ORDER BY question_key', (db.execute('SELECT owner FROM players WHERE id=?',(player_id,)).fetchone()[0],)).fetchall()
-        eligible = [q for q in candidates if usable(q, mode) and not history(db, player_id, q["question_key"])["attempt_count"]]
-        # Stable within the day; rotates available versions across days.
+            'ORDER BY question_key').fetchall() if usable(q, mode)]
+
+    def ensure_tasks(db, player_id, mode):
+        plan = db.execute('SELECT manual FROM day_plans WHERE player_id=? AND day=?', (player_id, day())).fetchone()
+        if plan and plan['manual']:
+            return
+        existing = db.execute("SELECT COUNT(*) FROM tasks WHERE player_id=? AND day=? AND archived=0 AND kind='base'", (player_id, day())).fetchone()[0]
+        if existing >= 5:
+            return
+        assigned = {r[0] for r in db.execute('SELECT q.question_key FROM tasks t JOIN questions q ON q.id=t.question_id WHERE t.player_id=? AND t.day=?', (player_id, day()))}
+        eligible = [q for q in candidates(db, mode) if q['question_key'] not in assigned and not history(db, player_id, q['question_key'])['attempt_count']]
         if eligible:
             offset = datetime.now(tz).date().toordinal() % len(eligible)
             eligible = eligible[offset:] + eligible[:offset]
-        for i, q in enumerate(eligible[:3]):
+        ordinal = db.execute('SELECT COALESCE(MAX(ordinal),-1)+1 FROM tasks WHERE player_id=? AND day=?', (player_id, day())).fetchone()[0]
+        for i, q in enumerate(eligible[:5-existing]):
             db.execute('INSERT INTO tasks(id,player_id,day,question_id,ordinal,created_at) VALUES(?,?,?,?,?,?)',
-                       (uuid4().hex, player_id, day(), q['id'], i, now()))
+                       (uuid4().hex, player_id, day(), q['id'], ordinal+i, now()))
+        db.execute('INSERT OR IGNORE INTO day_plans(player_id,day) VALUES(?,?)', (player_id, day()))
 
     def task_view(db, row, mode):
         result = dict(row)
@@ -174,11 +178,16 @@ def create_app(db_path=None, admin_token=None):
             result['explanation'] = q['explanation']
         return result
 
-    def today_view(db, player_id, mode):
+    def today_view(db, player_id, mode, page=None):
         rows = db.execute('SELECT * FROM tasks WHERE player_id=? AND day=? AND archived=0 ORDER BY ordinal', (player_id, day())).fetchall()
         tasks = [task_view(db, row, mode) for row in rows]
         active = [t for t in tasks if t['available']]
-        return {'day': day(), 'timezone': str(tz), 'mode': mode, 'player': player(db, player_id), 'tasks': tasks,
+        return {'day': day(), 'timezone': str(tz), 'mode': mode, 'player': player(db, player_id),
+                'tasks': tasks if page is None else tasks[page*5:page*5+5],
+                'task_total': len(tasks), 'available_total': len(active), 'solved_total': sum(t['state']=='solved' for t in active),
+                'base_total': sum(t['kind']=='base' for t in active), 'base_solved': sum(t['kind']=='base' and t['state']=='solved' for t in active),
+                'explore_total': sum(t['kind']=='explore' for t in active),
+                'page': page or 0, 'has_more': page is not None and (page+1)*5 < len(tasks),
                 'finished': bool(active) and all(t['state'] in ('solved', 'skipped') for t in active),
                 'message': ('试玩数据独立保存，不计入正式学习记录' if mode == 'practice' else
                             ('今天的冒险已准备好' if active else '今天的冒险还在准备中，请家长审核并发布题目'))}
@@ -197,7 +206,7 @@ def create_app(db_path=None, admin_token=None):
     def questions(mode: str = Query('live', pattern='^(live|practice)$'), owner=Depends(parent)):
         pid = owner_player(owner,mode)
         with store.connect() as db:
-            return [{**admin_question(q), **history(db, pid, q['question_key'])} for q in db.execute("SELECT q.*, (q.version=(SELECT MAX(v.version) FROM questions v WHERE v.question_key=q.question_key AND v.owner=q.owner)) AS is_latest FROM questions q WHERE q.owner=? AND q.status<>'deleted' ORDER BY q.question_key,q.version DESC",(owner,))]
+            return [{**admin_question(q), **history(db, pid, q['question_key'])} for q in db.execute("SELECT q.*, (q.version=(SELECT MAX(v.version) FROM questions v WHERE v.question_key=q.question_key)) AS is_latest FROM questions q WHERE q.status<>'deleted' ORDER BY q.question_key,q.version DESC")]
 
     @app.post('/api/math/parent/questions', dependencies=[Depends(parent)], status_code=201)
     def new_question(body: QuestionInput, owner=Depends(parent)):
@@ -205,7 +214,7 @@ def create_app(db_path=None, admin_token=None):
         with store.connect(write=True) as db:
             qid = f'{key}-v1'
             db.execute('INSERT INTO questions(id,question_key,version,data,created_at,owner) VALUES(?,?,1,?,?,?)',
-                       (qid, key, encode(body.model_dump()), now(),owner))
+                       (qid, key, encode(body.model_dump()), now(),'shared'))
             audit(db, 'draft', qid, {}, owner=owner)
             return admin_question(question_row(db, qid, owner))
 
@@ -218,7 +227,7 @@ def create_app(db_path=None, admin_token=None):
                 key = uuid4().hex
                 qid = key + '-v1'
                 db.execute('INSERT INTO questions(id,question_key,version,data,created_at,owner) VALUES(?,?,1,?,?,?)',
-                           (qid, key, encode(question.model_dump()), now(), owner))
+                           (qid, key, encode(question.model_dump()), now(), 'shared'))
                 audit(db, 'draft', qid, {'batch_import': True}, owner=owner)
                 rows.append(admin_question(question_row(db, qid, owner)))
             return rows
@@ -230,7 +239,7 @@ def create_app(db_path=None, admin_token=None):
             version = db.execute('SELECT MAX(version)+1 FROM questions WHERE question_key=?', (old['question_key'],)).fetchone()[0]
             new_id = f'{old["question_key"]}-v{version}'
             db.execute('INSERT INTO questions(id,question_key,version,data,created_at,owner) VALUES(?,?,?,?,?,?)',
-                       (new_id, old['question_key'], version, encode(body.model_dump()), now(),owner))
+                       (new_id, old['question_key'], version, encode(body.model_dump()), now(),'shared'))
             audit(db, 'revision', new_id, {'from': qid}, owner=owner)
             return admin_question(question_row(db, new_id))
 
@@ -347,9 +356,12 @@ def create_app(db_path=None, admin_token=None):
             if any(not usable(q, mode) for q in rows):
                 raise HTTPException(409, '请先确认发布所选题目，已停用的题目不能安排')
             existing = db.execute('SELECT * FROM tasks WHERE player_id=? AND day=? ORDER BY ordinal', (pid, day())).fetchall()
+            db.execute('INSERT INTO day_plans(player_id,day,manual) VALUES(?,?,1) ON CONFLICT(player_id,day) DO UPDATE SET manual=1', (pid, day()))
             chosen = {q['id'] for q in rows}
+            if any(t['kind']=='explore' and t['question_id'] in chosen for t in existing):
+                raise HTTPException(409, '这道题已在今日探索中，无需重复安排为基础题')
             for t in existing:
-                db.execute('UPDATE tasks SET archived=? WHERE id=?', (int(t['question_id'] not in chosen), t['id']))
+                db.execute('UPDATE tasks SET archived=? WHERE id=?', (int(t['question_id'] not in chosen) if t['kind']=='base' else t['archived'], t['id']))
             retained = {t['question_id'] for t in existing if t['question_id'] in chosen}
             ordinal = max([t['ordinal'] for t in existing] + [-1]) + 1
             for q in rows:
@@ -372,10 +384,42 @@ def create_app(db_path=None, admin_token=None):
 
     @app.get('/api/math/adventure/today')
     @app.get('/api/math/device/state')
-    def today(dev=Depends(device)):
+    def today(page: int | None = Query(default=None, ge=0), dev=Depends(device)):
         with store.connect(write=True) as db:
             ensure_tasks(db, dev['player_id'], dev['mode'])
-            return today_view(db, dev['player_id'], dev['mode'])
+            return today_view(db, dev['player_id'], dev['mode'], page)
+
+    def explore(db, player_id, mode):
+        ensure_tasks(db, player_id, mode)
+        assigned = {r[0] for r in db.execute('SELECT q.question_key FROM tasks t JOIN questions q ON q.id=t.question_id WHERE t.player_id=? AND t.day=?', (player_id, day()))}
+        eligible = [q for q in candidates(db, 'live') if q['question_key'] not in assigned and not history(db, player_id, q['question_key'])['attempt_count']]
+        if not eligible:
+            return {'found': False, 'message': '新关卡都探索过啦，休息一下吧', 'mode': mode, 'player': player(db, player_id)}
+        q = secrets.choice(eligible)
+        tid = uuid4().hex
+        ordinal = db.execute('SELECT COALESCE(MAX(ordinal),-1)+1 FROM tasks WHERE player_id=? AND day=?', (player_id, day())).fetchone()[0]
+        index = db.execute('SELECT COUNT(*) FROM tasks WHERE player_id=? AND day=? AND archived=0', (player_id, day())).fetchone()[0]
+        db.execute("INSERT INTO tasks(id,player_id,day,question_id,ordinal,created_at,kind) VALUES(?,?,?,?,?,?,'explore')", (tid,player_id,day(),q['id'],ordinal,now()))
+        return {'found': True, 'task_id': tid, 'page': index//5, 'index': index%5, 'message': '发现新关卡，出发吧', 'mode': mode, 'player': player(db, player_id)}
+
+    @app.post('/api/math/adventure/explore')
+    def device_explore(body: Exploration, dev=Depends(device)):
+        payload = encode({'kind': 'explore', **body.model_dump()})
+        with store.connect(write=True) as db:
+            cached = db.execute('SELECT * FROM requests WHERE device_id=? AND request_id=?', (dev['id'],body.request_id)).fetchone()
+            if cached:
+                if cached['payload'] != payload:
+                    raise HTTPException(409, '同一请求ID不可用于不同内容或操作')
+                return json.loads(cached['response'])
+            result = explore(db, dev['player_id'], dev['mode'])
+            db.execute('INSERT INTO requests(device_id,request_id,payload,response,created_at) VALUES(?,?,?,?,?)', (dev['id'],body.request_id,payload,encode(result),now()))
+            return result
+
+    @app.post('/api/math/parent/tasks/explore')
+    def parent_explore(mode: str = Query('live', pattern='^(live|practice)$'), owner=Depends(parent)):
+        pid = owner_player(owner, mode)
+        with store.connect(write=True) as db:
+            return explore(db, pid, mode)
 
     @app.get('/api/math/questions/{qid}')
     def assigned_question(qid: str, dev=Depends(device)):
@@ -433,7 +477,7 @@ def create_app(db_path=None, admin_token=None):
                                            5 if first and task['hint_count'] == 0 else 0)
                         response['reward'] = {'xp': xp, 'coins': coins}
                         current = today_view(db, dev['player_id'], dev['mode'])
-                        active = [t for t in current['tasks'] if t['available']]
+                        active = [t for t in current['tasks'] if t['available'] and t['kind']=='base']
                         if active and all(t['state'] == 'solved' for t in active):
                             bonus, _ = reward(db, dev['player_id'], 'daily:'+day(), 10, 0)
                             response['reward']['xp'] += bonus

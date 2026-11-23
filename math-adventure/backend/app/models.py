@@ -64,4 +64,7 @@ class QuestionBatch(Model):
     questions: list[QuestionInput] = Field(min_length=1, max_length=50)
 
 class TaskSelection(Model):
-    question_ids: list[str] = Field(min_length=1, max_length=3)
+    question_ids: list[str] = Field(min_length=1, max_length=5)
+
+class Exploration(Model):
+    request_id: str = Field(min_length=8, max_length=80, pattern=r"^[a-zA-Z0-9_-]+$")

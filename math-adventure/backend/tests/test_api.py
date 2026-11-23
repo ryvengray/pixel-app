@@ -75,7 +75,7 @@ def test_drafts_are_not_live_and_samples_check(system):
     assert plan(c, live)['tasks'] == []
     practice, _ = device(c)
     p = plan(c, practice)
-    assert len(p['tasks']) == 3 and p['mode'] == 'practice'
+    assert len(p['tasks']) == 5 and p['mode'] == 'practice'
     for t in p['tasks']:
         assert not t['reviewed']
         assert not {'answer', 'explanation', 'hints', 'expression'}.intersection(t['question'])
@@ -154,10 +154,10 @@ def test_hint_wrong_answer_skip_and_daily_bonus(system):
         assert answer(c,auth,t,answers[t['question_id']]).status_code==200
     state=plan(c,auth)
     assert state['finished']
-    assert state['player']['xp']==70 and state['player']['coins']==10
+    assert state['player']['xp']==110 and state['player']['coins']==20
     assert c.get('/api/math/parent/dashboard',headers=PARENT).json()['player']['xp']==0
     dashboard=c.get('/api/math/parent/dashboard?mode=practice',headers=PARENT).json()
-    assert len(dashboard['attempts'])==4 and dashboard['skills'] and dashboard['trend']
+    assert len(dashboard['attempts'])==6 and dashboard['skills'] and dashboard['trend']
     with sqlite3.connect(path) as db:
         assert db.execute("SELECT COUNT(*) FROM rewards WHERE business_key LIKE 'daily:%'").fetchone()[0]==1
 
@@ -258,7 +258,7 @@ def test_cross_day_repeat_has_no_second_question_reward(system):
     for t in new_tasks:
         r=answer(c,auth,t,answers[t['question_id']]).json()
         assert r['reward']=={'xp':0,'coins':0} # Same date's daily bonus was already paid too.
-    assert plan(c,auth)['player']['xp']==70
+    assert plan(c,auth)['player']['xp']==110
 
 
 def test_quick_publish_and_rejection_reason(system):
@@ -420,3 +420,83 @@ def test_reject_invalid_calculation_does_not_run_check(system):
     with sqlite3.connect(path) as db:
         assert db.execute("SELECT checks,status FROM questions WHERE id=?", (created['id'],)).fetchone() == (None, 'deleted')
         assert db.execute("SELECT COUNT(*) FROM audit WHERE subject=? AND action='check'", (created['id'],)).fetchone()[0] == 0
+
+
+def test_five_base_and_random_explore_is_published_unseen_and_idempotent(system):
+    c, path = system
+    allq = questions(c)
+    for q in allq:
+        publish(c,q['id'])
+    auth, _ = device(c,'live')
+    base = plan(c,auth)['tasks']
+    assert len(base)==5
+    assert all(t['kind']=='base' for t in base)
+    request={'request_id':uuid4().hex}
+    found=c.post('/api/math/adventure/explore',headers=auth,json=request)
+    assert found.status_code==200 and found.json()['found']
+    assert c.post('/api/math/adventure/explore',headers=auth,json=request).json()==found.json()
+    tasks=plan(c,auth)['tasks']
+    assert len(tasks)==6 and len({t['question_id'] for t in tasks})==6
+    extra=next(t for t in tasks if t['id']==found.json()['task_id'])
+    assert extra['kind']=='explore' and extra['reviewed']
+    qanswers={q['id']:q['data']['answer'] for q in allq}
+    for task in base:
+        answer(c,auth,task,qanswers[task['question_id']])
+    assert plan(c,auth)['player']['xp']==110 # Base bonus does not wait for optional exploration.
+    page=c.get('/api/math/device/state?page=1',headers=auth).json()
+    assert page['task_total']==6 and len(page['tasks'])==1 and page['page']==1
+    for _ in range(4):
+        assert c.post('/api/math/adventure/explore',headers=auth,json={'request_id':uuid4().hex}).json()['found']
+    exhausted=c.post('/api/math/adventure/explore',headers=auth,json={'request_id':uuid4().hex}).json()
+    assert exhausted['found'] is False
+    assert len(plan(c,auth)['tasks'])==10
+
+
+def test_explore_excludes_attempted_archived_and_unpublished_questions(system):
+    c,path=system
+    rows=questions(c)
+    for q in rows[:6]:publish(c,q['id'])
+    auth,_=device(c,'live')
+    base=plan(c,auth)['tasks']
+    old=base[0]
+    answer(c,auth,old,(next(q['data']['answer'] for q in rows if q['id']==old['question_id'])+1)%3)
+    # Replace a started task: its history still prevents a random repeat.
+    selected=[t['question_id'] for t in base[1:]]
+    assert c.post('/api/math/parent/tasks/select',headers=PARENT,json={'question_ids':selected}).status_code==200
+    result=c.post('/api/math/adventure/explore',headers=auth,json={'request_id':uuid4().hex}).json()
+    assert result['found']
+    extra=next(t for t in plan(c,auth)['tasks'] if t['id']==result['task_id'])
+    assert extra['question_id'] not in {t['question_id'] for t in base}
+    assert c.post('/api/math/adventure/explore',headers=auth,json={'request_id':uuid4().hex}).json()['found'] is False
+    assert all(t['reviewed'] for t in plan(c,auth)['tasks'])
+
+
+def test_existing_three_task_plan_tops_up_but_manual_plan_is_preserved(system):
+    c,path=system
+    auth,_=device(c)
+    original=plan(c,auth)['tasks']
+    with sqlite3.connect(path) as db:
+        db.execute('DELETE FROM tasks WHERE id IN (?,?)',(original[3]['id'],original[4]['id']))
+    topped=plan(c,auth)['tasks']
+    assert len(topped)==5
+    assert {t['id'] for t in original[:3]}.issubset(t['id'] for t in topped)
+    chosen=[topped[0]['question_id']]
+    assert c.post('/api/math/parent/tasks/select?mode=practice',headers=PARENT,json={'question_ids':chosen}).status_code==200
+    assert len(plan(c,auth)['tasks'])==1
+
+
+def test_editing_base_plan_preserves_optional_exploration(system):
+    c,_=system
+    rows=questions(c)
+    for q in rows:publish(c,q['id'])
+    auth,_=device(c,'live')
+    before=plan(c,auth)['tasks']
+    result=c.post('/api/math/adventure/explore',headers=auth,json={'request_id':uuid4().hex}).json()
+    selected=[t['question_id'] for t in before[:2]]
+    r=c.post('/api/math/parent/tasks/select',headers=PARENT,json={'question_ids':selected})
+    assert r.status_code==200,r.text
+    tasks=r.json()['tasks']
+    assert len(tasks)==3
+    assert {t['question_id'] for t in tasks if t['kind']=='base'}==set(selected)
+    assert next(t for t in tasks if t['kind']=='explore')['id']==result['task_id']
+    assert len(plan(c,auth)['tasks'])==3

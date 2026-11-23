@@ -15,9 +15,10 @@ RAW = [
  ('分组魔法','24颗星星每6颗放一盒，能装满几盒？',['3','4','6'],1,['想一想几个6合起来是24。'],'6+6+6+6=24，所以能装满4盒。','数量关系','分组','24/6'),
 ]
 
-def seed(db, owner="administrator"):
-    import hashlib
-    prefix="" if owner=="administrator" else hashlib.sha256(owner.encode()).hexdigest()[:24]+"-"
+def seed(db, owner="shared"):
+    # Seed once for the shared library, never once per email account.
+    owner="shared"
+    prefix=""
     for i, (title, content, options, answer, hints, explanation, topic, skill, expression) in enumerate(RAW, 1):
         key = prefix+f'sample-{i:02d}'
         q = QuestionInput(title=title, content=content, options=options, answer=answer,
