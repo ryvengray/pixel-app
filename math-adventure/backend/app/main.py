@@ -1,11 +1,7 @@
 from __future__ import annotations
 
-import ast
 import hashlib
 import json
-import math
-import re
-import unicodedata
 import os
 import secrets
 from contextlib import asynccontextmanager
@@ -16,6 +12,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse
+from pydantic import ValidationError
 
 from .access import Access
 from .models import Answer, DeviceInput, Note, Operation, PlayerInput, QuestionInput, QuestionBatch, Review, TaskSelection
@@ -27,46 +24,16 @@ def token_hash(value):
     return hashlib.sha256(value.encode()).hexdigest()
 
 
-# Units are display text: compare the number in the expression's own unit,
-# without guessing conversions or accepting ambiguous multi-number answers.
-ANSWER_UNITS = frozenset(('个 颗 只 本 支 张 块 根 条 朵 辆 棵 杯 盒 袋 枚 件 人 位 天 小时 分钟 秒 米 厘米 毫米 千米 克 千克 公斤 元 角 分 平方米 平方厘米 立方米 升 毫升 倍 岁 页 次 步 层 排 组 对 套 份 把 瓶 盆 盏 圈 周 月 年').split())
-
-def numeric_option(value):
-    match = re.fullmatch(r'([+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+))\s*([^\s0-9]*)', unicodedata.normalize('NFKC', value).strip())
-    if not match or (match[2] and match[2] not in ANSWER_UNITS):
-        raise ValueError('正确选项须为数字或数字加常见单位（例如20颗）；非数值题请将 expression 设为 null')
-    return float(match[1])
-
-
 def check_question(data):
-    q = QuestionInput.model_validate(data)
+    # Review automation validates only the question protocol, never its mathematics.
     errors = []
-    if q.expression:
-        # A deliberately small numeric grammar: no names, functions or Python evaluation.
-        def calculate(node):
-            if isinstance(node, ast.Constant) and type(node.value) in (int, float) and abs(node.value) <= 10000:
-                return node.value
-            if isinstance(node, ast.BinOp) and type(node.op) in (ast.Add, ast.Sub, ast.Mult, ast.Div):
-                left, right = calculate(node.left), calculate(node.right)
-                result = {ast.Add: lambda: left+right, ast.Sub: lambda: left-right,
-                          ast.Mult: lambda: left*right, ast.Div: lambda: left/right}[type(node.op)]()
-                if abs(result) > 1000000:
-                    raise ValueError('计算结果超出范围')
-                return result
-            raise ValueError('仅支持非负数字和加减乘除表达式')
-        try:
-            expected = calculate(ast.parse(q.expression, mode='eval').body)
-            try:
-                actual = q.answer if q.question_type == "number" else numeric_option(q.options[q.answer])
-            except ValueError as error:
-                errors.append(str(error))
-            else:
-                if not math.isclose(actual, expected, rel_tol=1e-12, abs_tol=1e-12):
-                    errors.append('答案数值与计算表达式不一致，请按同一单位填写表达式')
-        except (SyntaxError, ValueError, TypeError, ZeroDivisionError, OverflowError, RecursionError):
-            errors.append('计算表达式或数字答案无效')
+    try:
+        QuestionInput.model_validate(data)
+    except ValidationError as error:
+        errors = ['字段 ' + '.'.join(map(str, item['loc'])) + '：' + item['msg']
+                  for item in error.errors()]
     return {'passed': not errors, 'errors': errors,
-            'scope': '结构及可选数值核验（不自动换算单位）；语言、逻辑、单位、唯一性和小屏适配仍需人工审核'}
+            'scope': '仅检查字段格式、必填项、类型、长度及选项结构；不计算表达式或判断答案正确性'}
 
 
 def create_app(db_path=None, admin_token=None):
@@ -156,6 +123,12 @@ def create_app(db_path=None, admin_token=None):
         result = dict(row)
         result['data'] = json.loads(result['data'])
         result['checks'] = json.loads(result['checks']) if result['checks'] else None
+        # Saved arithmetic failures are obsolete under the structure-only policy.
+        # Refresh the displayed result without changing review status or audit history.
+        if result['checks'] is not None and result['status'] in ('draft', 'pending'):
+            result['checks'] = check_question(result['data'])
+        if 'is_latest' in result:
+            result['is_latest'] = bool(result['is_latest'])
         return result
 
     def usable(row, mode):
@@ -224,7 +197,7 @@ def create_app(db_path=None, admin_token=None):
     def questions(mode: str = Query('live', pattern='^(live|practice)$'), owner=Depends(parent)):
         pid = owner_player(owner,mode)
         with store.connect() as db:
-            return [{**admin_question(q), **history(db, pid, q['question_key'])} for q in db.execute("SELECT * FROM questions WHERE owner=? AND status<>'deleted' ORDER BY question_key,version DESC",(owner,))]
+            return [{**admin_question(q), **history(db, pid, q['question_key'])} for q in db.execute("SELECT q.*, (q.version=(SELECT MAX(v.version) FROM questions v WHERE v.question_key=q.question_key AND v.owner=q.owner)) AS is_latest FROM questions q WHERE q.owner=? AND q.status<>'deleted' ORDER BY q.question_key,q.version DESC",(owner,))]
 
     @app.post('/api/math/parent/questions', dependencies=[Depends(parent)], status_code=201)
     def new_question(body: QuestionInput, owner=Depends(parent)):
@@ -278,9 +251,9 @@ def create_app(db_path=None, admin_token=None):
         with store.connect(write=True) as db:
             row = question_row(db, qid, owner)
             if row['status'] != 'pending' or not body.independently_solved:
-                raise HTTPException(409, '须先通过自动检查，并由审核者独立解题确认')
+                raise HTTPException(409, '须先通过字段格式检查，并由审核者独立解题确认')
             if not check_question(json.loads(row['data']))['passed']:
-                raise HTTPException(409, '题目自动检查未通过')
+                raise HTTPException(409, '题目字段格式检查未通过')
             latest = db.execute('SELECT MAX(version) FROM questions WHERE question_key=?', (row['question_key'],)).fetchone()[0]
             if row['version'] != latest:
                 raise HTTPException(409, '请审核最新版本')

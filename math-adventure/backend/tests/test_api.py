@@ -81,7 +81,7 @@ def test_drafts_are_not_live_and_samples_check(system):
         assert not {'answer', 'explanation', 'hints', 'expression'}.intersection(t['question'])
     assert plan(c, practice)['tasks'] == p['tasks']
 
-def test_review_and_invalid_expression(system):
+def test_review_and_expression_is_not_evaluated(system):
     c, _ = system
     row = questions(c)[0]
     qid = row['id']
@@ -97,11 +97,11 @@ def test_review_and_invalid_expression(system):
     data['expression'] = '__import__("os").system("false")'
     r = c.post('/api/math/parent/questions',headers=PARENT,json=data)
     bad_id = r.json()['id']
-    assert not c.post(f'/api/math/parent/questions/{bad_id}/check',headers=PARENT).json()['passed']
+    assert c.post(f'/api/math/parent/questions/{bad_id}/check',headers=PARENT).json()['passed']
     assert c.post(f'/api/math/parent/questions/{bad_id}/publish',headers=PARENT,json=body).status_code == 409
     data['expression'] = '1+1'
     data['answer'] = 0
-    assert not check_question(data)['passed']
+    assert check_question(data)['passed']
 
 def test_new_draft_does_not_hide_published_and_disabled_does_not_fallback(system):
     c, _ = system
@@ -367,7 +367,7 @@ def test_replace_started_daily_plan_preserves_history(system):
 
 
 @pytest.mark.parametrize('option', ['20颗', '20 颗', '２０颗', '20个', '20厘米', '20.0元', '20'])
-def test_numeric_check_accepts_unit_without_changing_option(system, option):
+def test_format_check_preserves_unit_options(system, option):
     c, _ = system
     q = questions(c)[0]['data']
     q.update(options=['18颗', option, '22颗'], answer=1, expression='12+8')
@@ -379,8 +379,44 @@ def test_numeric_check_accepts_unit_without_changing_option(system, option):
 
 
 @pytest.mark.parametrize('option', ['21颗', '20或30颗', '大约20颗', '20颗以上', '20+1', 'nan', 'inf'])
-def test_numeric_check_rejects_wrong_or_ambiguous_unit_answers(system, option):
+def test_format_check_does_not_judge_answer_content(system, option):
     c, _ = system
     q = questions(c)[0]['data']
     q.update(options=['18颗', option, '22颗'], answer=1, expression='12+8')
-    assert not check_question(q)['passed']
+    assert check_question(q)['passed']
+
+
+def test_latest_revision_marker_includes_deleted_latest(system):
+    c, _ = system
+    original = questions(c)[0]
+    revised = c.post(f"/api/math/parent/questions/{original['id']}/versions", headers=PARENT, json=original['data']).json()
+    rows = [row for row in questions(c) if row['question_key'] == original['question_key']]
+    assert {row['id']: row['is_latest'] for row in rows} == {original['id']: False, revised['id']: True}
+    assert c.post(f"/api/math/parent/questions/{revised['id']}/reject", headers=PARENT, json={'comment':'不适合'}).status_code == 200
+    rows = [row for row in questions(c) if row['question_key'] == original['question_key']]
+    assert len(rows) == 1 and not rows[0]['is_latest']
+
+
+def test_saved_old_unit_failure_is_recomputed_for_display(system):
+    c, path = system
+    q = questions(c)[0]['data']
+    q.update(options=['12分钟', '15分钟', '18分钟'], answer=1, expression='6/(3-1)*(6-1)')
+    created = c.post('/api/math/parent/questions', headers=PARENT, json=q).json()
+    with sqlite3.connect(path) as db:
+        db.execute('UPDATE questions SET checks=? WHERE id=?', (json.dumps({'passed':False, 'errors':['计算表达式或数字答案无效']}), created['id']))
+    row = next(row for row in questions(c) if row['id'] == created['id'])
+    assert row['checks']['passed'] and row['status'] == 'draft'
+    with sqlite3.connect(path) as db:
+        assert db.execute("SELECT COUNT(*) FROM audit WHERE subject=? AND action='check'", (created['id'],)).fetchone()[0] == 0
+
+
+def test_reject_invalid_calculation_does_not_run_check(system):
+    c, path = system
+    q = questions(c)[0]['data']
+    q['expression'] = '1/0'
+    created = c.post('/api/math/parent/questions', headers=PARENT, json=q).json()
+    result = c.post(f"/api/math/parent/questions/{created['id']}/reject", headers=PARENT, json={'comment':'条件不清楚'})
+    assert result.status_code == 200, result.text
+    with sqlite3.connect(path) as db:
+        assert db.execute("SELECT checks,status FROM questions WHERE id=?", (created['id'],)).fetchone() == (None, 'deleted')
+        assert db.execute("SELECT COUNT(*) FROM audit WHERE subject=? AND action='check'", (created['id'],)).fetchone()[0] == 0

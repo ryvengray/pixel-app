@@ -18,7 +18,7 @@ class QuestionInput(Model):
     difficulty: int = Field(default=1, ge=1, le=3)
     source_type: Literal['ai_draft', 'parent', 'licensed']
     source_note: str = Field(min_length=1, max_length=300)
-    # Optional independently verifiable numeric calculation, never eval'd.
+    # Optional author reference; never evaluated or used to validate the answer.
     expression: str | None = Field(default=None, max_length=100)
 
     @model_validator(mode='after')
