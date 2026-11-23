@@ -28,7 +28,7 @@ public class MainActivity extends Activity {
  private FrameLayout root;
  private TextView menuButton,petTouch;
  private ImageButton notificationButton;
- private TextView shortcutButton;
+ private ImageButton shortcutButton;
  private View unreadDot;
  private final BroadcastReceiver pushArrived=new BroadcastReceiver(){
   @Override public void onReceive(Context context,Intent intent){home.syncInbox();}
@@ -61,10 +61,10 @@ public class MainActivity extends Activity {
   dotPosition.topMargin=dp(8);dotPosition.rightMargin=dp(8);bell.addView(unreadDot,dotPosition);
   menuButton=text("•••",22);menuButton.setGravity(Gravity.CENTER);menuButton.setElevation(dp(16));menuButton.setContentDescription("打开功能和外观菜单");menuButton.setOnClickListener(v->showMenu());
   FrameLayout.LayoutParams button=new FrameLayout.LayoutParams(dp(MENU_WIDTH_DP),dp(MENU_HEIGHT_DP),Gravity.TOP|Gravity.RIGHT);button.topMargin=dp(MENU_TOP_DP);button.rightMargin=dp(MENU_RIGHT_DP);overlay.addView(menuButton,button);
-  shortcutButton=text("",14);shortcutButton.setTag("home_shortcut");shortcutButton.setGravity(Gravity.CENTER);shortcutButton.setElevation(dp(16));
+  shortcutButton=new ImageButton(this);shortcutButton.setPadding(dp(13),dp(13),dp(13),dp(13));shortcutButton.setTag("home_shortcut");shortcutButton.setElevation(dp(16));
   shortcutButton.setOnClickListener(v->openShortcut(preferences.getInt("shortcut",0)));
   shortcutButton.setOnLongClickListener(v->{chooseShortcut();return true;});
-  FrameLayout.LayoutParams shortcutPosition=new FrameLayout.LayoutParams(dp(112),dp(48),Gravity.TOP|Gravity.RIGHT);shortcutPosition.topMargin=dp(MENU_TOP_DP);shortcutPosition.rightMargin=dp(MENU_RIGHT_DP+MENU_WIDTH_DP+10);overlay.addView(shortcutButton,shortcutPosition);
+  FrameLayout.LayoutParams shortcutPosition=new FrameLayout.LayoutParams(dp(48),dp(48),Gravity.TOP|Gravity.RIGHT);shortcutPosition.topMargin=dp(MENU_TOP_DP);shortcutPosition.rightMargin=dp(MENU_RIGHT_DP+MENU_WIDTH_DP+10);overlay.addView(shortcutButton,shortcutPosition);
   updateShortcut();
   petTouch=new TextView(this);petTouch.setTag("home_pet_touch");petTouch.setContentDescription("玉绿色宠物，点击打个招呼，长按打开菜单");
   petTouch.setElevation(dp(12));
@@ -111,7 +111,7 @@ public class MainActivity extends Activity {
   foreground=Color.parseColor(dark?"#E5EDE3":"#263C31");secondary=Color.parseColor(dark?"#92A99A":"#708675");
   root.setBackgroundColor(Color.parseColor(dark?"#070D1B":"#F0F5E9"));
   menuButton.setTextColor(foreground);
-  shortcutButton.setTextColor(foreground);shortcutButton.setBackground(surface(Color.parseColor(dark?"#263D33":"#DDE8DC"),24));
+  shortcutButton.setImageTintList(android.content.res.ColorStateList.valueOf(foreground));shortcutButton.setBackground(surface(Color.parseColor(dark?"#263D33":"#DDE8DC"),24));
   notificationButton.setImageTintList(android.content.res.ColorStateList.valueOf(foreground));
   notificationButton.setBackground(surface(Color.parseColor(dark?"#263D33":"#DDE8DC"),24));
   menuButton.setBackground(surface(Color.parseColor(dark?"#263D33":"#DDE8DC"),24));scene.setTheme(dark);home.setTheme(dark);
@@ -122,8 +122,9 @@ public class MainActivity extends Activity {
   }
  }
  private final String[] shortcutNames={"数学冒险岛","日历","生活记录","新闻订阅","重要话题","长期记忆","历史记录","Obsidian 同步","打印文件","助理设置","提醒与最近结果","和 Greta 聊聊"};
+ private final int[] shortcutIcons={R.drawable.ic_shortcut_adventure,R.drawable.ic_shortcut_calendar,R.drawable.ic_shortcut_records,R.drawable.ic_shortcut_news,R.drawable.ic_shortcut_topics,R.drawable.ic_shortcut_memory,R.drawable.ic_shortcut_history,R.drawable.ic_shortcut_sync,R.drawable.ic_shortcut_print,R.drawable.ic_shortcut_settings,R.drawable.ic_shortcut_results,R.drawable.ic_shortcut_chat};
  private int shortcutIndex(int index){return index>=0&&index<shortcutNames.length?index:0;}
- private void updateShortcut(){String name=shortcutNames[shortcutIndex(preferences.getInt("shortcut",0))];shortcutButton.setText(name);shortcutButton.setContentDescription(name+"，长按更换快捷功能");shortcutButton.setTooltipText("长按更换快捷功能");}
+ private void updateShortcut(){String name=shortcutNames[shortcutIndex(preferences.getInt("shortcut",0))];shortcutButton.setImageResource(shortcutIcons[shortcutIndex(preferences.getInt("shortcut",0))]);shortcutButton.setContentDescription(name+"，长按更换快捷功能");shortcutButton.setTooltipText(name+"，长按更换快捷功能");}
  private void chooseShortcut(){new android.app.AlertDialog.Builder(this).setTitle("首页快捷入口").setSingleChoiceItems(shortcutNames,shortcutIndex(preferences.getInt("shortcut",0)),(dialog,index)->{preferences.edit().putInt("shortcut",index).apply();updateShortcut();dialog.dismiss();}).setNegativeButton("取消",null).show();}
  private void openShortcut(int index){
   switch(shortcutIndex(index)){

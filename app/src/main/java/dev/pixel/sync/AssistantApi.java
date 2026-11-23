@@ -111,10 +111,10 @@ public final class AssistantApi {
     }
     public static String homeOpening(Context context,List<AssistantStore.Message> messages)throws Exception{
         JSONArray events;
-        try(CalendarStore calendar=new CalendarStore(context)){events=calendar.upcoming(java.time.LocalDate.now(),java.time.LocalDate.now());}
+        try(CalendarStore calendar=new CalendarStore(context)){events=calendar.events(java.time.LocalDate.now(),java.time.LocalDate.now().plusDays(1));}
         StringBuilder local=new StringBuilder();for(int i=0;i<events.length();i++){JSONObject event=events.getJSONObject(i);if(!event.optBoolean("completed"))local.append(event.optString("title")).append("（").append(event.optString("occurrence")).append("）；");}
         String url=serverUrl(context),token=secret(context,"device_token");
-        String fallback=local.length()>0?"今天记得关注："+local.toString():"";
+        String fallback=local.length()>0?"今明两天记得关注："+local.toString():"";
         if(url.isEmpty()||token.isEmpty())return fallback;
         try{return new JSONObject(post(url+"/v1/home",token,new JSONObject().put("messages",new JSONArray()).put("calendar",new JSONObject().put("events",events)).put("timezone",java.util.TimeZone.getDefault().getID()))).optString("content",fallback);}catch(Exception unavailable){return fallback;}
     }
