@@ -15,6 +15,8 @@ bool busy=false, ready=false, setupActive=false, refreshAfter=false;
 uint32_t nextPoll=0, nextRetry=0, setupUntil=0;
 DynamicJsonDocument state(24576);
 int selected=0, screen=0, contentPage=0; // home, map, question, method/hint, settings
+DynamicJsonDocument outbox(24576);
+String numberInput;
 String detail, resumeTask, pairSecret, pairBody, pairCode, pairVerification;
 bool pairWaiting=false,backendReachable=false,pairOpenRequested=false;uint32_t pairPoll=0,backendChecked=0;
 int xp=0, coins=0;
@@ -65,20 +67,38 @@ void sync() { send("/api/math/device/state"); }
 JsonArray tasks() {return state["tasks"].as<JsonArray>();}
 JsonObject task() {return tasks()[selected].as<JsonObject>();}
 JsonObject question() {return task()["question"].as<JsonObject>();}
-void submit(const char *path,int answer=-1) {
-  if(busy||!pendingBody.isEmpty()) return;
+void cacheState() {String cached;serializeJson(state,cached);config.putString("cached-state",cached);}
+bool saveOutbox(){String saved;serializeJson(outbox,saved);return config.putString("outbox",saved)==saved.length();}
+void loadPending(){
+  pendingPath="";pendingBody="";
+  if(outbox.size()){pendingPath=outbox[0]["path"].as<String>();pendingBody=outbox[0]["body"].as<String>();}
+}
+void acknowledge(){outbox.remove(0);saveOutbox();loadPending();config.remove("pending");}
+void submit(const char *path,int answer=-1,bool numeric=false) {
+  if(!question()["solution"].is<JsonObject>()){message="请联网重新同步题目";refreshAfter=true;dirty=true;return;}
   if(!ready||!task()["available"].as<bool>()) {message="请先同步今日任务";dirty=true;return;}
+  if(outbox.size()>=60){message="待同步记录已满，请先联网";dirty=true;return;}
   DynamicJsonDocument body(512);
   char id[40];snprintf(id,sizeof(id),"%08lx%08lx%08lx%08lx",(unsigned long)esp_random(),(unsigned long)esp_random(),(unsigned long)esp_random(),(unsigned long)esp_random());
   body["request_id"]=id;body["task_id"]=task()["id"];
-  if(answer>=0) body["answer"]=answer;
+  double value=numeric?numberInput.toDouble():answer;
+  if(numeric) body["answer"]=value;else if(answer>=0)body["answer"]=answer;
   String serialized;serializeJson(body,serialized);
-  // Store path and payload atomically in one blob before any network activity.
-  DynamicJsonDocument envelope(1024);envelope["path"]=path;envelope["body"]=serialized;
-  String saved;serializeJson(envelope,saved);
-  if(config.putString("pending",saved)!=saved.length()) {message="保存失败，请稍后再试";dirty=true;return;}
-  pendingPath=path;pendingBody=serialized;message="正在送出，请稍等";
-  send(pendingPath,pendingBody);dirty=true;
+  auto entry=outbox.createNestedObject();entry["path"]=path;entry["body"]=serialized;
+  if(outbox.overflowed()||!saveOutbox()){outbox.remove(outbox.size()-1);message="保存失败，请稍后再试";dirty=true;return;}
+  loadPending();
+  auto solution=question()["solution"];
+  if(String(path)=="/api/math/answers"){
+    bool correct=value==solution["answer"].as<double>();
+    detail=correct?solution["explanation"].as<String>():"再想一想，你可以的";
+    if(correct){task()["state"]="solved";task()["explanation"]=solution["explanation"];}
+    screen=3;
+  }else if(String(path)=="/api/math/tasks/hint"){
+    int n=task()["hint_count"]|0;auto hints=solution["hints"].as<JsonArray>();
+    detail=task()["state"]=="solved"?solution["explanation"].as<String>():hints[min(n,(int)hints.size()-1)].as<String>();
+    task()["hint_count"]=n+1;screen=3;
+  }else{task()["state"]="skipped";screen=1;}
+  cacheState();contentPage=0;message="已保存，后台同步中";dirty=true;nextRetry=0;
 }
 void startPortal() {
   if(setupActive){setupUntil=millis()+600000;screen=4;dirty=true;return;}
@@ -94,11 +114,17 @@ void startPortal() {
   screen=4;dirty=true;
 }
 void init() {
-  config.begin("math-network",false);base=config.getString("base","https://ryven.xin/math");credential=config.getString("device","");
+  config.begin("math-network",false);base=config.getString("base","http://192.168.0.160/math");credential=config.getString("device","");
   pairSecret=config.getString("pair-secret","");pairBody=config.getString("pair-body","");pairWaiting=pairSecret.length()&&!pairBody.length();
   DynamicJsonDocument envelope(1024);
   if(!deserializeJson(envelope,config.getString("pending",""))) {
     pendingPath=envelope["path"].as<String>();pendingBody=envelope["body"].as<String>();
+  }
+  if(deserializeJson(outbox,config.getString("outbox","[]")))outbox.to<JsonArray>();
+  if(!outbox.size()&&pendingBody.length()){auto e=outbox.createNestedObject();e["path"]=pendingPath;e["body"]=pendingBody;saveOutbox();}
+  loadPending();
+  if(!deserializeJson(state,config.getString("cached-state",""))&&state["tasks"].is<JsonArray>()){
+    ready=true;mode=state["mode"].as<String>();day=state["day"].as<String>();xp=state["player"]["xp"]|0;coins=state["player"]["coins"]|0;
   }
   jobs=xQueueCreate(1,sizeof(Work*));replies=xQueueCreate(1,sizeof(Result*));
   if(!jobs||!replies||xTaskCreate(worker,"math-http",12288,nullptr,1,nullptr)!=pdPASS) {
@@ -251,28 +277,25 @@ void tick() {
       if(r->path=="/api/math/device/state") {
         String before,after;serializeJson(state,before);serializeJson(data,after);redraw=!ready||before!=after;
         String oldDay=day, oldId=resumeTask.length()?resumeTask:task()["id"].as<String>();resumeTask="";
-        state=data;mode=state["mode"].as<String>();day=state["day"].as<String>();ready=true;
+        if(outbox.size()){delete r;return;}
+        state=data;cacheState();mode=state["mode"].as<String>();day=state["day"].as<String>();ready=true;
         xp=state["player"]["xp"]|0;coins=state["player"]["coins"]|0;
         selected=0;
         for(unsigned i=0;i<tasks().size();++i)if(tasks()[i]["id"].as<String>()==oldId) selected=i;
         if(oldDay.length()&&oldDay!=day){screen=0;contentPage=0;}
         message=tasks().size()?"冒险已同步":"请家长审核并安排题目";
       } else {
-        // A valid server response is the only event that acknowledges a saved operation.
-        redraw=true;resumeTask=data["task_id"].as<String>();
-        config.remove("pending");pendingPath="";pendingBody="";
+        // Acknowledge uploads without interrupting the child's current screen.
+        acknowledge();
         xp=data["player"]["xp"]|xp;coins=data["player"]["coins"]|coins;
-        if(data.containsKey("hint")) {detail=data["hint"].as<String>();screen=3;}
-        else if(data.containsKey("correct")) {
-          detail=data["correct"].as<bool>()?data["explanation"].as<String>():"再想一想，你可以的";
-          screen=3;
-        } else screen=1;
-        contentPage=0;message=data["message"]|"同步成功";refreshAfter=true;
+        nextRetry=0;refreshAfter=!outbox.size();
+        message=outbox.size()?"记录继续同步中":"记录已同步";
+
       }
     } else {
-      if(r->status==401) {message="设备令牌无效，请检查配置";config.remove("pending");pendingBody="";pendingPath="";ready=false;}
+      if(r->status==401) {message="设备令牌无效，请检查配置";nextRetry=millis()+30000;}
       else if(r->status==409||r->status==404||r->status==422) {
-        message="任务已变化，请重新同步";config.remove("pending");pendingBody="";pendingPath="";screen=0;refreshAfter=true;
+        message="任务已变化，记录保留待处理";nextRetry=millis()+30000;
       } else message=WiFi.status()!=WL_CONNECTED?"网络断开，正在重新连接":"同步未成功，稍后自动重试";
       nextRetry=millis()+5000;
     }
@@ -321,11 +344,18 @@ void render() {
     button(72,188,176,"返回设置",104,false);return;
   }
   if(screen==4) {
-    text("用手机连接热点配网",8,52);
-    lcd.setTextColor(ink,cream);lcd.drawString(apName,8,68,2);lcd.drawString("Pass: "+apPassword,8,90,2);
-    lcd.drawString("http://192.168.4.1",8,112,2);
+    text(base.startsWith("http://192.168.")?"当前：局域网":"当前：公网",8,48);
+    lcd.setTextColor(ink,cream);lcd.drawString(base,8,64,2);
+    if(setupActive)lcd.drawString(apName+" / "+apPassword,8,80,2);
+    button(8,86,96,"局域网",186,false);button(112,86,96,"公网",187,false);button(216,86,96,"配网",103,false);
     button(8,136,148,"校准触摸",41,false);button(164,136,148,"开启配对",140,false);
     button(72,188,176,"返回首页",100);return;
+  }
+  if(screen==8) {
+    text(("填写数字："+numberInput).c_str(),8,8);
+    for(int i=0;i<9;++i){String digit=String(i+1);button(8+(i%3)*80,40+(i/3)*48,72,digit.c_str(),170+i);}
+    button(8,188,72,"负号",180,false);button(88,188,72,"0",179);button(168,188,72,"小数点",181,false);
+    button(248,40,64,"返回",182,false);button(248,88,64,"删除",183,false);button(248,136,64,"确认",184);return;
   }
   if(screen==0) {
     face(54,107,true);
@@ -348,15 +378,16 @@ void render() {
     button(8,188,148,"回家休息",100,false);button(164,188,148,"重新同步",102,false);return;
   }
   lineCount=0;
-  wrap(question()["content"].as<String>());
-  for(unsigned i=0;i<question()["options"].size();++i) wrap(String(i+1)+"号："+question()["options"][i].as<String>());
+  if(screen!=3)wrap(question()["content"].as<String>());
+  if(screen!=3)for(unsigned i=0;i<question()["options"].size();++i) wrap(String(i+1)+"号："+question()["options"][i].as<String>());
   if(screen==3) {wrap("—— 一起想办法 ——");wrap(detail);}
   int pages=(lineCount+3)/4;if(pages<1)pages=1;if(contentPage>=pages)contentPage=0;
   for(int j=0;j<4;++j)if(contentPage*4+j<lineCount)text(lines[contentPage*4+j].c_str(),12,51+j*21);
   if(screen==2) {
     auto opts=question()["options"].as<JsonArray>();
     // Option labels are paginated alongside the question if they don't fit a button.
-    if(contentPage==pages-1) {
+    if(question()["question_type"]=="number") button(8,130,304,"填写数字答案",185);
+    else if(contentPage==pages-1) {
       for(unsigned i=0;i<opts.size()&&i<3;++i) {
         String label=opts[i].as<String>();
         if(chinese.getUTF8Width(label.c_str())>88) label=String(i+1)+"号答案";
@@ -370,20 +401,31 @@ void render() {
   }
 }
 void handle(int id) {
+  if(id==186||id==187){base=id==186?"http://192.168.0.160/math":"https://ryven.xin/math";config.putString("base",base);message=id==186?"已切换局域网":"已切换公网";refreshAfter=true;nextRetry=0;dirty=true;return;}
   if(id==140) {beginPair();return;}
   if(screen==5&&id>=150&&id<=159) {if(pairCode.length()<4)pairCode+=String(id==159?0:id-149);dirty=true;return;}
   if(id==161&&screen==5){if(!busy)claimPair();return;}
   if(id==160) {if(pairCode.length())pairCode.remove(pairCode.length()-1);dirty=true;return;}
   if(id==100) {pairOpenRequested=false;screen=0;dirty=true;return;}
-  if(id==104) {pairOpenRequested=false;startPortal();return;}
+  if(id==104) {pairOpenRequested=false;screen=4;dirty=true;return;}
   if(id==103) {startPortal();return;}
-  if(id==101) {screen=1;dirty=true;sync();return;}
+  if(id==101) {screen=1;dirty=true;if(!ready)sync();return;}
   if(id==102) {sync();return;}
-  if(busy||pendingBody.length()) {message="正在送出，请稍等";return;}
+
+  if(id==185){numberInput="";screen=8;dirty=true;return;}
+  if(screen==8){
+    if(id>=170&&id<=179&&numberInput.length()<12)numberInput+=String(id==179?0:id-169);
+    if(id==180){if(numberInput.startsWith("-"))numberInput.remove(0,1);else numberInput="-"+numberInput;}
+    if(id==181&&numberInput.indexOf('.')<0)numberInput+=".";
+    if(id==183&&numberInput.length())numberInput.remove(numberInput.length()-1);
+    if(id==182)screen=2;
+    if(id==184&&numberInput!=""&&numberInput!="-"&&numberInput!="."&&numberInput!="-.")submit("/api/math/answers",-1,true);
+    dirty=true;return;
+  }
   if(id>=110&&id<113) {
     selected=id-110;if(selected>=(int)tasks().size()||!task()["available"].as<bool>())return;
     contentPage=0;
-    if(task()["state"].as<String>()=="solved") {detail=task()["explanation"].as<String>();screen=3;}else screen=2;
+    if(task()["state"].as<String>()=="solved") {detail=task()["explanation"]|question()["solution"]["explanation"].as<String>();screen=3;}else screen=2;
   }
   if(id>=120&&id<123)submit("/api/math/answers",id-120);
   if(id==130)submit("/api/math/tasks/hint");

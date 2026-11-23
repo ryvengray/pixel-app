@@ -15,7 +15,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 
 from .access import Access
-from .models import Answer, DeviceInput, Note, Operation, PlayerInput, QuestionInput, QuestionBatch, Review
+from .models import Answer, DeviceInput, Note, Operation, PlayerInput, QuestionInput, QuestionBatch, Review, TaskSelection
 from .samples import seed
 from .store import Store, encode, now
 
@@ -42,7 +42,7 @@ def check_question(data):
             raise ValueError('仅支持非负数字和加减乘除表达式')
         try:
             expected = calculate(ast.parse(q.expression, mode='eval').body)
-            if float(q.options[q.answer]) != expected:
+            if float(q.answer if q.question_type == "number" else q.options[q.answer]) != expected:
                 errors.append('选项答案与计算表达式不一致')
         except (SyntaxError, ValueError, TypeError, ZeroDivisionError, OverflowError, RecursionError):
             errors.append('计算表达式或数字答案无效')
@@ -144,8 +144,11 @@ def create_app(db_path=None, admin_token=None):
             mode == 'practice' and row['status'] in ('draft', 'pending') and
             check_question(json.loads(row['data']))['passed'])
 
+    def history(db, player_id, key):
+        return dict(db.execute('SELECT COUNT(*) AS attempt_count,COALESCE(SUM(a.correct=0),0) AS wrong_count,COALESCE(SUM(a.correct=1),0) AS correct_count FROM attempts a JOIN tasks t ON t.id=a.task_id JOIN questions q ON q.id=t.question_id WHERE t.player_id=? AND q.question_key=?', (player_id, key)).fetchone())
+
     def ensure_tasks(db, player_id, mode):
-        existing = db.execute('SELECT COUNT(*) FROM tasks WHERE player_id=? AND day=?', (player_id, day())).fetchone()[0]
+        existing = db.execute('SELECT COUNT(*) FROM tasks WHERE player_id=? AND day=? AND archived=0', (player_id, day())).fetchone()[0]
         if existing:
             return
         # A new draft must not hide the last published version from live tasks.
@@ -155,7 +158,7 @@ def create_app(db_path=None, admin_token=None):
             f'SELECT * FROM questions q WHERE owner=? AND status IN {statuses} AND version='
             f'(SELECT MAX(version) FROM questions WHERE question_key=q.question_key AND status IN {statuses}) '
             'ORDER BY question_key', (db.execute('SELECT owner FROM players WHERE id=?',(player_id,)).fetchone()[0],)).fetchall()
-        eligible = [q for q in candidates if usable(q, mode)]
+        eligible = [q for q in candidates if usable(q, mode) and not history(db, player_id, q["question_key"])["attempt_count"]]
         # Stable within the day; rotates available versions across days.
         if eligible:
             offset = datetime.now(tz).date().toordinal() % len(eligible)
@@ -172,14 +175,15 @@ def create_app(db_path=None, admin_token=None):
         result['available'] = available
         result['reviewed'] = qrow['status'] == 'published'
         result['question'] = ({'id': qrow['id'], 'version': qrow['version'], 'title': q['title'],
-                               'content': q['content'], 'options': q['options'], 'topic': q['topic'],
-                               'skill_tags': q['skill_tags'], 'difficulty': q.get('difficulty', 1)} if available else None)
+                               'content': q['content'], 'options': q['options'], 'question_type': q.get('question_type', 'choice'), 'topic': q['topic'],
+                               'skill_tags': q['skill_tags'], 'difficulty': q.get('difficulty', 1),
+                               'solution': {'answer': q['answer'], 'hints': q['hints'], 'explanation': q['explanation']}} if available else None)
         if row['state'] == 'solved':
             result['explanation'] = q['explanation']
         return result
 
     def today_view(db, player_id, mode):
-        rows = db.execute('SELECT * FROM tasks WHERE player_id=? AND day=? ORDER BY ordinal', (player_id, day())).fetchall()
+        rows = db.execute('SELECT * FROM tasks WHERE player_id=? AND day=? AND archived=0 ORDER BY ordinal', (player_id, day())).fetchall()
         tasks = [task_view(db, row, mode) for row in rows]
         active = [t for t in tasks if t['available']]
         return {'day': day(), 'timezone': str(tz), 'mode': mode, 'player': player(db, player_id), 'tasks': tasks,
@@ -198,10 +202,10 @@ def create_app(db_path=None, admin_token=None):
         return FileResponse(Path(__file__).with_name('parent.html'))
 
     @app.get('/api/math/parent/questions', dependencies=[Depends(parent)])
-    def questions(owner=Depends(parent)):
-        owner_player(owner,"live")
+    def questions(mode: str = Query('live', pattern='^(live|practice)$'), owner=Depends(parent)):
+        pid = owner_player(owner,mode)
         with store.connect() as db:
-            return [admin_question(q) for q in db.execute("SELECT * FROM questions WHERE owner=? AND status<>'deleted' ORDER BY question_key,version DESC",(owner,))]
+            return [{**admin_question(q), **history(db, pid, q['question_key'])} for q in db.execute("SELECT * FROM questions WHERE owner=? AND status<>'deleted' ORDER BY question_key,version DESC",(owner,))]
 
     @app.post('/api/math/parent/questions', dependencies=[Depends(parent)], status_code=201)
     def new_question(body: QuestionInput, owner=Depends(parent)):
@@ -324,7 +328,7 @@ def create_app(db_path=None, admin_token=None):
                 'JOIN questions q ON q.id=t.question_id WHERE t.player_id=? ORDER BY a.id DESC LIMIT 100', (pid,))]
             for a in result['attempts']:
                 q = json.loads(a.pop('data'))
-                a['title'], a['content'], a['selected'] = q['title'], q['content'], q['options'][a['answer']]
+                a['title'], a['content'], a['selected'] = q['title'], q['content'], (a['answer'] if q.get('question_type') == 'number' else q['options'][int(a['answer'])])
             result['trend'] = [dict(r) for r in db.execute(
                 'SELECT t.day,COUNT(*) AS attempts,SUM(a.correct) AS correct,SUM(a.duration_seconds) AS seconds '
                 'FROM attempts a JOIN tasks t ON t.id=a.task_id WHERE t.player_id=? '
@@ -339,6 +343,27 @@ def create_app(db_path=None, admin_token=None):
         pid=owner_player(owner,mode)
         with store.connect(write=True) as db:
             ensure_tasks(db, pid, mode)
+            return today_view(db, pid, mode)
+
+    @app.post('/api/math/parent/tasks/select')
+    def select_tasks(body: TaskSelection, mode: str = Query('live', pattern='^(live|practice)$'), owner=Depends(parent)):
+        pid = owner_player(owner, mode)
+        with store.connect(write=True) as db:
+            rows = [question_row(db, qid, owner) for qid in dict.fromkeys(body.question_ids)]
+            if len({q['question_key'] for q in rows}) != len(rows):
+                raise HTTPException(422, '同一道题只能选择一个版本')
+            if any(not usable(q, mode) for q in rows):
+                raise HTTPException(409, '请先确认发布所选题目，已停用的题目不能安排')
+            existing = db.execute('SELECT * FROM tasks WHERE player_id=? AND day=? ORDER BY ordinal', (pid, day())).fetchall()
+            chosen = {q['id'] for q in rows}
+            for t in existing:
+                db.execute('UPDATE tasks SET archived=? WHERE id=?', (int(t['question_id'] not in chosen), t['id']))
+            retained = {t['question_id'] for t in existing if t['question_id'] in chosen}
+            ordinal = max([t['ordinal'] for t in existing] + [-1]) + 1
+            for q in rows:
+                if q['id'] not in retained:
+                    db.execute('INSERT INTO tasks(id,player_id,day,question_id,ordinal,created_at) VALUES(?,?,?,?,?,?)', (uuid4().hex,pid,day(),q['id'],ordinal,now()))
+                    ordinal += 1
             return today_view(db, pid, mode)
 
     @app.get('/api/math/parent/rewards', dependencies=[Depends(parent)])
@@ -363,7 +388,7 @@ def create_app(db_path=None, admin_token=None):
     @app.get('/api/math/questions/{qid}')
     def assigned_question(qid: str, dev=Depends(device)):
         with store.connect() as db:
-            row = db.execute('SELECT * FROM tasks WHERE question_id=? AND player_id=? AND day=?',
+            row = db.execute('SELECT * FROM tasks WHERE question_id=? AND player_id=? AND day=? AND archived=0',
                              (qid, dev['player_id'], day())).fetchone()
             if row is None:
                 raise HTTPException(404, '题目未分配给该设备')
@@ -401,7 +426,7 @@ def create_app(db_path=None, admin_token=None):
             q = json.loads(qrow['data'])
             response = {'task_id': task['id'], 'mode': dev['mode'], 'reward': {'xp': 0, 'coins': 0}}
             if kind == 'answer':
-                if body.answer >= len(q['options']):
+                if q.get('question_type', 'choice') == 'choice' and (type(body.answer) is not int or not 0 <= body.answer < len(q['options'])):
                     raise HTTPException(422, '选项不存在')
                 correct = body.answer == q['answer']
                 response.update(correct=correct, task_completed=task['state'] == 'solved' or correct)

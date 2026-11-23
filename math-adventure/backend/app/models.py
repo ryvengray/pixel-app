@@ -1,3 +1,4 @@
+import math
 from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -7,8 +8,9 @@ class Model(BaseModel):
 class QuestionInput(Model):
     title: str = Field(min_length=1, max_length=40)
     content: str = Field(min_length=1, max_length=300)
-    options: list[str] = Field(min_length=2, max_length=3)
-    answer: int = Field(ge=0, le=2)
+    question_type: Literal["choice", "number"] = "choice"
+    options: list[str] = Field(default_factory=list, max_length=3)
+    answer: int | float
     hints: list[str] = Field(min_length=1, max_length=3)
     explanation: str = Field(min_length=1, max_length=400)
     topic: str = Field(min_length=1, max_length=40)
@@ -21,7 +23,11 @@ class QuestionInput(Model):
 
     @model_validator(mode='after')
     def structure(self):
-        if self.answer >= len(self.options):
+        if not math.isfinite(self.answer):
+            raise ValueError("答案必须为有限数字")
+        if self.question_type == "number" and self.options:
+            raise ValueError("数字填空题不填写选项")
+        if self.question_type == "choice" and (type(self.answer) is not int or len(self.options) < 2 or not 0 <= self.answer < len(self.options)):
             raise ValueError('答案必须指向一个选项')
         if any(not s or len(s) > 60 for s in self.options) or len(set(self.options)) != len(self.options):
             raise ValueError('选项必须唯一且为1～60字')
@@ -51,8 +57,11 @@ class Operation(Model):
     task_id: str = Field(min_length=1, max_length=64)
 
 class Answer(Operation):
-    answer: int = Field(ge=0, le=2)
+    answer: int | float = Field(allow_inf_nan=False)
     duration_seconds: int = Field(default=0, ge=0, le=86400)
 
 class QuestionBatch(Model):
     questions: list[QuestionInput] = Field(min_length=1, max_length=50)
+
+class TaskSelection(Model):
+    question_ids: list[str] = Field(min_length=1, max_length=3)

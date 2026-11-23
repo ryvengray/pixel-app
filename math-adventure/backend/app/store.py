@@ -77,6 +77,10 @@ class Store:
             db.execute('PRAGMA journal_mode=WAL')
             # Idempotent initial migration; future changes add versioned migrations.
             db.executescript(SCHEMA)
+            columns = {r['name'] for r in db.execute('PRAGMA table_info(tasks)')}
+            if 'archived' not in columns:
+                db.execute('ALTER TABLE tasks ADD COLUMN archived INTEGER NOT NULL DEFAULT 0')
+            db.execute('INSERT OR IGNORE INTO schema_version VALUES(3)')
 
     def upgrade_owners(self):
         # Rebuild only the v1 players table to remove its single-family mode UNIQUE constraint.

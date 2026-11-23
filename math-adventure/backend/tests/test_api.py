@@ -251,7 +251,9 @@ def test_cross_day_repeat_has_no_second_question_reward(system):
         answer(c,auth,t,answers[t['question_id']])
     with sqlite3.connect(path) as db:
         db.execute("UPDATE tasks SET day='2000-01-01' WHERE player_id='practice'")
-    new_tasks=plan(c,auth)['tasks']
+    auto_tasks=plan(c,auth)['tasks']
+    assert {t['question_id'] for t in tasks}.isdisjoint(t['question_id'] for t in auto_tasks)
+    new_tasks=c.post('/api/math/parent/tasks/select?mode=practice',headers=PARENT,json={'question_ids':[t['question_id'] for t in tasks]}).json()['tasks']
     assert {t['id'] for t in tasks}.isdisjoint(t['id'] for t in new_tasks)
     for t in new_tasks:
         r=answer(c,auth,t,answers[t['question_id']]).json()
@@ -305,3 +307,60 @@ def test_rejected_question_removed_without_breaking_tasks(system):
         seed(db)
         assert db.execute('SELECT status FROM questions WHERE id=?', (qid,)).fetchone()[0] == 'deleted'
     assert all(q['id'] != qid for q in questions(c))
+
+
+def test_numeric_selection_history_and_retry(system):
+    c, path = system
+    q = questions(c)[0]['data']
+    q.update(question_type='number', options=[], answer=-2.5, expression='0-5/2')
+    r = c.post('/api/math/parent/questions', headers=PARENT, json=q)
+    assert r.status_code == 201, r.text
+    qid = r.json()['id']
+    publish(c, qid)
+    r = c.post('/api/math/parent/tasks/select', headers=PARENT, json={'question_ids':[qid]})
+    assert r.status_code == 200, r.text
+    task = r.json()['tasks'][0]
+    assert task['question']['question_type'] == 'number'
+    assert 'answer' not in task['question']
+    auth, _ = device(c, 'live')
+    req = uuid4().hex
+    assert not answer(c, auth, task, 3.5, req).json()['correct']
+    assert not answer(c, auth, task, 3.5, req).json()['correct']
+    assert answer(c, auth, task, -2.5).json()['correct']
+    report = c.get('/api/math/parent/dashboard', headers=PARENT)
+    assert report.status_code == 200, report.text
+    assert report.json()['attempts'][0]['selected'] == -2.5
+    row = next(q for q in questions(c) if q['id'] == qid)
+    assert (row['attempt_count'], row['wrong_count']) == (2, 1)
+    practice = c.get('/api/math/parent/questions?mode=practice', headers=PARENT).json()
+    assert next(q for q in practice if q['id'] == qid)['wrong_count'] == 0
+    revision = c.post(f'/api/math/parent/questions/{qid}/versions', headers=PARENT, json=q).json()
+    publish(c, revision['id'])
+    assert next(q for q in questions(c) if q['id'] == revision['id'])['wrong_count'] == 1
+
+
+def test_replace_started_daily_plan_preserves_history(system):
+    c, path = system
+    auth, _ = device(c)
+    tasks = plan(c, auth)['tasks']
+    qrows = questions(c)
+    first = tasks[0]
+    correct = next(q['data']['answer'] for q in qrows if q['id'] == first['question_id'])
+    assert answer(c, auth, first, (correct+1) % 2).status_code == 200
+    assert answer(c, auth, first, correct).json()['correct']
+    replacement = next(q for q in qrows if q['id'] not in {t['question_id'] for t in tasks})
+    url = '/api/math/parent/tasks/select?mode=practice'
+    changed = c.post(url, headers=PARENT, json={'question_ids':[replacement['id']]})
+    assert changed.status_code == 200, changed.text
+    assert [t['question_id'] for t in changed.json()['tasks']] == [replacement['id']]
+    dashboard = c.get('/api/math/parent/dashboard?mode=practice', headers=PARENT).json()
+    assert len(dashboard['attempts']) == 2
+    restored = c.post(url, headers=PARENT, json={'question_ids':[first['question_id']]}).json()['tasks']
+    assert len(restored) == 1
+    assert restored[0]['id'] == first['id']
+    assert restored[0]['state'] == 'solved'
+    stats = c.get('/api/math/parent/questions?mode=practice', headers=PARENT).json()
+    row = next(q for q in stats if q['id'] == first['question_id'])
+    assert row['attempt_count'] == 2
+    assert row['correct_count'] == 1
+    assert row['wrong_count'] == 1

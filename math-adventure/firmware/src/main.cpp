@@ -26,8 +26,10 @@ uint32_t frameTiles[300]={};
 bool firstFrame=true;
 void flushFrame(){
  if(!frameDirty)return;frameDirty=false;
+ // The sprite is fixed at 320x240, 8-bit. Hash its bytes directly to keep touch redraws fast.
+ const auto *pixels=static_cast<const uint8_t*>(lcd.getPointer());
  for(int ty=0;ty<15;++ty)for(int tx=0;tx<20;++tx){
-  uint32_t hash=adventure::tileHash([](int x,int y){return lcd.readPixelValue(x,y);},tx,ty);
+  uint32_t hash=adventure::tileHash([pixels](int x,int y){return pixels[y*320+x];},tx,ty);
   int index=ty*20+tx;if(firstFrame||frameTiles[index]!=hash){lcd.pushSprite(tx*16,ty*16,tx*16,ty*16,16,16);frameTiles[index]=hash;}
  }
  firstFrame=false;
