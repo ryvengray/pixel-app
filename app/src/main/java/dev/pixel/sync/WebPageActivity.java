@@ -4,7 +4,11 @@ import android.app.Activity;
 import android.content.Intent;
 import android.net.Uri;
 import android.os.Bundle;
+import android.graphics.Color;
+import android.graphics.Insets;
 import android.view.View;
+import android.view.WindowInsets;
+import android.view.WindowInsetsController;
 import android.webkit.*;
 import android.widget.*;
 
@@ -17,7 +21,19 @@ public class WebPageActivity extends Activity {
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
+        // Target SDK 35 draws edge to edge. Keep native controls and the WebView
+        // inside system bars/cutouts, including when the keyboard is open.
+        getWindow().setDecorFitsSystemWindows(false);
+        getWindow().setStatusBarColor(Color.WHITE);
+        getWindow().setNavigationBarColor(Color.WHITE);
         LinearLayout root=new LinearLayout(this);root.setOrientation(LinearLayout.VERTICAL);
+        root.setBackgroundColor(Color.WHITE);
+        root.setOnApplyWindowInsetsListener((view,insets)->{
+            Insets safe=insets.getInsets(WindowInsets.Type.systemBars()|WindowInsets.Type.displayCutout());
+            Insets ime=insets.getInsets(WindowInsets.Type.ime());
+            view.setPadding(safe.left,safe.top,safe.right,Math.max(safe.bottom,ime.bottom));
+            return WindowInsets.CONSUMED;
+        });
         LinearLayout toolbar=new LinearLayout(this);
         Button back=new Button(this);back.setText("返回");back.setOnClickListener(v->onBackPressed());toolbar.addView(back);
         TextView title=new TextView(this);title.setText("数学冒险岛");title.setTextSize(18);title.setGravity(android.view.Gravity.CENTER);toolbar.addView(title,new LinearLayout.LayoutParams(0,-1,1));
@@ -25,6 +41,11 @@ public class WebPageActivity extends Activity {
         progress=new ProgressBar(this,null,android.R.attr.progressBarStyleHorizontal);root.addView(progress,new LinearLayout.LayoutParams(-1,6));
         error=new TextView(this);error.setPadding(24,24,24,24);error.setVisibility(View.GONE);root.addView(error);
         setContentView(root);
+        root.requestApplyInsets();
+        WindowInsetsController bars=getWindow().getInsetsController();
+        if(bars!=null)bars.setSystemBarsAppearance(
+                WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS|WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS,
+                WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS|WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS);
         String base=getSharedPreferences("gray_settings",0).getString("server_url","");
         Uri configured=Uri.parse(base);
         if(configured.getHost()==null||!("https".equals(configured.getScheme())||"http".equals(configured.getScheme()))){
