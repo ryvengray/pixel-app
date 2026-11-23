@@ -364,3 +364,23 @@ def test_replace_started_daily_plan_preserves_history(system):
     assert row['attempt_count'] == 2
     assert row['correct_count'] == 1
     assert row['wrong_count'] == 1
+
+
+@pytest.mark.parametrize('option', ['20颗', '20 颗', '２０颗', '20个', '20厘米', '20.0元', '20'])
+def test_numeric_check_accepts_unit_without_changing_option(system, option):
+    c, _ = system
+    q = questions(c)[0]['data']
+    q.update(options=['18颗', option, '22颗'], answer=1, expression='12+8')
+    created = c.post('/api/math/parent/questions', headers=PARENT, json=q)
+    assert created.status_code == 201, created.text
+    publish(c, created.json()['id'])
+    saved = next(row for row in questions(c) if row['id'] == created.json()['id'])
+    assert saved['data']['options'][1] == option
+
+
+@pytest.mark.parametrize('option', ['21颗', '20或30颗', '大约20颗', '20颗以上', '20+1', 'nan', 'inf'])
+def test_numeric_check_rejects_wrong_or_ambiguous_unit_answers(system, option):
+    c, _ = system
+    q = questions(c)[0]['data']
+    q.update(options=['18颗', option, '22颗'], answer=1, expression='12+8')
+    assert not check_question(q)['passed']

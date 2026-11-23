@@ -3,6 +3,9 @@ from __future__ import annotations
 import ast
 import hashlib
 import json
+import math
+import re
+import unicodedata
 import os
 import secrets
 from contextlib import asynccontextmanager
@@ -24,6 +27,17 @@ def token_hash(value):
     return hashlib.sha256(value.encode()).hexdigest()
 
 
+# Units are display text: compare the number in the expression's own unit,
+# without guessing conversions or accepting ambiguous multi-number answers.
+ANSWER_UNITS = frozenset(('个 颗 只 本 支 张 块 根 条 朵 辆 棵 杯 盒 袋 枚 件 人 位 天 小时 分钟 秒 米 厘米 毫米 千米 克 千克 公斤 元 角 分 平方米 平方厘米 立方米 升 毫升 倍 岁 页 次 步 层 排 组 对 套 份 把 瓶 盆 盏 圈 周 月 年').split())
+
+def numeric_option(value):
+    match = re.fullmatch(r'([+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+))\s*([^\s0-9]*)', unicodedata.normalize('NFKC', value).strip())
+    if not match or (match[2] and match[2] not in ANSWER_UNITS):
+        raise ValueError('正确选项须为数字或数字加常见单位（例如20颗）；非数值题请将 expression 设为 null')
+    return float(match[1])
+
+
 def check_question(data):
     q = QuestionInput.model_validate(data)
     errors = []
@@ -42,12 +56,17 @@ def check_question(data):
             raise ValueError('仅支持非负数字和加减乘除表达式')
         try:
             expected = calculate(ast.parse(q.expression, mode='eval').body)
-            if float(q.answer if q.question_type == "number" else q.options[q.answer]) != expected:
-                errors.append('选项答案与计算表达式不一致')
+            try:
+                actual = q.answer if q.question_type == "number" else numeric_option(q.options[q.answer])
+            except ValueError as error:
+                errors.append(str(error))
+            else:
+                if not math.isclose(actual, expected, rel_tol=1e-12, abs_tol=1e-12):
+                    errors.append('答案数值与计算表达式不一致，请按同一单位填写表达式')
         except (SyntaxError, ValueError, TypeError, ZeroDivisionError, OverflowError, RecursionError):
             errors.append('计算表达式或数字答案无效')
     return {'passed': not errors, 'errors': errors,
-            'scope': '结构及可选计算核验；语言、逻辑、唯一性和小屏适配仍需人工审核'}
+            'scope': '结构及可选数值核验（不自动换算单位）；语言、逻辑、单位、唯一性和小屏适配仍需人工审核'}
 
 
 def create_app(db_path=None, admin_token=None):

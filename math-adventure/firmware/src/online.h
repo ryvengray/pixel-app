@@ -17,6 +17,8 @@ DynamicJsonDocument state(24576);
 int selected=0, screen=0, contentPage=0; // home, map, question, method/hint, settings
 DynamicJsonDocument outbox(24576);
 String numberInput;
+int detailKind=0; // method, hint, encouragement
+
 String detail, resumeTask, pairSecret, pairBody, pairCode, pairVerification;
 bool pairWaiting=false,backendReachable=false,pairOpenRequested=false;uint32_t pairPoll=0,backendChecked=0;
 int xp=0, coins=0;
@@ -78,6 +80,9 @@ void submit(const char *path,int answer=-1,bool numeric=false) {
   if(!question()["solution"].is<JsonObject>()){message="请联网重新同步题目";refreshAfter=true;dirty=true;return;}
   if(!ready||!task()["available"].as<bool>()) {message="请先同步今日任务";dirty=true;return;}
   if(outbox.size()>=60){message="待同步记录已满，请先联网";dirty=true;return;}
+  if(task()["state"]=="solved"&&String(path)=="/api/math/answers"){
+    detail=question()["solution"]["explanation"].as<String>();detailKind=0;screen=3;contentPage=0;dirty=true;return;
+  }
   DynamicJsonDocument body(512);
   char id[40];snprintf(id,sizeof(id),"%08lx%08lx%08lx%08lx",(unsigned long)esp_random(),(unsigned long)esp_random(),(unsigned long)esp_random(),(unsigned long)esp_random());
   body["request_id"]=id;body["task_id"]=task()["id"];
@@ -90,11 +95,12 @@ void submit(const char *path,int answer=-1,bool numeric=false) {
   auto solution=question()["solution"];
   if(String(path)=="/api/math/answers"){
     bool correct=value==solution["answer"].as<double>();
-    detail=correct?solution["explanation"].as<String>():"再想一想，你可以的";
+    detailKind=correct?0:2;
+    detail=correct?solution["explanation"].as<String>():"没关系，换个办法再试试。可以先找一找题目里的条件，也可以请小向导给个提示。";
     if(correct){task()["state"]="solved";task()["explanation"]=solution["explanation"];}
-    screen=3;
+    screen=correct?9:3;
   }else if(String(path)=="/api/math/tasks/hint"){
-    int n=task()["hint_count"]|0;auto hints=solution["hints"].as<JsonArray>();
+    detailKind=1;int n=task()["hint_count"]|0;auto hints=solution["hints"].as<JsonArray>();
     detail=task()["state"]=="solved"?solution["explanation"].as<String>():hints[min(n,(int)hints.size()-1)].as<String>();
     task()["hint_count"]=n+1;screen=3;
   }else{task()["state"]="skipped";screen=1;}
@@ -324,6 +330,20 @@ void wrap(String s) {
   }
   if(line.length()&&lineCount<64)lines[lineCount++]=line;
 }
+int solvedCount(){int count=0;for(auto t:tasks())if(t["available"]==true&&t["state"]=="solved")++count;return count;}
+int availableCount(){int count=0;for(auto t:tasks())if(t["available"]==true)++count;return count;}
+bool allSolved(){return availableCount()>0&&solvedCount()==availableCount();}
+void openTask(int index){
+  if(index<0||index>=(int)tasks().size())return;
+  selected=index;if(!task()["available"].as<bool>())return;
+  contentPage=0;detailKind=0;
+  if(task()["state"]=="solved"){detail=task()["explanation"]|question()["solution"]["explanation"].as<String>();screen=3;}
+  else screen=2;
+}
+void continueAdventure(){
+  for(int step=1;step<=(int)tasks().size();++step){int index=(selected+step)%tasks().size();if(tasks()[index]["available"]==true&&tasks()[index]["state"]!="solved"){openTask(index);return;}}
+  screen=1;
+}
 void render() {
   dirty=false;buttonCount=0;lcd.fillSprite(cream);lcd.fillRect(0,0,320,28,pale);
   text("小语冒险岛",8,20);if(busy||pendingBody.length())text("同步中",260,20);else text(mode=="live"?"正式":(mode=="practice"?"试玩":"联网"),276,20);
@@ -352,52 +372,76 @@ void render() {
     button(72,188,176,"返回首页",100);return;
   }
   if(screen==8) {
-    text(("填写数字："+numberInput).c_str(),8,8);
+    lcd.fillRect(0,0,320,28,pale);text(("填写数字："+numberInput).c_str(),8,20);
     for(int i=0;i<9;++i){String digit=String(i+1);button(8+(i%3)*80,40+(i/3)*48,72,digit.c_str(),170+i);}
     button(8,188,72,"负号",180,false);button(88,188,72,"0",179);button(168,188,72,"小数点",181,false);
     button(248,40,64,"返回",182,false);button(248,88,64,"删除",183,false);button(248,136,64,"确认",184);return;
   }
+  if(screen==9){
+    face(64,108,true);
+    text(allSolved()?"今天的星星集齐啦！":"又点亮一颗星！",104,63);
+    text("你找到好办法啦",104,94);
+    String progress=String(solvedCount())+" / "+String(availableCount())+" 颗冒险星";
+    text(progress.c_str(),104,123);
+    for(int i=0;i<availableCount();++i)star(133+i*42,153,i<solvedCount());
+    button(8,188,96,"看方法",191,false);button(112,188,200,allSolved()?"看看星星地图":"继续冒险",190);return;
+  }
   if(screen==0) {
     face(54,107,true);
-    text("每天一点数学魔法",100,64);
+    text(allSolved()?"今天的冒险完成啦":"和小向导一起出发",100,64);
     char buf[50];snprintf(buf,sizeof(buf),"经验 %d  金币 %d",xp,coins);text(buf,100,94);
-    text(ready?(mode=="practice"?"独立试玩任务":"正式学习任务"):"等待服务器同步",100,125);
+    String journey=ready?(availableCount()?String("已点亮 ")+solvedCount()+" / "+availableCount()+" 颗星":"等家长准备新冒险"):"等待同步冒险地图";
+    text(journey.c_str(),100,125);
     text(message.c_str(),8,171);
-    button(8,188,96,"小设置",104,false);button(112,188,200,credential.isEmpty()?"配对设备":(busy?"同步中":"今日冒险"),credential.isEmpty()?140:101);return;
+    button(8,188,96,"小设置",104,false);button(112,188,200,credential.isEmpty()?"配对设备":(allSolved()?"看看我的星星":"开始今日冒险"),credential.isEmpty()?140:101);return;
   }
   if(screen==1) {
-    if(!tasks().size())text("暂无任务，请家长安排",8,76);
+    lcd.fillRect(0,0,320,28,pale);text(allSolved()?"星星集齐，休息一下吧":"今日星星地图",8,20);
+    for(int i=0;i<availableCount();++i)star(250+i*24,14,i<solvedCount());
+    if(!tasks().size()){face(160,112,false);centered("等家长准备新冒险",165);}
+    if(tasks().size()>1)lcd.drawFastVLine(23,58,(tasks().size()-1)*48,0x9ED5);
     for(unsigned i=0;i<tasks().size()&&i<3;++i) {
-      auto t=tasks()[i];String title=t["question"]["title"]|"题目停用";
+      auto t=tasks()[i];String title=t["question"]["title"]|"暂时休息";
       String shortTitle;
-      for(unsigned j=0;j<title.length();) {unsigned char c=title[j];int n=c<128?1:(c<224?2:3);String next=title.substring(j,j+n);if(chinese.getUTF8Width((shortTitle+next).c_str())>160)break;shortTitle+=next;j+=n;}
-      text(shortTitle.c_str(),8,53+i*48);
-      String st=t["state"]|"pending";
-      button(180,32+i*48,132,st=="solved"?"看方法":(st=="skipped"?"再想想":"帮助朋友"),110+i);
+      for(unsigned j=0;j<title.length();) {unsigned char c=title[j];int n=c<128?1:(c<224?2:3);String next=title.substring(j,j+n);if(chinese.getUTF8Width((shortTitle+next).c_str())>124)break;shortTitle+=next;j+=n;}
+      String st=t["state"]|"pending";star(23,53+i*48,st=="solved");
+      text(shortTitle.c_str(),42,53+i*48);
+      button(180,32+i*48,132,!t["available"].as<bool>()?"暂时休息":st=="solved"?"已点亮·看方法":(st=="skipped"?"回来试试":"出发闯关"),110+i,st!="solved");
     }
-    button(8,188,148,"回家休息",100,false);button(164,188,148,"重新同步",102,false);return;
+    button(8,188,148,"回家休息",100,false);button(164,188,148,"更新地图",102,false);return;
   }
   lineCount=0;
   if(screen!=3)wrap(question()["content"].as<String>());
-  if(screen!=3)for(unsigned i=0;i<question()["options"].size();++i) wrap(String(i+1)+"号："+question()["options"][i].as<String>());
-  if(screen==3) {wrap("—— 一起想办法 ——");wrap(detail);}
+  if(screen!=3)for(unsigned i=0;i<question()["options"].size();++i) wrap(String(char('A'+i))+". "+question()["options"][i].as<String>());
+  lcd.fillRect(0,0,320,28,pale);
+  String caption=screen==3?(detailKind==1?"小向导的提示":detailKind==2?"换个办法，再试一次":"一起看看好方法"):String("第 ")+(selected+1)+" 关 · "+(question()["question_type"]=="number"?"填一填":"选一选");
+  text(caption.c_str(),8,20);
+  if(screen==3)wrap(detail);
   int pages=(lineCount+3)/4;if(pages<1)pages=1;if(contentPage>=pages)contentPage=0;
-  for(int j=0;j<4;++j)if(contentPage*4+j<lineCount)text(lines[contentPage*4+j].c_str(),12,51+j*21);
+  for(int j=0;j<4;++j)if(contentPage*4+j<lineCount)text(lines[contentPage*4+j].c_str(),12,45+j*20);
+  String pageNote=pages>1?String("第 ")+(contentPage+1)+" / "+pages+" 页 · 点翻页继续":(screen==2?"慢慢想，选好后轻点答案":"看懂了就回去试一试");
+  text(pageNote.c_str(),12,124,0x5B6B);
   if(screen==2) {
     auto opts=question()["options"].as<JsonArray>();
     // Option labels are paginated alongside the question if they don't fit a button.
-    if(question()["question_type"]=="number") button(8,130,304,"填写数字答案",185);
-    else if(contentPage==pages-1) {
+    if(question()["question_type"]=="number"&&contentPage==pages-1) button(8,130,304,"填写数字答案",185);
+    else if(question()["question_type"]!="number"&&contentPage==pages-1) {
       for(unsigned i=0;i<opts.size()&&i<3;++i) {
-        String label=opts[i].as<String>();
-        if(chinese.getUTF8Width(label.c_str())>88) label=String(i+1)+"号答案";
+        String prefix=String(char('A'+i))+". ";String label=prefix+opts[i].as<String>();
+        if(chinese.getUTF8Width(label.c_str())>88) label=String("选 ")+char('A'+i);
         button(8+i*104,130,96,label.c_str(),120+i);
       }
     }
-    button(8,188,72,"提示",130,false);button(88,188,72,"稍后",131,false);
-    button(168,188,72,"翻页",136,false);button(248,188,64,"地图",132,false);
+    if(contentPage<pages-1)centered("读完这一页，点翻页继续",146);
+    if(pages>1){
+      button(8,188,72,"帮帮我",130,false);button(88,188,72,"稍后",131,false);
+      button(168,188,72,"翻页",136,false);button(248,188,64,"地图",132,false);
+    }else{
+      button(8,188,96,"帮帮我",130,false);button(112,188,96,"稍后再想",131,false);button(216,188,96,"星星地图",132,false);
+    }
   } else {
-    button(8,188,96,"回题目",133,false);button(112,188,96,"翻页",136,false);button(216,188,96,"地图",135,false);
+    button(8,188,96,task()["state"]=="solved"?"继续冒险":"再试一次",task()["state"]=="solved"?190:133);
+    button(112,188,96,pages>1?"翻页":task()["state"]=="solved"?"再看题目":"帮帮我",pages>1?136:task()["state"]=="solved"?133:130,false);button(216,188,96,"星星地图",135,false);
   }
 }
 void handle(int id) {
@@ -412,6 +456,8 @@ void handle(int id) {
   if(id==101) {screen=1;dirty=true;if(!ready)sync();return;}
   if(id==102) {sync();return;}
 
+  if(id==190){continueAdventure();dirty=true;return;}
+  if(id==191){detail=question()["solution"]["explanation"].as<String>();detailKind=0;contentPage=0;screen=3;dirty=true;return;}
   if(id==185){numberInput="";screen=8;dirty=true;return;}
   if(screen==8){
     if(id>=170&&id<=179&&numberInput.length()<12)numberInput+=String(id==179?0:id-169);
@@ -422,11 +468,7 @@ void handle(int id) {
     if(id==184&&numberInput!=""&&numberInput!="-"&&numberInput!="."&&numberInput!="-.")submit("/api/math/answers",-1,true);
     dirty=true;return;
   }
-  if(id>=110&&id<113) {
-    selected=id-110;if(selected>=(int)tasks().size()||!task()["available"].as<bool>())return;
-    contentPage=0;
-    if(task()["state"].as<String>()=="solved") {detail=task()["explanation"]|question()["solution"]["explanation"].as<String>();screen=3;}else screen=2;
-  }
+  if(id>=110&&id<113)openTask(id-110);
   if(id>=120&&id<123)submit("/api/math/answers",id-120);
   if(id==130)submit("/api/math/tasks/hint");
   if(id==131)submit("/api/math/tasks/skip");
