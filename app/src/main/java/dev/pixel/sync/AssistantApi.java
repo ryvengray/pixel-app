@@ -110,10 +110,15 @@ public final class AssistantApi {
         try{int code=connection.getResponseCode();if(code<200||code>=300)throw new IOException("请求失败（"+code+"）");return new JSONArray(read(connection.getInputStream()));}finally{connection.disconnect();}
     }
     public static String homeOpening(Context context,List<AssistantStore.Message> messages)throws Exception{
-        String url=serverUrl(context),token=secret(context,"device_token");if(url.isEmpty()||token.isEmpty())return "";
-        JSONArray turns=new JSONArray();for(AssistantStore.Message m:messages)turns.put(new JSONObject().put("role",m.role).put("content",m.content));
-        return new JSONObject(post(url+"/v1/home",token,new JSONObject().put("messages",turns).put("timezone",java.util.TimeZone.getDefault().getID()))).optString("content","");
+        JSONArray events;
+        try(CalendarStore calendar=new CalendarStore(context)){events=calendar.upcoming(java.time.LocalDate.now(),java.time.LocalDate.now());}
+        StringBuilder local=new StringBuilder();for(int i=0;i<events.length();i++){JSONObject event=events.getJSONObject(i);if(!event.optBoolean("completed"))local.append(event.optString("title")).append("（").append(event.optString("occurrence")).append("）；");}
+        String url=serverUrl(context),token=secret(context,"device_token");
+        String fallback=local.length()>0?"今天记得关注："+local.toString():"";
+        if(url.isEmpty()||token.isEmpty())return fallback;
+        try{return new JSONObject(post(url+"/v1/home",token,new JSONObject().put("messages",new JSONArray()).put("calendar",new JSONObject().put("events",events)).put("timezone",java.util.TimeZone.getDefault().getID()))).optString("content",fallback);}catch(Exception unavailable){return fallback;}
     }
+
     private static void requireNewsConnection(Context context)throws Exception{
         if(serverUrl(context).isEmpty()||secret(context,"device_token").isEmpty())throw new IOException("请先在助理设置中配对服务，再管理新闻订阅");
     }

@@ -93,3 +93,14 @@ def test_old_database_upgrade_preserves_records(tmp_path):
         assert db.execute("SELECT owner FROM players WHERE id='live'").fetchone()[0]=='administrator'
         assert db.execute("SELECT question_id FROM tasks WHERE id='old-task'").fetchone()[0]=='old-q'
         assert db.execute('PRAGMA foreign_key_check').fetchall()==[]
+
+
+def test_login_remains_valid_after_thirty_days(system, monkeypatch):
+    c,path,sent=system
+    headers=login(c,sent,'remember@example.test')
+    import time
+    now=time.time()
+    monkeypatch.setattr('app.access.time.time',lambda:now+31*86400)
+    assert c.get('/api/math/auth/session',headers=headers).status_code==200
+    assert c.post('/api/math/auth/logout',headers=headers).status_code==200
+    assert c.get('/api/math/auth/session',headers=headers).status_code==401

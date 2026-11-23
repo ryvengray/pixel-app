@@ -44,13 +44,15 @@ public final class HomeConversationView extends FrameLayout {
     private int thinkingStep;
     private long generation, lastInteraction, pausedAt;
     private float touchStartX, touchStartY;
-    private boolean greetingEvaluated;
+    private String visibleDay="";
+    private long dayStart;
+    private boolean openingLoading;
     private boolean hasOlderChat, olderChatScheduled, prependingChat;
     private String requestedMessageId;
     private String pendingGroup, inFlightGroup, resultText = "";
     private final Runnable dispatch = this::dispatch;
     private final Runnable beginVoice = () -> { if(touching) startVoice(); };
-    private final Runnable poll = new Runnable(){public void run(){if(!active||closed)return;syncInbox();background.execute(()->{try{TopicRepository.synchronize(activity);}catch(Exception ignored){}});main.postDelayed(this,30000);}};
+    private final Runnable poll = new Runnable(){public void run(){if(!active||closed)return;restore();maybeGreet();syncInbox();background.execute(()->{try{TopicRepository.synchronize(activity);}catch(Exception ignored){}});main.postDelayed(this,30000);}};
 
     private final Runnable thinkingTick = new Runnable(){public void run(){
         if(closed||!active||!waiting())return;
@@ -191,8 +193,15 @@ public final class HomeConversationView extends FrameLayout {
         send.setTextColor(Color.parseColor(dark?"#102019":"#FFFFFF"));send.setBackground(surface(Color.parseColor(dark?"#8BCB9A":"#327C4E"),22));
         render();
     }
+    private List<AssistantStore.Message> todayOnly(List<AssistantStore.Message> rows){rows.removeIf(m->m.createdAt<dayStart);return rows;}
+    private List<AssistantStore.Message> todayContext(int count){return todayOnly(store.conversation(count));}
+    private void checkDay(){
+        String day=java.time.LocalDate.now().toString();if(day.equals(visibleDay))return;
+        visibleDay=day;dayStart=java.time.LocalDate.now().atStartOfDay(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli();
+        chatRows.messages.clear();chatRows.notifyDataSetChanged();hasOlderChat=false;pendingGroup=null;failureText=null;resultText="";generation++;
+    }
     private List<AssistantStore.Message> chatPage(long before){
-        List<AssistantStore.Message> page=store.chatBefore(before,CHAT_PAGE_SIZE+1);
+        List<AssistantStore.Message> page=todayOnly(store.chatBefore(before,CHAT_PAGE_SIZE+1));
         hasOlderChat=page.size()>CHAT_PAGE_SIZE;
         if(hasOlderChat)page.remove(0);
         return page;
@@ -214,14 +223,15 @@ public final class HomeConversationView extends FrameLayout {
         });
     }
     private void restore(){
+        checkDay();
         int count=chatRows.getCount();
-        chatRows.add(count,count==0?chatPage(Long.MAX_VALUE):store.chatAfter(chatRows.getItemId(count-1)));
+        chatRows.add(count,count==0?chatPage(Long.MAX_VALUE):todayOnly(store.chatAfter(chatRows.getItemId(count-1))));
         if(resultText.isEmpty()){
             AssistantStore.Message tool=store.latestChatMessage("tool");
             if(tool!=null)resultText=tool.content;
         }
         AssistantStore.Message latestUser=store.latestChatMessage("user");
-        pendingGroup=latestUser!=null&&!latestUser.status.equals("sent")&&!latestUser.groupId.equals(inFlightGroup)
+        pendingGroup=latestUser!=null&&latestUser.createdAt>=dayStart&&!latestUser.status.equals("sent")&&!latestUser.groupId.equals(inFlightGroup)
                 ?latestUser.groupId:null;
         render();
     }
@@ -332,7 +342,7 @@ public final class HomeConversationView extends FrameLayout {
         updateComposer();submit(text);
     }
     private void submit(String text){
-        List<AssistantStore.Message> intent=new ArrayList<>(store.conversation(28));intent.add(new AssistantStore.Message("user",text,System.currentTimeMillis()));
+        List<AssistantStore.Message> intent=new ArrayList<>(todayContext(28));intent.add(new AssistantStore.Message("user",text,System.currentTimeMillis()));
         if(ClientTools.recordEvidence(intent)!=null){RecordLocation.withPermission(activity,()->submitReady(text));return;}
         submitReady(text);
     }
@@ -351,7 +361,7 @@ public final class HomeConversationView extends FrameLayout {
         if(closed||busy||pendingGroup==null)return;
         queued=false;failureText=null;busy=true;inFlightGroup=pendingGroup;pendingGroup=null;final String group=inFlightGroup;final long version=generation;
         prefs.edit().putBoolean("attempted:"+group,true).apply();store.setStatus(group,"pending");render();
-        List<AssistantStore.Message> turns=store.conversation(28);
+        List<AssistantStore.Message> turns=todayContext(28);
         List<AssistantStore.Message> supplements=new ArrayList<>();for(AssistantStore.Message m:turns)if(m.role.equals("user")&&m.groupId.equals(group))supplements.add(m);turns.removeAll(supplements);turns.addAll(supplements);
         List<AssistantStore.Memory> memories=store.memories(false);
         network.execute(()->{try{
@@ -372,22 +382,19 @@ public final class HomeConversationView extends FrameLayout {
             failureText="未能确认发送结果 · 点击重试";render();
         });}});
     }
-    public void resume(){active=true;refreshNotifications();if(!busy)restore();else render();main.removeCallbacks(poll);main.post(poll);if(pausedAt>0&&System.currentTimeMillis()-pausedAt>30*60*1000L)greetingEvaluated=false;main.postDelayed(this::maybeGreet,1400);}
+    public void resume(){active=true;refreshNotifications();if(!busy)restore();else render();main.removeCallbacks(poll);main.post(poll);main.postDelayed(this::maybeGreet,1400);}
     public void pause(){active=false;updateFeedback();pausedAt=System.currentTimeMillis();main.removeCallbacks(poll);main.removeCallbacks(beginVoice);touching=false;resetVoicePress();if(voice!=null)voice.interrupt();}
     private boolean idleForProactive(){return active&&!closed&&!busy&&pendingGroup==null&&!keyboard&&input.length()==0&&!touching&&voice==null&&(detail==null||!detail.isShowing())&&activity.hasWindowFocus()&&System.currentTimeMillis()-lastInteraction>1200;}
     private void maybeGreet(){
-        if(greetingEvaluated||!idleForProactive()||!prefs.getBoolean("proactive",true))return;
-        greetingEvaluated=true;
-        long now=System.currentTimeMillis();java.time.ZonedDateTime time=java.time.ZonedDateTime.now();int hour=time.getHour();
-        if(hour<8||hour>=23||now-prefs.getLong("last_greeting",0)<4*3600000L||now-prefs.getLong("last_conversation_at",0)<15*60000L)return;
-        String day=time.toLocalDate().toString();int count=day.equals(prefs.getString("greeting_day",""))?prefs.getInt("greeting_count",0):0;if(count>=2)return;
-        long version=generation;List<AssistantStore.Message> context=store.conversation(12);
-        background.execute(()->{String opening="";try{opening=AssistantApi.homeOpening(activity,context);}catch(Exception ignored){}
-            if(opening.isEmpty()&&context.isEmpty())opening="嗨，我在这里。有什么想跟我说的吗？";
-            final String text=opening;main.post(()->{if(text.isEmpty()||version!=generation||!idleForProactive()||!prefs.getBoolean("proactive",true))return;
-                prefs.edit().putLong("last_greeting",System.currentTimeMillis()).putString("greeting_day",day).putInt("greeting_count",count+1).apply();store.saveNotifications(Collections.singletonList(new AssistantStore.InboxItem(
-                        "opening:"+UUID.randomUUID(),"Greta",text,System.currentTimeMillis(),false)));
-                refreshNotifications();react.run();
+        checkDay();
+        final String day=visibleDay;
+        if(openingLoading||day.equals(prefs.getString("daily_opening_day",""))||!idleForProactive())return;
+        openingLoading=true;long version=generation;
+        background.execute(()->{String opening="";try{opening=AssistantApi.homeOpening(activity,Collections.emptyList());}catch(Exception ignored){}
+            if(opening.isEmpty())opening="公元105年，蔡伦向朝廷呈报改进的造纸方法，用树皮、麻头、破布等制纸。纸的推广，让知识有了更轻便的载体。";
+            final String text=opening;main.post(()->{openingLoading=false;if(closed||!day.equals(java.time.LocalDate.now().toString())||version!=generation||!idleForProactive())return;
+                store.addMessage("assistant",text,"reply:daily:"+day,"sent","daily:"+day,System.currentTimeMillis());
+                prefs.edit().putString("daily_opening_day",day).apply();restore();react.run();
             });
         });
     }

@@ -122,9 +122,9 @@ class Access:
                         db.execute('DELETE FROM mail_codes WHERE email=?',(email,))
                         db.execute('INSERT OR IGNORE INTO users VALUES(?,?)',(email,time.time()))
                         token=secrets.token_urlsafe(32)
-                        db.execute('INSERT INTO web_sessions VALUES(?,?,?)',(digest(token),email,time.time()+30*86400))
+                        db.execute('INSERT INTO web_sessions VALUES(?,?,?)',(digest(token),email,time.time()+3650*86400))
             if not valid:raise HTTPException(401,'验证码无效或过期，请重新获取')
-            response.set_cookie(self.cookie,token,max_age=30*86400,httponly=True,secure=os.getenv('MATH_COOKIE_SECURE','true').lower()=='true',samesite='strict',path=os.getenv('MATH_ROOT_PATH','') or '/')
+            response.set_cookie(self.cookie,token,max_age=3650*86400,httponly=True,secure=os.getenv('MATH_COOKIE_SECURE','true').lower()=='true',samesite='strict',path=os.getenv('MATH_ROOT_PATH','') or '/')
             return {'email':email}
 
         @app.get('/api/math/auth/session')

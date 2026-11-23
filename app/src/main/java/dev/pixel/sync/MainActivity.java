@@ -26,8 +26,9 @@ public class MainActivity extends Activity {
  private boolean dark,imeAnimating;
  private FrameLayout overlay;
  private FrameLayout root;
- private TextView title,menuButton,petTouch;
- private ImageButton historyButton,notificationButton;
+ private TextView menuButton,petTouch;
+ private ImageButton notificationButton;
+ private TextView shortcutButton;
  private View unreadDot;
  private final BroadcastReceiver pushArrived=new BroadcastReceiver(){
   @Override public void onReceive(Context context,Intent intent){home.syncInbox();}
@@ -46,8 +47,6 @@ public class MainActivity extends Activity {
   root.setBackgroundColor(Color.parseColor(dark?"#070D1B":"#F0F5E9"));
   scene=new PetScene(this);scene.setTheme(dark);scene.setMoving(!preferences.getBoolean("reduceMotion",false));
   root.addView(scene,new FrameLayout.LayoutParams(-1,-1));overlay=new FrameLayout(this);root.addView(overlay,new FrameLayout.LayoutParams(-1,-1));
-  title=text("Greta",23);title.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));
-  FrameLayout.LayoutParams header=new FrameLayout.LayoutParams(-2,-2,Gravity.TOP|Gravity.LEFT);header.leftMargin=dp(74);header.topMargin=dp(26);overlay.addView(title,header);
   FrameLayout bell=new FrameLayout(this);bell.setElevation(dp(16));
   FrameLayout.LayoutParams bellPosition=new FrameLayout.LayoutParams(dp(48),dp(48),Gravity.TOP|Gravity.LEFT);
   bellPosition.leftMargin=dp(20);bellPosition.topMargin=dp(MENU_TOP_DP);overlay.addView(bell,bellPosition);
@@ -62,9 +61,11 @@ public class MainActivity extends Activity {
   dotPosition.topMargin=dp(8);dotPosition.rightMargin=dp(8);bell.addView(unreadDot,dotPosition);
   menuButton=text("•••",22);menuButton.setGravity(Gravity.CENTER);menuButton.setElevation(dp(16));menuButton.setContentDescription("打开功能和外观菜单");menuButton.setOnClickListener(v->showMenu());
   FrameLayout.LayoutParams button=new FrameLayout.LayoutParams(dp(MENU_WIDTH_DP),dp(MENU_HEIGHT_DP),Gravity.TOP|Gravity.RIGHT);button.topMargin=dp(MENU_TOP_DP);button.rightMargin=dp(MENU_RIGHT_DP);overlay.addView(menuButton,button);
-  historyButton=new ImageButton(this);historyButton.setImageResource(R.drawable.ic_chat_history);historyButton.setPadding(dp(13),dp(13),dp(13),dp(13));
-  historyButton.setContentDescription("查看聊天历史");historyButton.setTooltipText("聊天历史");historyButton.setElevation(dp(16));historyButton.setOnClickListener(v->home.showHistory());
-  FrameLayout.LayoutParams historyPosition=new FrameLayout.LayoutParams(dp(48),dp(48),Gravity.TOP|Gravity.RIGHT);historyPosition.topMargin=dp(MENU_TOP_DP);historyPosition.rightMargin=dp(MENU_RIGHT_DP+MENU_WIDTH_DP+10);overlay.addView(historyButton,historyPosition);
+  shortcutButton=text("",14);shortcutButton.setTag("home_shortcut");shortcutButton.setGravity(Gravity.CENTER);shortcutButton.setElevation(dp(16));
+  shortcutButton.setOnClickListener(v->openShortcut(preferences.getInt("shortcut",0)));
+  shortcutButton.setOnLongClickListener(v->{chooseShortcut();return true;});
+  FrameLayout.LayoutParams shortcutPosition=new FrameLayout.LayoutParams(dp(112),dp(48),Gravity.TOP|Gravity.RIGHT);shortcutPosition.topMargin=dp(MENU_TOP_DP);shortcutPosition.rightMargin=dp(MENU_RIGHT_DP+MENU_WIDTH_DP+10);overlay.addView(shortcutButton,shortcutPosition);
+  updateShortcut();
   petTouch=new TextView(this);petTouch.setTag("home_pet_touch");petTouch.setContentDescription("玉绿色宠物，点击打个招呼，长按打开菜单");
   petTouch.setElevation(dp(12));
   petTouch.setOnClickListener(v->scene.react());
@@ -109,8 +110,8 @@ public class MainActivity extends Activity {
  private void applyColors(){
   foreground=Color.parseColor(dark?"#E5EDE3":"#263C31");secondary=Color.parseColor(dark?"#92A99A":"#708675");
   root.setBackgroundColor(Color.parseColor(dark?"#070D1B":"#F0F5E9"));
-  title.setTextColor(foreground);menuButton.setTextColor(foreground);
-  historyButton.setImageTintList(android.content.res.ColorStateList.valueOf(foreground));historyButton.setBackground(surface(Color.parseColor(dark?"#263D33":"#DDE8DC"),24));
+  menuButton.setTextColor(foreground);
+  shortcutButton.setTextColor(foreground);shortcutButton.setBackground(surface(Color.parseColor(dark?"#263D33":"#DDE8DC"),24));
   notificationButton.setImageTintList(android.content.res.ColorStateList.valueOf(foreground));
   notificationButton.setBackground(surface(Color.parseColor(dark?"#263D33":"#DDE8DC"),24));
   menuButton.setBackground(surface(Color.parseColor(dark?"#263D33":"#DDE8DC"),24));scene.setTheme(dark);home.setTheme(dark);
@@ -118,6 +119,26 @@ public class MainActivity extends Activity {
    int appearance=WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS|WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;
    controller.setSystemBarsAppearance(dark?0:appearance,appearance);
    controller.setSystemBarsBehavior(WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);controller.show(WindowInsets.Type.statusBars());controller.hide(WindowInsets.Type.navigationBars());
+  }
+ }
+ private final String[] shortcutNames={"数学冒险岛","日历","生活记录","新闻订阅","重要话题","长期记忆","历史记录","Obsidian 同步","打印文件","助理设置","提醒与最近结果","和 Greta 聊聊"};
+ private int shortcutIndex(int index){return index>=0&&index<shortcutNames.length?index:0;}
+ private void updateShortcut(){String name=shortcutNames[shortcutIndex(preferences.getInt("shortcut",0))];shortcutButton.setText(name);shortcutButton.setContentDescription(name+"，长按更换快捷功能");shortcutButton.setTooltipText("长按更换快捷功能");}
+ private void chooseShortcut(){new android.app.AlertDialog.Builder(this).setTitle("首页快捷入口").setSingleChoiceItems(shortcutNames,shortcutIndex(preferences.getInt("shortcut",0)),(dialog,index)->{preferences.edit().putInt("shortcut",index).apply();updateShortcut();dialog.dismiss();}).setNegativeButton("取消",null).show();}
+ private void openShortcut(int index){
+  switch(shortcutIndex(index)){
+   case 0:startActivity(new Intent(this,WebPageActivity.class));break;
+   case 1:startActivity(DecisionActions.intent(this,"open_calendar",new org.json.JSONObject()));break;
+   case 2:startActivity(DecisionActions.intent(this,"open_records",new org.json.JSONObject()));break;
+   case 3:startActivity(new Intent(this,NewsSubscriptionsActivity.class).putExtra("dark",dark));break;
+   case 4:startActivity(DecisionActions.intent(this,"open_topics",new org.json.JSONObject()));break;
+   case 5:startActivity(new Intent(this,MemoryActivity.class));break;
+   case 6:home.showHistory();break;
+   case 7:startActivity(DecisionActions.intent(this,"open_sync",new org.json.JSONObject()));break;
+   case 8:startActivity(DecisionActions.intent(this,"open_print",new org.json.JSONObject()));break;
+   case 9:startActivity(new Intent(this,AssistantSettingsActivity.class));break;
+   case 10:home.showResults();break;
+   case 11:home.focusInput();break;
   }
  }
  private void showMenu(){
@@ -136,6 +157,8 @@ public class MainActivity extends Activity {
   Switch proactive=new Switch(this);proactive.setText("偶尔主动聊两句");proactive.setTextColor(foreground);proactive.setChecked(getSharedPreferences("home_conversation",0).getBoolean("proactive",true));proactive.setOnCheckedChangeListener((v,checked)->getSharedPreferences("home_conversation",0).edit().putBoolean("proactive",checked).apply());sheet.addView(proactive);
   sheet.addView(menuAction("◷   提醒与最近结果","查看工具结果、完成或延后提醒",()->{menu.dismiss();home.showResults();}));
   menuSection(sheet,"工具");
+  sheet.addView(menuAction("数学冒险岛","打开家长中心",()->{menu.dismiss();openShortcut(0);}));
+  sheet.addView(menuAction("首页快捷入口","选择放在首页顶部的功能",()->{menu.dismiss();chooseShortcut();}));
   sheet.addView(menuAction("◷   日历","重要日期、农历和大姨妈记录",()->{menu.dismiss();startActivity(DecisionActions.intent(this,"open_calendar",new org.json.JSONObject()));}));
   sheet.addView(menuAction("▤   生活记录","日记与记账，自动保存到手机",()->{menu.dismiss();startActivity(DecisionActions.intent(this,"open_records",new org.json.JSONObject()));}));
   sheet.addView(menuAction("↻   Obsidian 同步","同步你的笔记库",()->{menu.dismiss();startActivity(DecisionActions.intent(this,"open_sync",new org.json.JSONObject()));}));
