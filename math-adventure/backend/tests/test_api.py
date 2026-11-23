@@ -257,3 +257,34 @@ def test_cross_day_repeat_has_no_second_question_reward(system):
         r=answer(c,auth,t,answers[t['question_id']]).json()
         assert r['reward']=={'xp':0,'coins':0} # Same date's daily bonus was already paid too.
     assert plan(c,auth)['player']['xp']==70
+
+
+def test_quick_publish_and_rejection_reason(system):
+    c, _ = system
+    qid = questions(c)[0]['id']
+    url = f'/api/math/parent/questions/{qid}'
+    assert c.post(url+'/check', headers=PARENT).json()['passed']
+    assert c.post(url+'/publish', headers=PARENT, json={}).status_code == 422
+    assert c.post(url+'/reject', headers=PARENT, json={'comment':'  '}).status_code == 422
+    result = c.post(url+'/publish', headers=PARENT, json={'independently_solved':True})
+    assert result.status_code == 200
+    assert result.json()['status'] == 'published'
+    assert result.json()['reviewer'] == '家长'
+    assert result.json()['review_comment'] == ''
+
+
+def test_atomic_batch_import(system):
+    c, _ = system
+    original = questions(c)
+    q = dict(original[0]['data'], source_type='ai_draft', difficulty=2)
+    endpoint = '/api/math/parent/questions/import'
+    assert c.post(endpoint, json={'questions':[q]}).status_code == 401
+    for batch in [[], [q]*51, [q, dict(q, difficulty=4)]]:
+        assert c.post(endpoint, headers=PARENT, json={'questions':batch}).status_code == 422
+        assert len(questions(c)) == len(original)
+    r = c.post(endpoint, headers=PARENT, json={'questions':[q, q]})
+    assert r.status_code == 201
+    assert len(r.json()) == 2
+    assert all(row['status']=='draft' and not row['active'] for row in r.json())
+    assert r.json()[0]['data']['difficulty'] == 2
+    assert len(questions(c)) == len(original)+2

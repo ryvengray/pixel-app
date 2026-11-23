@@ -15,7 +15,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 
 from .access import Access
-from .models import Answer, DeviceInput, Note, Operation, PlayerInput, QuestionInput, Review
+from .models import Answer, DeviceInput, Note, Operation, PlayerInput, QuestionInput, QuestionBatch, Review
 from .samples import seed
 from .store import Store, encode, now
 
@@ -171,7 +171,7 @@ def create_app(db_path=None, admin_token=None):
         result['reviewed'] = qrow['status'] == 'published'
         result['question'] = ({'id': qrow['id'], 'version': qrow['version'], 'title': q['title'],
                                'content': q['content'], 'options': q['options'], 'topic': q['topic'],
-                               'skill_tags': q['skill_tags']} if available else None)
+                               'skill_tags': q['skill_tags'], 'difficulty': q.get('difficulty', 1)} if available else None)
         if row['state'] == 'solved':
             result['explanation'] = q['explanation']
         return result
@@ -210,6 +210,20 @@ def create_app(db_path=None, admin_token=None):
                        (qid, key, encode(body.model_dump()), now(),owner))
             audit(db, 'draft', qid, {}, owner=owner)
             return admin_question(question_row(db, qid, owner))
+
+    @app.post('/api/math/parent/questions/import', status_code=201)
+    def import_questions(body: QuestionBatch, owner=Depends(parent)):
+        # Validate the entire batch before opening one atomic write transaction.
+        with store.connect(write=True) as db:
+            rows = []
+            for question in body.questions:
+                key = uuid4().hex
+                qid = key + '-v1'
+                db.execute('INSERT INTO questions(id,question_key,version,data,created_at,owner) VALUES(?,?,1,?,?,?)',
+                           (qid, key, encode(question.model_dump()), now(), owner))
+                audit(db, 'draft', qid, {'batch_import': True}, owner=owner)
+                rows.append(admin_question(question_row(db, qid, owner)))
+            return rows
 
     @app.post('/api/math/parent/questions/{qid}/versions', dependencies=[Depends(parent)], status_code=201)
     def revise(qid: str, body: QuestionInput, owner=Depends(parent)):

@@ -32,8 +32,8 @@ class QuestionInput(Model):
         return self
 
 class Review(Model):
-    reviewer: str = Field(min_length=1, max_length=40)
-    comment: str = Field(min_length=1, max_length=500)
+    reviewer: str = Field(default='家长', min_length=1, max_length=40)
+    comment: str = Field(default='', max_length=500)
     independently_solved: bool
 
 class Note(Model):
@@ -53,3 +53,6 @@ class Operation(Model):
 class Answer(Operation):
     answer: int = Field(ge=0, le=2)
     duration_seconds: int = Field(default=0, ge=0, le=86400)
+
+class QuestionBatch(Model):
+    questions: list[QuestionInput] = Field(min_length=1, max_length=50)
