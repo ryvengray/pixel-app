@@ -16,6 +16,7 @@
 #include "calibration.h"
 #include "touch_gesture.h"
 #include "ui_controls.h"
+#include "network_status.h"
 #include "frame_diff.h"
 
 namespace {
@@ -133,7 +134,7 @@ void serialControl() {
   if(c=='C')beginCalibration();
   if(c=='W')online::startPortal();
   if(c=='R')online::sync();
-  if(c=='D')Serial.printf("ONLINE wifi=%d configured=%d screen=%d heap=%u ready=%d tasks=%u pending=%d\n",int(WiFi.status()),online::wifiConfiguredOnline(),online::screen,ESP.getFreeHeap(),online::ready,unsigned(online::tasks().size()),!online::pendingBody.isEmpty());
+  if(c=='D')Serial.printf("ONLINE wifi=%d configured=%d ip=%s screen=%d heap=%u ready=%d tasks=%u pending=%d records=%u http=%d auth_invalid=%d backend=%d base=%s\n",int(WiFi.status()),online::wifiConfiguredOnline(),WiFi.localIP().toString().c_str(),online::screen,ESP.getFreeHeap(),online::ready,unsigned(online::tasks().size()),!online::pendingBody.isEmpty(),unsigned(online::outbox.size()),online::lastHttpStatus,online::authInvalid,online::backendReachable,online::base.c_str());
   if(c=='P')online::beginPair();
   if(c=='V')Serial.printf("FRAME width=%d height=%d corner=%u expected=%u\n",lcd.width(),lcd.height(),lcd.readPixelValue(319,239),unsigned((cream&0xE000)>>8|(cream&0x0700)>>6|(cream&0x0018)>>3));
   if(c=='H'){calibrating=false;online::screen=0;dirty=true;}
@@ -159,7 +160,7 @@ void setup() {
   online::init();
   if(!calibration.valid()) beginCalibration();
   else draw();
-  Serial.println("MATH ADVENTURE v0.4.3 ONLINE READY; h=help. Server-authoritative tasks and rewards.");
+  Serial.println("MATH ADVENTURE v0.4.5 ONLINE READY; h=help. Server-authoritative tasks and rewards.");
 }
 void loop() {
   serialControl();online::tick();readTouch();

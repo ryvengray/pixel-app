@@ -32,6 +32,7 @@ namespace ArduinoJson {template<>struct Converter<String>{
  static bool checkJson(JsonVariantConst src){return src.is<const char*>();}
 };}
 #include "../src/ui_controls.h"
+#include "../src/network_status.h"
 DynamicJsonDocument commands(131072);
 void cmd(const char*name,std::initializer_list<int> args){auto a=commands.as<JsonArray>().createNestedArray();a.add(name);for(int n:args)a.add(n);}
 struct Canvas {
@@ -62,13 +63,19 @@ namespace online {
 DynamicJsonDocument state(24576);
 String base="本地预览，不连接服务器",credential="desktop-local",pendingBody,message="电脑本地试玩 · 不影响正式记录",mode="practice";
 String pairCode,pairVerification,apName,apPassword,detail,numberInput,mapMessage;
-bool busy=false,ready=true,setupActive=false,refreshAfter=false,pairOpenRequested=false;
+bool busy=false,ready=true,setupActive=false,refreshAfter=false,pairOpenRequested=false,authInvalid=false;
 int selected=0,screen=0,contentPage=0,detailKind=0,serverPage=0,mapOffset=0,xp=0,coins=0,nextRetry=0;
 struct Config{void putString(const char*,const String&) {}}config;
 JsonArray tasks(){return state["tasks"].as<JsonArray>();}
 JsonObject task(){return tasks()[selected].as<JsonObject>();}
 JsonObject question(){return task()["question"].as<JsonObject>();}
 void sync(){message="本地预览，无需同步";dirty=true;}
+void statusHeader(){connectionIcon(adventure::Connection::Online);}
+String connectionLabel(){return "本地预览，网络图标示意";}
+String networkDetails(){return "IP 192.168.0.123";}
+bool wifiConfiguredOnline(){return true;}
+void resetConnection(){refreshAfter=true;nextRetry=0;}
+bool send(const String&){message="电脑预览无需连接";return true;}
 void beginPair(){message="电脑预览不配对真实设备";screen=0;dirty=true;}
 void claimPair(){}void startPortal(){message="电脑使用本地数据，无需配网";screen=0;dirty=true;}
 void requestExploration(){mapMessage="本地题目已全部在地图中";dirty=true;}

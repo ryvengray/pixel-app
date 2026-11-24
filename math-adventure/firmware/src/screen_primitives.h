@@ -1,5 +1,13 @@
 #pragma once
 // Shared by the ESP32 firmware and desktop preview.
+void connectionIcon(adventure::Connection status) {
+  frameDirty=true;
+  lcd.fillRect(296,0,24,28,pale);
+  uint16_t color=status==adventure::Connection::Online?green:status==adventure::Connection::Checking?gold:0xD986;
+  for(int i=0;i<3;++i)lcd.fillRect(299+i*6,18-i*4,4,4+i*4,color);
+  if(status==adventure::Connection::Offline){lcd.drawLine(298,5,316,23,ink);lcd.drawLine(298,23,316,5,ink);}
+  else if(status==adventure::Connection::Unauthorized){lcd.fillRect(314,3,2,7,ink);lcd.fillCircle(315,13,1,ink);}
+}
 void text(const char *s, int x, int baseline, uint16_t color = ink) {
   frameDirty=true;
   if (x < 0 || x + chinese.getUTF8Width(s) > 320 || baseline > 236) Serial.printf("TEXT OVERFLOW x=%d y=%d: %s\n",x,baseline,s);

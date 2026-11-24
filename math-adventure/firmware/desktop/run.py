@@ -65,11 +65,20 @@ def main():
     try:
         if args.smoke_test:
             home=frame({});assert home['screen']==0
+            assert ['fillRect',296,0,24,28,0xD718] in home['commands'], 'connection icon missing'
             def click(action):
                 nonlocal home
                 b=next(b for b in home['buttons'] if b['action']==action)
                 home=frame({'x':b['x']+b['w']//2,'y':b['y']+b['h']//2})
                 return home
+            click(104);assert home['screen']==4
+            controls=home['buttons']
+            assert {186,187,188,103,140}.issubset({b['action'] for b in controls})
+            for i,a in enumerate(controls):
+                for b in controls[i+1:]:
+                    assert a['x']+a['w']<=b['x'] or b['x']+b['w']<=a['x'] or a['y']+a['h']+2<=b['y'] or b['y']+b['h']+2<=a['y'], 'settings buttons overlap'
+            assert ['fillRect',296,0,24,28,0xD718] in home['commands']
+            click(188);click(100)
             click(101);assert home['screen']==1
             def check_map_layout():
                 buttons=home['buttons']

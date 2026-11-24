@@ -29,7 +29,8 @@ void continueAdventure(){
 }
 void render() {
   dirty=false;buttonCount=0;lcd.fillSprite(cream);lcd.fillRect(0,0,320,28,pale);
-  text("小语冒险岛",8,20);if(busy||pendingBody.length())text("同步中",260,20);else text(mode=="live"?"正式":(mode=="practice"?"试玩":"联网"),276,20);
+  struct HeaderIcon {~HeaderIcon(){statusHeader();}} headerIcon;
+  text("小语冒险岛",8,20);text(busy?"同步中":mode=="live"?"正式":(mode=="practice"?"试玩":"联网"),244,20);
   if(screen==5) {
     lcd.fillRect(0,0,320,28,pale);text("输入四位配对码",8,20);text(pairCode.c_str(),248,20);
     for(int i=0;i<9;++i){String digit=String(i+1);button(8+(i%3)*80,40+(i/3)*48,72,digit.c_str(),150+i);}
@@ -49,9 +50,10 @@ void render() {
   if(screen==4) {
     text(base.startsWith("http://192.168.")?"当前：局域网":"当前：公网",8,48);
     lcd.setTextColor(ink,cream);lcd.drawString(base,8,64,2);
-    if(setupActive)lcd.drawString(apName+" / "+apPassword,8,80,2);
-    button(8,86,96,"局域网",186,false);button(112,86,96,"公网",187,false);button(216,86,96,"配网",103,false);
-    button(8,136,148,"校准触摸",41,false);button(164,136,148,"开启配对",140,false);
+    text(connectionLabel().c_str(),8,82);
+    button(8,88,96,"局域网",186,false,36);button(112,88,96,"公网",187,false,36);button(216,88,96,"配网",103,false,36);
+    text(networkDetails().c_str(),8,143);
+    button(8,148,96,"校准",41,false,34);button(112,148,96,"检查连接",188,false,34);button(216,148,96,"配对",140,false,34);
     button(72,188,176,"返回首页",100);return;
   }
   if(screen==8) {
@@ -76,7 +78,7 @@ void render() {
     String journey=ready?(availableCount()?String("已点亮 ")+solvedCount()+" / "+availableCount()+" 颗星":"等家长准备新冒险"):"等待同步冒险地图";
     text(journey.c_str(),100,125);
     text(message.c_str(),8,171);
-    button(8,188,96,"小设置",104,false);button(112,188,200,credential.isEmpty()?"配对设备":(allSolved()?"看看我的星星":"开始今日冒险"),credential.isEmpty()?140:101);return;
+    button(8,188,96,"小设置",104,false);button(112,188,200,authInvalid?"重新配对设备":credential.isEmpty()?"配对设备":(allSolved()?"看看我的星星":"开始今日冒险"),(credential.isEmpty()||authInvalid)?140:101);return;
   }
   if(screen==1) {
     lcd.fillRect(0,0,320,28,pale);text(allSolved()?"星星集齐，休息一下吧":"今日星星地图",8,20);
@@ -146,7 +148,8 @@ void render() {
   }
 }
 void handle(int id) {
-  if(id==186||id==187){base=id==186?"http://192.168.0.160/math":"https://ryven.xin/math";config.putString("base",base);message=id==186?"已切换局域网":"已切换公网";refreshAfter=true;nextRetry=0;dirty=true;return;}
+  if(id==186||id==187){if(busy){message="正在请求，请稍后切换";dirty=true;return;}base=id==186?"http://192.168.0.160/math":"https://ryven.xin/math";config.putString("base",base);message=id==186?"已切换局域网":"已切换公网";resetConnection();dirty=true;return;}
+  if(id==188){if(!busy){if(wifiConfiguredOnline()){message="正在检查服务器";send("/health");}else message="Wi-Fi未连接，请重新配网";}dirty=true;return;}
   if(id==140) {beginPair();return;}
   if(screen==5&&id>=150&&id<=159) {if(pairCode.length()<4)pairCode+=String(id==159?0:id-149);dirty=true;return;}
   if(id==161&&screen==5){if(!busy)claimPair();return;}

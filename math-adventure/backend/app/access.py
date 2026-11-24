@@ -1,6 +1,7 @@
 """Email login and physically confirmed device pairing. Secrets stay out of logs."""
 import hashlib
 import hmac
+import ipaddress
 import os
 import secrets
 import smtplib
@@ -11,6 +12,20 @@ from uuid import uuid4
 
 from fastapi import BackgroundTasks, Depends, Header, HTTPException, Request, Response
 from pydantic import BaseModel, Field
+
+def session_cookie_secure(request):
+    policy=os.getenv('MATH_COOKIE_SECURE','auto').lower()
+    if policy!='auto':return policy!='false'
+    # Public hosts always require HTTPS, including behind another HTTP proxy.
+    # Only a literal private/loopback IP may use a session over local HTTP.
+    if request.url.scheme=='http':
+        try:
+            address=ipaddress.ip_address(request.url.hostname or '')
+            if (address.is_private or address.is_loopback) and not address.is_unspecified and not address.is_multicast:
+                return False
+        except ValueError:
+            pass
+    return True
 
 SCHEMA = '''
 CREATE TABLE IF NOT EXISTS users(email TEXT PRIMARY KEY, created REAL NOT NULL);
@@ -124,7 +139,7 @@ class Access:
                         token=secrets.token_urlsafe(32)
                         db.execute('INSERT INTO web_sessions VALUES(?,?,?)',(digest(token),email,time.time()+3650*86400))
             if not valid:raise HTTPException(401,'验证码无效或过期，请重新获取')
-            response.set_cookie(self.cookie,token,max_age=3650*86400,httponly=True,secure=os.getenv('MATH_COOKIE_SECURE','true').lower()=='true',samesite='strict',path=os.getenv('MATH_ROOT_PATH','') or '/')
+            response.set_cookie(self.cookie,token,max_age=3650*86400,httponly=True,secure=session_cookie_secure(request),samesite='strict',path=os.getenv('MATH_ROOT_PATH','') or '/')
             return {'email':email}
 
         @app.get('/api/math/auth/session')
