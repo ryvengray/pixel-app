@@ -1,3 +1,5 @@
 <resources>
     <string name="app_name">Greta</string>
+    <string name="quick_chat_widget_description">点击开始语音对话，快速记录事情或添加提醒</string>
+    <string name="quick_actions_widget_description">六个可自定义快捷入口，语音记事、提醒、日历、新闻和更多功能</string>
 </resources>

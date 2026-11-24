@@ -34,6 +34,7 @@ public final class RecordsActivity extends ToolActivity {
         state=text("",13);state.setTag("records_sync_state");state.setTextColor(muted);body.addView(state);
         LinearLayout actions=new LinearLayout(this);actions.addView(button("写一条",()->edit(null)),new LinearLayout.LayoutParams(0,-2,1));LinearLayout.LayoutParams settingsPosition=new LinearLayout.LayoutParams(0,-2,1);settingsPosition.leftMargin=dp(8);actions.addView(button("Obsidian 设置",this::settings),settingsPosition);body.addView(actions);
         list=new LinearLayout(this);list.setOrientation(1);body.addView(list);setContentView(scroll);render();
+        if(saved==null&&getIntent().getBooleanExtra("quick_add",false))body.post(()->edit(null));
     }
     private void renderState(){
         String tree=getSharedPreferences("life_sync",0).getString("tree",""),error=getSharedPreferences("life_sync",0).getString("error","");

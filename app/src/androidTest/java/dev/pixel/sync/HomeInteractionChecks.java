@@ -54,6 +54,37 @@ final class HomeInteractionChecks {
             settings.edit().putString("server_url","http://127.0.0.1:"+agent.server.getLocalPort()).putBoolean("decision_enabled",false).commit();
             prefs.edit().putString("draft","").putString("result","操作未完成，请检查请求").putBoolean("proactive",false).putLong("inbox_sequence",0).commit();
             new SecureStore(context).put("device_token","home-ui-test-token");
+            check("quickCaptureWidgetRoutes",()->{
+                Intent chat=QuickChatWidget.captureIntent(context,"chat");
+                Intent record=QuickChatWidget.captureIntent(context,"record");
+                Intent reminder=QuickChatWidget.captureIntent(context,"reminder");
+                expect(!chat.filterEquals(record)&&!record.filterEquals(reminder),"widget actions share PendingIntent identity");
+                expect("record".equals(record.getStringExtra(QuickChatWidget.EXTRA_CAPTURE)),"record action lost");
+                expect((chat.getFlags()&Intent.FLAG_ACTIVITY_SINGLE_TOP)!=0,"warm activity cannot receive capture");
+                expect(QuickChatWidget.validMode("reminder")&&!QuickChatWidget.validMode(null)&&!QuickChatWidget.validMode("invalid"),"invalid capture accepted");
+                test.runOnMainSync(()->{
+                    android.widget.RemoteViews remote=new android.widget.RemoteViews(context.getPackageName(),R.layout.quick_chat_widget);
+                    View widget=remote.apply(context,new android.widget.FrameLayout(context));
+                    expect(widget.findViewById(R.id.quick_chat)!=null&&widget.findViewById(R.id.quick_record)!=null&&widget.findViewById(R.id.quick_reminder)!=null,"widget actions missing");
+                });
+            });
+            check("quickActionsPanelRoutes",()->{
+                java.util.Set<String> identities=new java.util.HashSet<>();
+                for(String key:QuickActionsWidget.KEYS){
+                    Intent target=QuickActionsWidget.actionIntent(context,key);
+                    expect(target.getComponent()!=null,"missing target: "+key);
+                    expect(identities.add(target.toUri(0)),"duplicate shortcut: "+key);
+                    if(!QuickChatWidget.validMode(key))expect(target.getData()==null,"shortcut URI mistaken for file input: "+key);
+                }
+                expect(QuickActionsWidget.actionIntent(context,"write").getBooleanExtra("quick_add",false),"write does not open editor");
+                expect(QuickActionsWidget.actionIntent(context,"add_date").getBooleanExtra("add",false),"calendar add missing");
+                expect(QuickActionsWidget.actionIntent(context,"sync").getBooleanExtra("dev.pixel.sync.extra.SKIP_AUTO_SYNC",false),"sync starts without review");
+                test.runOnMainSync(()->{
+                    View panel=new android.widget.RemoteViews(context.getPackageName(),R.layout.quick_actions_widget).apply(context,new android.widget.FrameLayout(context));
+                    for(int slot:QuickActionsWidget.SLOTS)expect(panel.findViewById(slot)!=null,"missing panel slot");
+                    expect(panel.findViewById(R.id.quick_customize)!=null,"missing customize button");
+                });
+            });
             check("legacyInboxMigratesWithoutPollutingChat",()->checkLegacyInbox(context));
             try(AssistantStore store=new AssistantStore(context)){
                 for(int i=0;i<32;i++){

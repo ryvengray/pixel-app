@@ -114,6 +114,8 @@ public final class VoiceInputOverlay extends FrameLayout implements RecognitionL
         FrameLayout.LayoutParams rp=new FrameLayout.LayoutParams(dp(216),dp(64));addView(releaseHint,rp);updateReleaseHint(0);
         setOnApplyWindowInsetsListener((v,insets)->{android.graphics.Insets safe=insets.getInsets(WindowInsets.Type.systemBars()|WindowInsets.Type.displayCutout());setPadding(safe.left,safe.top,safe.right,safe.bottom);return insets;});
     }
+    private boolean tapMode;
+    public void setTapMode(){tapMode=true;stop.setText("发送");updateReleaseHint(0);}
     public void setHoldOrigin(float rawX,float rawY){holdRawX=rawX;holdRawY=rawY;requestLayout();}
     @Override protected void onLayout(boolean changed,int left,int top,int right,int bottom){
         super.onLayout(changed,left,top,right,bottom);
@@ -167,6 +169,7 @@ public final class VoiceInputOverlay extends FrameLayout implements RecognitionL
     private void updateReleaseHint(int near){
         String title=target==1?"松开将取消":target==2?"松开后编辑":"松开将发送";
         String detail=target==1?"本段语音不会发送":target==2?"先修改文字，不会立即发送":near==1?"继续滑向取消，选中后再松手":near==2?"继续滑向编辑，选中后再松手":"滑向取消或编辑可切换操作";
+        if(tapMode){title="正在听你说";detail="说完点击发送，也可取消或编辑";}
         String message=title+"\n"+detail;
         if(message.equals(releaseMessage))return;releaseMessage=message;
         android.text.SpannableString text=new android.text.SpannableString(message);

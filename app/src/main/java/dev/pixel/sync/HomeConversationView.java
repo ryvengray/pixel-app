@@ -539,12 +539,29 @@ public final class HomeConversationView extends FrameLayout {
         if(event.getActionMasked()==MotionEvent.ACTION_UP){main.removeCallbacks(beginVoice);touching=false;resetVoicePress();if(voice!=null)voice.release();else if(!voiceAttempted)speak.performClick();return true;}
         if(event.getActionMasked()==MotionEvent.ACTION_CANCEL){main.removeCallbacks(beginVoice);touching=false;resetVoicePress();if(voice!=null)voice.interrupt();return true;}return true;
     }
-    private void startVoice(){if(voice!=null)return;voiceAttempted=true;
+    public void startQuickCapture(String mode,boolean useVoice){
+        if(voice!=null)return;
+        if(input.length()>0||busy||pendingGroup!=null){
+            Toast.makeText(activity,"已有输入或对话正在处理，请继续当前对话",Toast.LENGTH_SHORT).show();focusInput();return;
+        }
+        String prefix="record".equals(mode)?"帮我记录一件事：":"reminder".equals(mode)?"帮我添加提醒：":"";
+        if(!useVoice||!android.speech.SpeechRecognizer.isRecognitionAvailable(activity)){
+            if(useVoice)Toast.makeText(activity,"这台设备暂时没有语音识别服务，可以直接打字",Toast.LENGTH_SHORT).show();
+            input.setText(prefix);focusInput();return;
+        }
+        touching=false;lastInteraction=System.currentTimeMillis();
+        input.clearFocus();composing=false;updateComposer();
+        WindowInsetsController controller=getWindowInsetsController();if(controller!=null)controller.hide(WindowInsets.Type.ime());
+        startVoice(prefix,true);
+    }
+    private void startVoice(){startVoice("",false);}
+    private void startVoice(String prefix,boolean tapMode){if(voice!=null)return;voiceAttempted=true;
         if(activity.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO)!=android.content.pm.PackageManager.PERMISSION_GRANTED){touching=false;activity.requestPermissions(new String[]{android.Manifest.permission.RECORD_AUDIO},63);Toast.makeText(activity,"授权后，请重新按住说话",Toast.LENGTH_SHORT).show();return;}
         voice=new VoiceInputOverlay(activity,new VoiceInputOverlay.Listener(){
-            public void completed(String text,boolean edit){voice=null;resetVoicePress();if(edit){input.setText(text);if(active)focusInput();}else submit(text);}
+            public void completed(String text,boolean edit){voice=null;resetVoicePress();if(!text.trim().isEmpty())text=prefix+text;if(edit){input.setText(text);if(active)focusInput();}else submit(text);}
             public void dismissed(){voice=null;resetVoicePress();}
         });
+        if(tapMode)voice.setTapMode();
         if(touching)voice.setHoldOrigin(touchStartX,touchStartY);
         else{int[] location=new int[2];speak.getLocationOnScreen(location);voice.setHoldOrigin(location[0]+speak.getWidth()/2f,location[1]+speak.getHeight()/2f);}
         voice.start();

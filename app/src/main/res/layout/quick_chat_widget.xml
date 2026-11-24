@@ -1,0 +1,13 @@
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent" android:layout_height="match_parent"
+    android:orientation="vertical" android:padding="16dp" android:background="@drawable/quick_chat_widget_background">
+    <LinearLayout android:id="@+id/quick_chat" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:orientation="vertical" android:gravity="center_vertical" android:contentDescription="开始和 Greta 语音对话" android:background="?android:attr/selectableItemBackground" android:paddingBottom="8dp">
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="GRETA · 随时在这里" android:textSize="10sp" android:textColor="#6D8576" android:letterSpacing="0.12" />
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="说吧，我在听  ↗" android:textSize="21sp" android:textStyle="bold" android:textColor="#234D3B" android:layout_marginTop="5dp" />
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="点击开始对话" android:textSize="12sp" android:textColor="#6D8576" android:layout_marginTop="3dp" />
+    </LinearLayout>
+    <LinearLayout android:layout_width="match_parent" android:layout_height="48dp" android:orientation="horizontal">
+        <TextView android:id="@+id/quick_record" android:layout_width="0dp" android:layout_weight="1" android:layout_height="match_parent" android:gravity="center" android:text="记一件事" android:textSize="14sp" android:textColor="#234D3B" android:background="@drawable/quick_chat_widget_action" android:contentDescription="语音快速记录一件事" />
+        <TextView android:id="@+id/quick_reminder" android:layout_width="0dp" android:layout_weight="1" android:layout_height="match_parent" android:layout_marginStart="8dp" android:gravity="center" android:text="添加提醒" android:textSize="14sp" android:textColor="#234D3B" android:background="@drawable/quick_chat_widget_action" android:contentDescription="语音快速添加提醒" />
+    </LinearLayout>
+</LinearLayout>

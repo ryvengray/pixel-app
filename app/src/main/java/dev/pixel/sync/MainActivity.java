@@ -20,6 +20,8 @@ import android.view.*;
 import android.widget.*;
 
 public class MainActivity extends Activity {
+ private String pendingCapture;
+ private boolean capturePermissionPending;
  private PetScene scene;
  private HomeConversationView home;
  private SharedPreferences preferences;
@@ -91,6 +93,25 @@ public class MainActivity extends Activity {
   if(home!=null&&event.getActionMasked()==MotionEvent.ACTION_DOWN)home.dismissKeyboardOutside(event.getRawX(),event.getRawY());
   return super.dispatchTouchEvent(event);
  }
+ private void acceptQuickCapture(){
+  Intent intent=getIntent();String mode=intent.getStringExtra(QuickChatWidget.EXTRA_CAPTURE);
+  intent.removeExtra(QuickChatWidget.EXTRA_CAPTURE);
+  if(QuickChatWidget.validMode(mode))pendingCapture=mode;
+ }
+ private void launchQuickCapture(){
+  if(pendingCapture==null||capturePermissionPending||!hasWindowFocus()||isFinishing())return;
+  if(checkSelfPermission(android.Manifest.permission.RECORD_AUDIO)!=android.content.pm.PackageManager.PERMISSION_GRANTED){
+   capturePermissionPending=true;requestPermissions(new String[]{android.Manifest.permission.RECORD_AUDIO},64);return;
+  }
+  String mode=pendingCapture;pendingCapture=null;home.startQuickCapture(mode,true);
+ }
+ @Override public void onRequestPermissionsResult(int code,String[] permissions,int[] grants){
+  super.onRequestPermissionsResult(code,permissions,grants);
+  if(code==64){capturePermissionPending=false;
+   if(grants.length>0&&grants[0]==android.content.pm.PackageManager.PERMISSION_GRANTED)root.post(this::launchQuickCapture);
+   else if(pendingCapture!=null){String mode=pendingCapture;pendingCapture=null;home.startQuickCapture(mode,false);}
+  }
+ }
  private void updatePetPlacement(){
   if(scene.getWidth()==0||scene.getHeight()==0)return;
   if(petTouch.getVisibility()!=View.VISIBLE||petTouch.getWidth()==0){scene.setPlacement(.5f,.75f,0);return;}
@@ -104,7 +125,7 @@ public class MainActivity extends Activity {
   if(moveComposer)home.setPadding(0,0,0,Math.max(0,ime.bottom-safe.bottom));
   if(!imeAnimating)home.onKeyboard(insets.isVisible(WindowInsets.Type.ime()));
  }
- @Override public void onWindowFocusChanged(boolean focused){super.onWindowFocusChanged(focused);if(focused)DecisionActions.onFocus(this);}
+ @Override public void onWindowFocusChanged(boolean focused){super.onWindowFocusChanged(focused);if(focused){DecisionActions.onFocus(this);root.post(this::launchQuickCapture);}}
  private TextView text(String value,int size){TextView v=new TextView(this);v.setText(value);v.setTextSize(size);return v;}
  private GradientDrawable surface(int color,int radius){GradientDrawable d=new GradientDrawable();d.setColor(color);d.setCornerRadius(dp(radius));return d;}
  private void applyColors(){
@@ -230,10 +251,10 @@ public class MainActivity extends Activity {
  }
  private void menuSection(LinearLayout sheet,String title){TextView label=text(title,11);label.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));label.setTextColor(secondary);label.setPadding(dp(4),dp(13),0,dp(8));sheet.addView(label);}
  private View menuAction(String label,String detail,Runnable action){LinearLayout card=new LinearLayout(this);card.setOrientation(LinearLayout.VERTICAL);card.setPadding(dp(15),dp(10),dp(15),dp(10));card.setBackground(new android.graphics.drawable.RippleDrawable(android.content.res.ColorStateList.valueOf(Color.parseColor(dark?"#406651":"#CADBC7")),surface(Color.parseColor(dark?"#294536":"#E3ECDC"),15),null));TextView name=text(label,15);name.setTextColor(foreground);name.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));card.addView(name);TextView sub=text(detail,12);sub.setTextColor(secondary);sub.setPadding(dp(27),dp(2),0,0);card.addView(sub);LinearLayout.LayoutParams cp=new LinearLayout.LayoutParams(-1,-2);cp.bottomMargin=dp(6);card.setLayoutParams(cp);card.setOnClickListener(v->action.run());return card;}
- @Override protected void onNewIntent(Intent intent){super.onNewIntent(intent);setIntent(intent);handleIncomingFile(intent);home.syncInbox();}
+ @Override protected void onNewIntent(Intent intent){super.onNewIntent(intent);setIntent(intent);handleIncomingFile(intent);home.syncInbox();acceptQuickCapture();root.post(this::launchQuickCapture);}
  @Override public void onResume(){super.onResume();LifeSync.schedule(this);if(preferences.getInt("theme",0)==0)dark=systemDark();scene.resumeScene();applyColors();
   registerReceiver(pushArrived,new IntentFilter(GretaFirebaseMessagingService.INBOX_CHANGED),Context.RECEIVER_NOT_EXPORTED);
-  home.resume();
+  home.resume();acceptQuickCapture();root.post(this::launchQuickCapture);
   String messageId=getIntent().getStringExtra("message_id");getIntent().removeExtra("message_id");
   home.openIncoming(messageId);
  }

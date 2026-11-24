@@ -318,3 +318,21 @@ X 预设 `@elonmusk` 和 `@karpathy`，也支持添加其他公开账号的用�
 javac -d /tmp/greta-x-rules app/src/main/java/dev/pixel/sync/XNotificationRules.java tests/java/dev/pixel/sync/XNotificationRulesTest.java
 java -cp /tmp/greta-x-rules dev.pixel.sync.XNotificationRulesTest
 ```
+
+
+### Greta 桌面快速对话微件
+
+更新 Android App 后，长按桌面空白处 → 微件 → Greta →「Greta · 快速对话」，拖到桌面即可使用（默认 4×2，可调整大小）。
+
+- 点击「说吧，我在听」直接打开 Greta 并开始语音对话。
+- 点击「记一件事」或「添加提醒」开始语音输入，并把本次输入明确交给 Agent 记录或创建提醒。
+- 说完点击「发送」，也可以取消或先编辑文字。提醒缺少时间等信息时，继续在对话中补充，以 Agent 的执行结果为准。
+- 首次使用会请求麦克风权限；拒绝授权或系统无语音识别服务时改用文字输入。已有未完成输入或 Agent 正忙时保留当前对话，不覆盖草稿。
+- 微件只在点击后打开前台录音，不在桌面后台持续监听。使用现有 Agent 服务与账户配置，无需额外配置微件。
+
+
+### Greta 自定义快捷面板微件
+
+长按桌面 → 微件 → Greta →「Greta · 快捷面板」。顶部可直接语音对话，六个快捷位置默认是语音记事、添加提醒、写一条、日历、新闻订阅、数学冒险岛。点击右上角「自定义」可分别更换为新增日程、生活记录、重要话题、长期记忆、历史记录、打印文件、Obsidian 同步、助理设置等入口。每个微件独立保存配置；取消配置不保存改动。
+
+「写一条」直接打开生活记录编辑器，「新增日程」直接进入日历添加流程。打印与同步入口先打开对应页面，由用户选择文件或确认操作。原有较小的快速对话微件保留。
