@@ -133,3 +133,31 @@ def test_admin_import_is_shared_but_device_history_is_private(system):
     assert stats_a['attempt_count']==1 and stats_b['attempt_count']==0
     with sqlite3.connect(path) as db:
         assert db.execute("SELECT COUNT(*) FROM questions WHERE owner<>'shared'").fetchone()[0]==0
+
+
+@pytest.mark.parametrize('origin,policy,secure,status',[
+    ('http://192.168.0.160','auto',False,200),
+    ('https://192.168.0.160','auto',True,200),
+    ('https://ryven.xin','auto',True,200),
+    ('http://ryven.xin','auto',True,401),
+    ('http://192.168.0.160','true',True,401),
+])
+def test_email_login_cookie_matches_transport(system,monkeypatch,origin,policy,secure,status):
+    c,path,sent=system
+    monkeypatch.setenv('MATH_COOKIE_SECURE',policy)
+    c.base_url=origin
+    email='transport@example.test'
+    assert c.post('/api/math/auth/code',json={'email':email}).status_code==200
+    verified=c.post('/api/math/auth/verify',json={'email':email,'code':sent[email]})
+    assert verified.status_code==200
+    from http.cookies import SimpleCookie
+    cookie=SimpleCookie();cookie.load(verified.headers['set-cookie'])
+    assert bool(cookie['math_parent_session']['secure'])==secure
+    assert cookie['math_parent_session']['httponly']
+    assert cookie['math_parent_session']['samesite']=='strict'
+    # Let the HTTP client apply its cookie policy, without injecting Cookie headers.
+    assert c.get('/api/math/auth/session').status_code==status
+    if status==200:
+        assert c.get('/api/math/parent/dashboard').status_code==200
+        assert c.post('/api/math/auth/logout',headers={'X-Math-Request':'1'}).status_code==200
+        assert c.get('/api/math/auth/session').status_code==401
