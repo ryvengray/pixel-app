@@ -16,6 +16,7 @@
 #include "calibration.h"
 #include "touch_gesture.h"
 #include "ui_controls.h"
+#include "network_status.h"
 #include "frame_diff.h"
 
 namespace {
@@ -53,43 +54,7 @@ float rawX[3], rawY[3], sampleX = 0, sampleY = 0;
 const int targets[4][2] = {{24,48}, {296,48}, {24,212}, {296,212}};
 bool touchEnabled = false, inputDown=false, suppressTouch=false;
 
-void text(const char *s, int x, int baseline, uint16_t color = ink) {
-  frameDirty=true;
-  if (x < 0 || x + chinese.getUTF8Width(s) > 320 || baseline > 236) Serial.printf("TEXT OVERFLOW x=%d y=%d: %s\n",x,baseline,s);
-  chinese.setForegroundColor(color);
-  chinese.setCursor(x, baseline);
-  chinese.print(s);
-}
-void centered(const char *s, int baseline) {
-  text(s, (320 - chinese.getUTF8Width(s)) / 2, baseline);
-}
-void button(int x, int y, int w, const char *label, int action, bool primary = true) {
-  lcd.fillRoundRect(x, y + 2, w, 44, 11, primary ? ink : 0xC671);
-  lcd.fillRoundRect(x, y, w, 44, 11, primary ? green : pale);
-  text(label, x + (w - chinese.getUTF8Width(label)) / 2, y + 28, primary ? TFT_WHITE : ink);
-  adventure::registerButton(buttons,buttonCount,{x,y,w,44,action,primary});
-}
-void face(int x, int y, bool wizard, bool blink = false) {
-  frameDirty=true;
-  lcd.fillCircle(x, y, 23, wizard ? 0xFE96 : 0x9ED5);
-  if (blink) {
-    lcd.drawFastHLine(x-10, y-2, 5, ink); lcd.drawFastHLine(x+5, y-2, 5, ink);
-  } else {
-    lcd.fillCircle(x-8,y-2,2,ink); lcd.fillCircle(x+8,y-2,2,ink);
-  }
-  lcd.drawLine(x-4,y+7,x,y+9,ink); lcd.drawLine(x,y+9,x+4,y+7,ink);
-  lcd.fillCircle(x-15,y+6,4,0xFBAE); lcd.fillCircle(x+15,y+6,4,0xFBAE);
-  if (wizard) {
-    lcd.fillTriangle(x-25,y-18,x+25,y-18,x-8,y-53,0x8C9B);
-    lcd.fillRoundRect(x-29,y-20,58,7,3,0x8C9B);
-    lcd.fillCircle(x-8,y-39,3,gold);
-  }
-}
-void star(int x, int y, bool filled) {
-  uint16_t color = filled ? gold : 0xC6D2;
-  lcd.fillTriangle(x,y-9,x-8,y+7,x+8,y+7,color);
-  lcd.fillTriangle(x-10,y-3,x+10,y-3,x,y+10,color);
-}
+#include "screen_primitives.h"
 #include "online.h"
 
 void draw() {if(inputDown){suppressTouch=true;gesture=adventure::TouchGesture{};}online::render();}
@@ -169,7 +134,7 @@ void serialControl() {
   if(c=='C')beginCalibration();
   if(c=='W')online::startPortal();
   if(c=='R')online::sync();
-  if(c=='D')Serial.printf("ONLINE wifi=%d configured=%d screen=%d heap=%u ready=%d tasks=%u pending=%d\n",int(WiFi.status()),online::wifiConfiguredOnline(),online::screen,ESP.getFreeHeap(),online::ready,unsigned(online::tasks().size()),!online::pendingBody.isEmpty());
+  if(c=='D')Serial.printf("ONLINE wifi=%d configured=%d ip=%s screen=%d heap=%u ready=%d tasks=%u pending=%d records=%u http=%d auth_invalid=%d backend=%d base=%s\n",int(WiFi.status()),online::wifiConfiguredOnline(),WiFi.localIP().toString().c_str(),online::screen,ESP.getFreeHeap(),online::ready,unsigned(online::tasks().size()),!online::pendingBody.isEmpty(),unsigned(online::outbox.size()),online::lastHttpStatus,online::authInvalid,online::backendReachable,online::base.c_str());
   if(c=='P')online::beginPair();
   if(c=='V')Serial.printf("FRAME width=%d height=%d corner=%u expected=%u\n",lcd.width(),lcd.height(),lcd.readPixelValue(319,239),unsigned((cream&0xE000)>>8|(cream&0x0700)>>6|(cream&0x0018)>>3));
   if(c=='H'){calibrating=false;online::screen=0;dirty=true;}
@@ -195,7 +160,7 @@ void setup() {
   online::init();
   if(!calibration.valid()) beginCalibration();
   else draw();
-  Serial.println("MATH ADVENTURE v0.4.3 ONLINE READY; h=help. Server-authoritative tasks and rewards.");
+  Serial.println("MATH ADVENTURE v0.4.5 ONLINE READY; h=help. Server-authoritative tasks and rewards.");
 }
 void loop() {
   serialControl();online::tick();readTouch();

@@ -18,6 +18,10 @@ int serverPage=0, mapOffset=0;
 String exploreTaskId, mapMessage;
 int selected=0, screen=0, contentPage=0; // home, map, question, method/hint, settings
 DynamicJsonDocument outbox(24576);
+int pendingIndex=-1;
+bool authInvalid=false,connectionChecked=false;
+int lastHttpStatus=0,lastConnection=-1;
+uint32_t nextHealth=0;
 String numberInput;
 int detailKind=0; // method, hint, encouragement
 
@@ -58,27 +62,64 @@ void worker(void*) {
   }
 }
 void statusHeader() {
-  lcd.fillRect(244,0,76,28,pale);
-  text(busy?"同步中":(pendingBody.length()?"待同步":(mode=="live"?"正式":(mode=="practice"?"试玩":"联网"))),260,20);
+  connectionIcon(adventure::connectionState(wifiConfiguredOnline(),connectionChecked,backendReachable,authInvalid));
 }
+String connectionLabel(){
+  if(!wifiConfiguredOnline())return "Wi-Fi未连接，请重新配网";
+  if(!connectionChecked)return "Wi-Fi已连接，正在检查服务";
+  if(!backendReachable)return "Wi-Fi已连接，服务器不可达";
+  if(authInvalid)return "服务已连通，请重新配对设备";
+  if(lastHttpStatus>=400)return String("服务已连通，HTTP ")+lastHttpStatus;
+  return "Wi-Fi和服务器均已连接";
+}
+void resetConnection(){backendReachable=false;connectionChecked=false;lastHttpStatus=0;nextHealth=0;refreshAfter=true;nextRetry=0;}
+String networkDetails(){if(setupActive)return apName+" / "+apPassword;return wifiConfiguredOnline()?String("IP ")+WiFi.localIP().toString():String("请连接家庭2.4GHz Wi-Fi");}
 bool send(const String &path,const String &body="") {
   if(busy||base.isEmpty()||(credential.isEmpty()&&!path.startsWith("/api/math/pair/")&&path!="/health")||WiFi.status()!=WL_CONNECTED) return false;
   Work *w=new Work{base,path.startsWith("/api/math/pair/")?pairSecret:credential,path,body};
   if(xQueueSend(jobs,&w,0)!=pdTRUE) {delete w;return false;}
   busy=true;statusHeader();return true;
 }
-void sync() { send(String("/api/math/device/state?page=")+serverPage); }
+void sync() { if(!authInvalid)send(String("/api/math/device/state?page=")+serverPage); }
 JsonArray tasks() {return state["tasks"].as<JsonArray>();}
 JsonObject task() {return tasks()[selected].as<JsonObject>();}
 JsonObject question() {return task()["question"].as<JsonObject>();}
-void cacheState() {String cached;serializeJson(state,cached);config.putString("cached-state",cached);}
-bool saveOutbox(){String saved;serializeJson(outbox,saved);return config.putString("outbox",saved)==saved.length();}
-void loadPending(){
-  pendingPath="";pendingBody="";
-  if(outbox.size()){pendingPath=outbox[0]["path"].as<String>();pendingBody=outbox[0]["body"].as<String>();}
+void cacheState() {
+  String cached;serializeJson(state,cached);
+  // NVS strings must fit in one page; task payloads can be larger. Store a
+  // multipage blob instead. Only this downloadable cache may be evicted.
+  if(config.isKey("cached-state"))config.remove("cached-state");
+  if(config.isKey("state-cache"))config.remove("state-cache");
+  if(config.putBytes("state-cache",cached.c_str(),cached.length())!=cached.length())Serial.println("MATH cache unavailable; queued records preserved");
 }
-void acknowledge(){outbox.remove(0);saveOutbox();loadPending();config.remove("pending");}
+bool loadCachedState(){
+  if(!config.isKey("state-cache"))return !deserializeJson(state,config.getString("cached-state",""));
+  size_t size=config.getBytesLength("state-cache");if(!size||size>24000)return false;
+  char *bytes=static_cast<char*>(malloc(size));if(!bytes)return false;
+  bool loaded=config.getBytes("state-cache",bytes,size)==size&&!deserializeJson(state,static_cast<const char*>(bytes),size);
+  free(bytes);return loaded;
+}
+bool saveOutbox(){
+  String saved;serializeJson(outbox,saved);
+  if(config.putString("outbox",saved)==saved.length())return true;
+  // Pending learning records take priority over the downloadable state cache.
+  if(config.isKey("cached-state"))config.remove("cached-state");
+  if(config.isKey("state-cache"))config.remove("state-cache");
+  return config.putString("outbox",saved)==saved.length();
+}
+void loadPending(){
+  pendingPath="";pendingBody="";pendingIndex=-1;
+  pendingIndex=adventure::pendingOperationIndex(outbox);
+  if(pendingIndex>=0){pendingPath=outbox[pendingIndex]["path"].as<String>();pendingBody=outbox[pendingIndex]["body"].as<String>();}
+}
+void acknowledge(){if(pendingIndex>=0)outbox.remove(pendingIndex);saveOutbox();loadPending();config.remove("pending");}
+void blockPending(int status,const String &reason,bool all=false){
+  for(unsigned i=0;i<outbox.size();++i)if(all||int(i)==pendingIndex){outbox[i]["blocked"]=true;outbox[i]["http_status"]=status;outbox[i]["reason"]=reason.substring(0,160);}
+  if(!saveOutbox())message="记录保存失败，请勿断电";
+  loadPending();refreshAfter=true;nextRetry=0;
+}
 void submit(const char *path,int answer=-1,bool numeric=false) {
+  if(authInvalid){message="请家长重新配对设备";dirty=true;return;}
   if(!question()["solution"].is<JsonObject>()){message="请联网重新同步题目";refreshAfter=true;dirty=true;return;}
   if(!ready||!task()["available"].as<bool>()) {message="请先同步今日任务";dirty=true;return;}
   if(outbox.size()>=60){message="待同步记录已满，请先联网";dirty=true;return;}
@@ -109,7 +150,8 @@ void submit(const char *path,int answer=-1,bool numeric=false) {
   cacheState();contentPage=0;message="已保存，后台同步中";dirty=true;nextRetry=0;
 }
 void requestExploration(){
-  for(auto entry:outbox.as<JsonArray>())if(entry["path"]=="/api/math/adventure/explore"){message="正在寻找新关卡";dirty=true;return;}
+  if(authInvalid){mapMessage=message="请家长重新配对设备";dirty=true;return;}
+  for(auto entry:outbox.as<JsonArray>())if(entry["blocked"]!=true&&entry["path"]=="/api/math/adventure/explore"){message="正在寻找新关卡";dirty=true;return;}
   if(outbox.size()>=60){message="请先联网同步记录";dirty=true;return;}
   char id[40];snprintf(id,sizeof(id),"%08lx%08lx%08lx%08lx",(unsigned long)esp_random(),(unsigned long)esp_random(),(unsigned long)esp_random(),(unsigned long)esp_random());
   DynamicJsonDocument body(256);body["request_id"]=id;String serialized;serializeJson(body,serialized);
@@ -124,7 +166,7 @@ void startPortal() {
     char name[32];snprintf(name,sizeof(name),"Math-Setup-%04lx",(unsigned long)(ESP.getEfuseMac()&0xffff));apName=name;
     char key[32];snprintf(key,sizeof(key),"%08lx%08lx",(unsigned long)esp_random(),(unsigned long)esp_random());csrf=key;
   }
-  WiFi.setAutoReconnect(false);
+  WiFi.setAutoReconnect(true);
   if(WiFi.status()!=WL_CONNECTED)WiFi.disconnect(false);
   WiFi.mode(WIFI_AP_STA);WiFi.softAPConfig(IPAddress(192,168,4,1),IPAddress(192,168,4,1),IPAddress(255,255,255,0));
   WiFi.softAP(apName.c_str(),apPassword.c_str());captiveDns.stop();captiveDns.start(53,"*",WiFi.softAPIP());setupActive=true;setupUntil=millis()+600000;
@@ -132,7 +174,8 @@ void startPortal() {
 }
 void init() {
   config.begin("math-network",false);base=config.getString("base","http://192.168.0.160/math");credential=config.getString("device","");
-  pairSecret=config.getString("pair-secret","");pairBody=config.getString("pair-body","");pairWaiting=pairSecret.length()&&!pairBody.length();
+  pairSecret=config.getString("pair-secret","");pairBody=config.getString("pair-body","");pairWaiting=adventure::resumePairPolling(pairSecret.length(),pairBody.length(),config.getBool("pair-waiting",false));
+  if(pairSecret.length()&&!pairBody.length()&&!pairWaiting){pairSecret="";config.remove("pair-secret");}
   DynamicJsonDocument envelope(1024);
   if(!deserializeJson(envelope,config.getString("pending",""))) {
     pendingPath=envelope["path"].as<String>();pendingBody=envelope["body"].as<String>();
@@ -140,7 +183,9 @@ void init() {
   if(deserializeJson(outbox,config.getString("outbox","[]")))outbox.to<JsonArray>();
   if(!outbox.size()&&pendingBody.length()){auto e=outbox.createNestedObject();e["path"]=pendingPath;e["body"]=pendingBody;saveOutbox();}
   loadPending();
-  if(!deserializeJson(state,config.getString("cached-state",""))&&state["tasks"].is<JsonArray>()){
+  authInvalid=config.getBool("auth-invalid",false);
+  if(authInvalid&&pendingBody.length())blockPending(401,"设备凭证无效",true);
+  if(loadCachedState()&&state["tasks"].is<JsonArray>()){
     ready=true;serverPage=state["page"]|0;mode=state["mode"].as<String>();day=state["day"].as<String>();xp=state["player"]["xp"]|0;coins=state["player"]["coins"]|0;
   }
   jobs=xQueueCreate(1,sizeof(Work*));replies=xQueueCreate(1,sizeof(Result*));
@@ -216,9 +261,10 @@ rescan.addEventListener('click',scan);scan();
   });
   portal.on("/save",HTTP_POST,[](){
     if(!setupActive||portal.client().localIP()!=WiFi.softAPIP()||portal.arg("csrf")!=csrf) {portal.send(403);return;}
-    if(!pendingBody.isEmpty()||busy) {portal.send(409,"text/plain; charset=utf-8","有未确认提交，请先同步，避免更换设备归属。");return;}
+    if(busy) {portal.send(409,"text/plain; charset=utf-8","正在请求服务器，请稍后再保存。");return;}
     String url=portal.arg("base");url.trim();while(url.endsWith("/"))url.remove(url.length()-1);
     String tok=portal.arg("device");tok.trim();if(tok.isEmpty())tok=credential;
+    if(tok!=credential&&!pendingBody.isEmpty()){portal.send(409,"text/plain; charset=utf-8","有待同步记录，请先同步后更换设备令牌。");return;}
     String ssid=portal.arg("ssid"),pass=portal.arg("wifi");
     bool detected=false;int scanCount=WiFi.scanComplete();
     for(int i=0;i<scanCount;++i)if(WiFi.SSID(i)==ssid)detected=true;
@@ -227,7 +273,7 @@ rescan.addEventListener('click',scan);scan();
     if(pass.isEmpty()&&!portal.hasArg("open")) {portal.send(422,"text/plain; charset=utf-8","新选择的网络需要填写密码。");return;}
     if(!validUrl(url)||ssid.isEmpty()||ssid.length()>32||pass.length()>64) {portal.send(422,"text/plain; charset=utf-8","请检查地址、Wi-Fi与设备令牌");return;}
     config.putString("base",url);config.putString("device",tok);config.putString("ssid",ssid);config.putString("wifi",pass);
-    base=url;credential=tok;configuredSsid=ssid;ready=false;state.clear();
+    base=url;if(tok!=credential){authInvalid=false;config.putBool("auth-invalid",false);}credential=tok;configuredSsid=ssid;resetConnection();
     portal.send(200,"text/html; charset=utf-8","已保存，可以回到屏幕等待同步。热点将在十分钟后关闭。");
     WiFi.disconnect(false);WiFi.setAutoReconnect(true);WiFi.begin(ssid.c_str(),pass.c_str());screen=0;message="正在连接小伙伴";nextPoll=0;dirty=true;
   });
@@ -258,14 +304,23 @@ void claimPair() {
 void tick() {
   if(setupActive)captiveDns.processNextRequest();
   portal.handleClient();
+  int connection=int(adventure::connectionState(wifiConfiguredOnline(),connectionChecked,backendReachable,authInvalid));
+  if(connection!=lastConnection){
+    lastConnection=connection;dirty=true;
+    if(!wifiConfiguredOnline()){backendReachable=false;connectionChecked=false;nextHealth=0;message="Wi-Fi断开，正在重新连接";}
+    else if(authInvalid)message="服务已连通，请重新配对设备";
+  }
   if(screen==5&&!wifiConfiguredOnline()){backendReachable=false;screen=7;message="Wi-Fi断开，请先恢复连接";dirty=true;}
   if(setupActive && (int32_t)(millis()-setupUntil)>=0 && WiFi.softAPgetStationNum()==0) {captiveDns.stop();WiFi.softAPdisconnect(true);WiFi.setAutoReconnect(true);setupActive=false;dirty=true;}
   Result *r=nullptr;
   if(replies && xQueueReceive(replies,&r,0)==pdTRUE) {
+    lastHttpStatus=r->status;connectionChecked=true;backendChecked=millis();
+    backendReachable=r->status>0;nextHealth=millis()+30000;
+    Serial.printf("MATH HTTP status=%d path=%s\n",r->status,r->path.c_str());
     if(r->path=="/health") {
       busy=false;DynamicJsonDocument health(512);
       backendReachable=r->status==200&&!deserializeJson(health,r->body)&&health["ok"]==true&&health["service"]=="math-adventure";
-      backendChecked=millis();
+      if(!pairOpenRequested)message=connectionLabel();
       if(pairOpenRequested){pairOpenRequested=false;if(backendReachable)preparePair();else{screen=7;message="服务器不可达，请检查网络";}}
       delete r;dirty=true;return;
     }
@@ -274,10 +329,10 @@ void tick() {
       if(r->status==200&&valid) {
         String status=result["state"].as<String>();
         pairVerification=result["verification"]|"";
-        if(status=="approved") {credential=pairSecret;config.putString("device",credential);pairSecret="";pairBody="";pairWaiting=false;config.remove("pair-secret");config.remove("pair-body");ready=false;screen=0;nextPoll=0;message="配对成功，正在同步";}
-        else if(status=="claimed") {pairBody="";config.remove("pair-body");pairWaiting=true;if(screen==5||screen==6)screen=6;}
-        else {pairBody="";pairSecret="";pairWaiting=false;config.remove("pair-secret");config.remove("pair-body");screen=4;message="配对已结束，请重新开启";}
-      } else if(r->status==400||r->status==404||r->status==429) {pairBody="";config.remove("pair-body");pairWaiting=false;screen=4;message="配对码无效或操作太频繁";}
+        if(status=="approved") {credential=pairSecret;config.putString("device",credential);authInvalid=false;config.putBool("auth-invalid",false);pairSecret="";pairBody="";pairWaiting=false;config.putBool("pair-waiting",false);config.remove("pair-secret");config.remove("pair-body");ready=false;screen=0;nextPoll=0;message="配对成功，正在同步";}
+        else if(status=="claimed") {pairBody="";config.remove("pair-body");pairWaiting=true;config.putBool("pair-waiting",true);if(screen==5||screen==6)screen=6;}
+        else {pairBody="";pairSecret="";pairWaiting=false;config.putBool("pair-waiting",false);config.remove("pair-secret");config.remove("pair-body");screen=4;message="配对已结束，请重新开启";}
+      } else if(r->status==400||r->status==404||r->status==429) {pairBody="";pairSecret="";config.remove("pair-body");config.remove("pair-secret");pairWaiting=false;config.putBool("pair-waiting",false);screen=4;message="配对码无效或操作太频繁";}
       pairPoll=millis()+3000;delete r;dirty=true;return;
     }
     busy=false;bool redraw=false;String previousMessage=message;
@@ -301,12 +356,13 @@ void tick() {
         if(!data["tasks"].size()&&serverPage>0){serverPage=0;mapOffset=0;refreshAfter=true;nextRetry=0;delete r;return;}
         String before,after;serializeJson(state,before);serializeJson(data,after);redraw=!ready||before!=after;
         String oldDay=day, oldId=resumeTask.length()?resumeTask:task()["id"].as<String>();resumeTask="";
-        if(outbox.size()){delete r;return;}
+        if(pendingBody.length()){delete r;return;}
         state=data;serverPage=state["page"]|0;if(mapOffset>=(int)tasks().size())mapOffset=0;cacheState();mode=state["mode"].as<String>();day=state["day"].as<String>();ready=true;
         xp=state["player"]["xp"]|0;coins=state["player"]["coins"]|0;
         selected=0;
         for(unsigned i=0;i<tasks().size();++i)if(tasks()[i]["id"].as<String>()==oldId) selected=i;
-        if(oldDay.length()&&oldDay!=day){screen=0;contentPage=0;}
+        bool oldTaskFound=false;for(auto t:tasks())if(t["id"].as<String>()==oldId)oldTaskFound=true;
+        if((oldDay.length()&&oldDay!=day)||(!oldTaskFound&&(screen==2||screen==3||screen==8||screen==9))){screen=0;contentPage=0;}
         message=tasks().size()?"冒险已同步":"请家长审核并安排题目";
         if(exploreTaskId.length()){
           for(unsigned i=0;i<tasks().size();++i)if(tasks()[i]["id"].as<String>()==exploreTaskId){selected=i;screen=2;contentPage=0;detailKind=0;}
@@ -316,17 +372,20 @@ void tick() {
         // Acknowledge uploads without interrupting the child's current screen.
         acknowledge();
         xp=data["player"]["xp"]|xp;coins=data["player"]["coins"]|coins;
-        nextRetry=0;refreshAfter=!outbox.size();
-        message=outbox.size()?"记录继续同步中":"记录已同步";
+        nextRetry=0;refreshAfter=!pendingBody.length();
+        message=pendingBody.length()?"记录继续同步中":"记录已同步";
 
       }
     } else {
-      if(r->status==401) {message="设备令牌无效，请检查配置";nextRetry=millis()+30000;}
-      else if(r->status==409||r->status==404||r->status==422) {
-        message="任务已变化，记录保留待处理";nextRetry=millis()+30000;
-      } else message=WiFi.status()!=WL_CONNECTED?"网络断开，正在重新连接":"同步未成功，稍后自动重试";
-      if(r->path=="/api/math/adventure/explore")mapMessage="网络暂时没连上，稍后再试";
       nextRetry=millis()+5000;
+      if(r->status==401) {
+        authInvalid=true;config.putBool("auth-invalid",true);blockPending(401,"设备凭证无效",true);
+        message="服务已连通，请重新配对设备";
+      }else if(pendingIndex>=0&&r->path==pendingPath&&adventure::rejectedOperation(r->status)) {
+        blockPending(r->status,data["detail"]|"操作已失效");message="旧记录已保留，正在更新任务";
+      }else if(r->status>0&&r->status!=200){message=String("服务器响应 HTTP ")+r->status;nextRetry=millis()+30000;}
+      else message=WiFi.status()!=WL_CONNECTED?"网络断开，正在重新连接":r->status==200?"服务数据异常，稍后重试":"服务器不可达，请检查地址";
+      if(r->path=="/api/math/adventure/explore")mapMessage=message;
     }
     delete r;if(redraw||previousMessage!=message)dirty=true;statusHeader();
   }
@@ -334,180 +393,11 @@ void tick() {
     send(pairBody.length()?"/api/math/pair/claim":"/api/math/pair/status",pairBody);pairPoll=millis()+3000;return;
   }
   if(!busy && WiFi.status()==WL_CONNECTED && (int32_t)(millis()-nextRetry)>=0) {
-    if(pendingBody.length()) {send(pendingPath,pendingBody);nextRetry=millis()+5000;}
-    else if(refreshAfter||(!ready)||(screen==0&&(int32_t)(millis()-nextPoll)>=0)) {
+    if(!authInvalid&&pendingBody.length()) {send(pendingPath,pendingBody);nextRetry=millis()+5000;}
+    else if(!authInvalid&&!credential.isEmpty()&&(refreshAfter||(!ready)||(screen==0&&(int32_t)(millis()-nextPoll)>=0))) {
       refreshAfter=false;nextRetry=millis()+5000;nextPoll=millis()+30000;sync();
-    }
+    }else if((int32_t)(millis()-nextHealth)>=0) {send("/health");nextHealth=millis()+30000;}
   }
 }
-// UTF-8 wrapping keeps all text available; never truncate the original question or method.
-String lines[64];int lineCount=0;
-void wrap(String s) {
-  String line;
-  for(unsigned i=0;i<s.length();) {
-    unsigned char c=s[i];int n=c<128?1:(c<224?2:(c<240?3:4));
-    String glyph=s.substring(i,i+n);i+=n;
-    if(glyph=="\n") {if(lineCount<64)lines[lineCount++]=line;line="";continue;}
-    if(chinese.getUTF8Width((line+glyph).c_str())>288) {if(lineCount<64)lines[lineCount++]=line;line="";}
-    line+=glyph;
-  }
-  if(line.length()&&lineCount<64)lines[lineCount++]=line;
-}
-int solvedCount(){if(state.containsKey("solved_total"))return state["solved_total"].as<int>();int count=0;for(auto t:tasks())if(t["available"]==true&&t["state"]=="solved")++count;return count;}
-int availableCount(){if(state.containsKey("available_total"))return state["available_total"].as<int>();int count=0;for(auto t:tasks())if(t["available"]==true)++count;return count;}
-bool allSolved(){return availableCount()>0&&solvedCount()==availableCount();}
-void openTask(int index){
-  if(index<0||index>=(int)tasks().size())return;
-  selected=index;if(!task()["available"].as<bool>())return;
-  contentPage=0;detailKind=0;
-  if(task()["state"]=="solved"){detail=task()["explanation"]|question()["solution"]["explanation"].as<String>();screen=3;}
-  else screen=2;
-}
-void continueAdventure(){
-  for(int step=1;step<=(int)tasks().size();++step){int index=(selected+step)%tasks().size();if(tasks()[index]["available"]==true&&tasks()[index]["state"]!="solved"){openTask(index);return;}}
-  screen=1;mapOffset=(selected/2)*2;
-}
-void render() {
-  dirty=false;buttonCount=0;lcd.fillSprite(cream);lcd.fillRect(0,0,320,28,pale);
-  text("小语冒险岛",8,20);if(busy||pendingBody.length())text("同步中",260,20);else text(mode=="live"?"正式":(mode=="practice"?"试玩":"联网"),276,20);
-  if(screen==5) {
-    lcd.fillRect(0,0,320,28,pale);text("输入四位配对码",8,20);text(pairCode.c_str(),248,20);
-    for(int i=0;i<9;++i){String digit=String(i+1);button(8+(i%3)*80,40+(i/3)*48,72,digit.c_str(),150+i);}
-    button(88,188,152,"0",159);
-    button(248,40,64,"返回",104,false);button(248,88,64,"删除",160,false);button(248,136,64,"确认",161);return;
-  }
-  if(screen==7){
-    centered("配对前先连通网络",62);centered(message.c_str(),108);
-    button(8,136,148,"检查连接",140,false);button(164,136,148,"Wi-Fi设置",104,false);
-    button(72,188,176,"返回首页",100);return;
-  }
-  if(screen==6) {
-    centered("请在家长网页确认设备",60);centered(apName.length()?apName.c_str():"Math-ESP32",92);
-    centered("核对校验号后确认绑定",124);centered(pairVerification.c_str(),154);
-    button(72,188,176,"返回设置",104,false);return;
-  }
-  if(screen==4) {
-    text(base.startsWith("http://192.168.")?"当前：局域网":"当前：公网",8,48);
-    lcd.setTextColor(ink,cream);lcd.drawString(base,8,64,2);
-    if(setupActive)lcd.drawString(apName+" / "+apPassword,8,80,2);
-    button(8,86,96,"局域网",186,false);button(112,86,96,"公网",187,false);button(216,86,96,"配网",103,false);
-    button(8,136,148,"校准触摸",41,false);button(164,136,148,"开启配对",140,false);
-    button(72,188,176,"返回首页",100);return;
-  }
-  if(screen==8) {
-    lcd.fillRect(0,0,320,28,pale);text(("填写数字："+numberInput).c_str(),8,20);
-    for(int i=0;i<9;++i){String digit=String(i+1);button(8+(i%3)*80,40+(i/3)*48,72,digit.c_str(),170+i);}
-    button(8,188,72,"负号",180,false);button(88,188,72,"0",179);button(168,188,72,"小数点",181,false);
-    button(248,40,64,"返回",182,false);button(248,88,64,"删除",183,false);button(248,136,64,"确认",184);return;
-  }
-  if(screen==9){
-    face(64,108,true);
-    text(allSolved()?"今天的星星集齐啦！":"又点亮一颗星！",104,63);
-    text("你找到好办法啦",104,94);
-    String progress=String(solvedCount())+" / "+String(availableCount())+" 颗冒险星";
-    text(progress.c_str(),104,123);
-    for(int i=0;i<min(availableCount(),5);++i)star(115+i*36,153,i<solvedCount());
-    button(8,188,96,"看方法",191,false);button(112,188,200,allSolved()?"看看星星地图":"继续冒险",190);return;
-  }
-  if(screen==0) {
-    face(54,107,true);
-    text(allSolved()?"今天的冒险完成啦":"和小向导一起出发",100,64);
-    char buf[50];snprintf(buf,sizeof(buf),"经验 %d  金币 %d",xp,coins);text(buf,100,94);
-    String journey=ready?(availableCount()?String("已点亮 ")+solvedCount()+" / "+availableCount()+" 颗星":"等家长准备新冒险"):"等待同步冒险地图";
-    text(journey.c_str(),100,125);
-    text(message.c_str(),8,171);
-    button(8,188,96,"小设置",104,false);button(112,188,200,credential.isEmpty()?"配对设备":(allSolved()?"看看我的星星":"开始今日冒险"),credential.isEmpty()?140:101);return;
-  }
-  if(screen==1) {
-    lcd.fillRect(0,0,320,28,pale);text(allSolved()?"星星集齐，休息一下吧":"今日星星地图",8,20);
-    String progress=String(solvedCount())+" / "+availableCount();text(progress.c_str(),250,20);
-    if(!tasks().size())centered("等家长准备新冒险",90);
-    if((int)tasks().size()>mapOffset+1)lcd.drawFastVLine(23,58,48,0x9ED5);
-    for(unsigned i=mapOffset;i<tasks().size()&&i<(unsigned)(mapOffset+2);++i) {
-      int row=i-mapOffset;
-      auto t=tasks()[i];String title=t["question"]["title"]|"暂时休息";
-      String shortTitle;
-      for(unsigned j=0;j<title.length();) {unsigned char c=title[j];int n=c<128?1:(c<224?2:3);String next=title.substring(j,j+n);if(chinese.getUTF8Width((shortTitle+next).c_str())>124)break;shortTitle+=next;j+=n;}
-      String st=t["state"]|"pending";star(23,53+row*48,st=="solved");
-      text(shortTitle.c_str(),42,53+row*48);
-      button(180,32+row*48,132,!t["available"].as<bool>()?"暂时休息":st=="solved"?"已点亮·看方法":(st=="skipped"?"回来试试":"出发闯关"),110+i,st!="solved");
-    }
-    bool previous=mapOffset>0||serverPage>0,next=mapOffset+2<(int)tasks().size()||state["has_more"]==true;
-    if(previous)button(8,140,72,"上一页",193,false);
-    button(88,140,144,"随机探索",192);
-    if(next)button(240,140,72,"下一页",194,false);
-    text(mapMessage.length()?mapMessage.c_str():busy?"正在同步，可继续查看当前关卡":"随机探索一题，发现新挑战",8,132,0x5B6B);
-    button(8,188,148,"回家休息",100,false);button(164,188,148,"更新地图",102,false);return;
-  }
-  lineCount=0;
-  if(screen!=3)wrap(question()["content"].as<String>());
-  if(screen!=3)for(unsigned i=0;i<question()["options"].size();++i) wrap(String(char('A'+i))+". "+question()["options"][i].as<String>());
-  lcd.fillRect(0,0,320,28,pale);
-  String caption=screen==3?(detailKind==1?"小向导的提示":detailKind==2?"换个办法，再试一次":"一起看看好方法"):(task()["kind"]=="explore"?String("探索 · "):String("第 ")+(serverPage*5+selected+1)+" 关 · ")+(question()["question_type"]=="number"?"填一填":"选一选");
-  text(caption.c_str(),8,20);
-  if(screen==3)wrap(detail);
-  int pages=(lineCount+3)/4;if(pages<1)pages=1;if(contentPage>=pages)contentPage=0;
-  for(int j=0;j<4;++j)if(contentPage*4+j<lineCount)text(lines[contentPage*4+j].c_str(),12,45+j*20);
-  String pageNote=pages>1?String("第 ")+(contentPage+1)+" / "+pages+" 页 · 点翻页继续":(screen==2?"慢慢想，选好后轻点答案":"看懂了就回去试一试");
-  text(pageNote.c_str(),12,124,0x5B6B);
-  if(screen==2) {
-    auto opts=question()["options"].as<JsonArray>();
-    // Option labels are paginated alongside the question if they don't fit a button.
-    if(question()["question_type"]=="number"&&contentPage==pages-1) button(8,130,304,"填写数字答案",185);
-    else if(question()["question_type"]!="number"&&contentPage==pages-1) {
-      for(unsigned i=0;i<opts.size()&&i<3;++i) {
-        String prefix=String(char('A'+i))+". ";String label=prefix+opts[i].as<String>();
-        if(chinese.getUTF8Width(label.c_str())>88) label=String("选 ")+char('A'+i);
-        button(8+i*104,130,96,label.c_str(),120+i);
-      }
-    }
-    if(contentPage<pages-1)centered("读完这一页，点翻页继续",146);
-    if(pages>1){
-      button(8,188,72,"帮帮我",130,false);button(88,188,72,"稍后",131,false);
-      button(168,188,72,"翻页",136,false);button(248,188,64,"地图",132,false);
-    }else{
-      button(8,188,96,"帮帮我",130,false);button(112,188,96,"稍后再想",131,false);button(216,188,96,"星星地图",132,false);
-    }
-  } else {
-    button(8,188,96,task()["state"]=="solved"?"继续冒险":"再试一次",task()["state"]=="solved"?190:133);
-    button(112,188,96,pages>1?"翻页":task()["state"]=="solved"?"再看题目":"帮帮我",pages>1?136:task()["state"]=="solved"?133:130,false);button(216,188,96,"星星地图",135,false);
-  }
-}
-void handle(int id) {
-  if(id==186||id==187){base=id==186?"http://192.168.0.160/math":"https://ryven.xin/math";config.putString("base",base);message=id==186?"已切换局域网":"已切换公网";refreshAfter=true;nextRetry=0;dirty=true;return;}
-  if(id==140) {beginPair();return;}
-  if(screen==5&&id>=150&&id<=159) {if(pairCode.length()<4)pairCode+=String(id==159?0:id-149);dirty=true;return;}
-  if(id==161&&screen==5){if(!busy)claimPair();return;}
-  if(id==160) {if(pairCode.length())pairCode.remove(pairCode.length()-1);dirty=true;return;}
-  if(id==100) {pairOpenRequested=false;screen=0;dirty=true;return;}
-  if(id==104) {pairOpenRequested=false;screen=4;dirty=true;return;}
-  if(id==103) {startPortal();return;}
-  if(id==101) {screen=1;dirty=true;if(!ready)sync();return;}
-  if(id==102) {sync();return;}
-
-  if(id==192){requestExploration();return;}
-  if(id==193){if(mapOffset>0)mapOffset-=2;else if(serverPage>0){--serverPage;mapOffset=4;refreshAfter=true;nextRetry=0;}dirty=true;return;}
-  if(id==194){if(mapOffset+2<(int)tasks().size())mapOffset+=2;else if(state["has_more"]==true){++serverPage;mapOffset=0;refreshAfter=true;nextRetry=0;}dirty=true;return;}
-  if(id==190){continueAdventure();dirty=true;return;}
-  if(id==191){detail=question()["solution"]["explanation"].as<String>();detailKind=0;contentPage=0;screen=3;dirty=true;return;}
-  if(id==185){numberInput="";screen=8;dirty=true;return;}
-  if(screen==8){
-    if(id>=170&&id<=179&&numberInput.length()<12)numberInput+=String(id==179?0:id-169);
-    if(id==180){if(numberInput.startsWith("-"))numberInput.remove(0,1);else numberInput="-"+numberInput;}
-    if(id==181&&numberInput.indexOf('.')<0)numberInput+=".";
-    if(id==183&&numberInput.length())numberInput.remove(numberInput.length()-1);
-    if(id==182)screen=2;
-    if(id==184&&numberInput!=""&&numberInput!="-"&&numberInput!="."&&numberInput!="-.")submit("/api/math/answers",-1,true);
-    dirty=true;return;
-  }
-  if(id>=110&&id<115)openTask(id-110);
-  if(id>=120&&id<123)submit("/api/math/answers",id-120);
-  if(id==130)submit("/api/math/tasks/hint");
-  if(id==131)submit("/api/math/tasks/skip");
-  if(id==132||id==135){screen=1;mapOffset=(selected/2)*2;}
-  if(id==136)contentPage++;
-  if(id==133){screen=2;contentPage=0;}
-  if(id==134){if(lineCount>4)contentPage++;else screen=1;}
-  dirty=true;
-}
+#include "screen_ui.h"
 }
