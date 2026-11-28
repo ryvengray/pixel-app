@@ -279,7 +279,7 @@ public final class HomeConversationView extends FrameLayout {
             caption.setText(speaker(message));
             caption.setTextColor(muted());
             caption.setPadding(user?0:dp(19),0,user?dp(12):0,dp(4));
-            body.setText(message.content);
+            body.setText(RichText.format(activity,message.content,dark));
             body.setTag(user?"home_user_message":tool?"home_tool_result":"home_assistant_message");
             body.setTextColor(foreground());
             body.setTextSize(user||tool?15:17);
@@ -437,7 +437,22 @@ public final class HomeConversationView extends FrameLayout {
                 TextView row=recycled instanceof TextView?(TextView)recycled:label("",15);
                 String time=java.time.Instant.ofEpochMilli(item.createdAt).atZone(java.time.ZoneId.systemDefault())
                         .format(java.time.format.DateTimeFormatter.ofPattern("MM-dd HH:mm"));
-                row.setText((item.read?"":"●  ")+item.title+"\n"+time);
+                String titleLine=(item.read?"":"●  ")+RichText.plainPreview(item.title,60);
+                String snippet=RichText.plainPreview(item.body,96);
+                SpannableStringBuilder content=new SpannableStringBuilder(titleLine);
+                content.setSpan(new android.text.style.StyleSpan(android.graphics.Typeface.BOLD),0,content.length(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                int metaStart=content.length();
+                content.append("  ·  ").append(time);
+                content.setSpan(new android.text.style.ForegroundColorSpan(muted()),metaStart,content.length(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                content.setSpan(new android.text.style.RelativeSizeSpan(0.84f),metaStart,content.length(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                if(!snippet.isEmpty()){
+                    int subStart=content.length();
+                    content.append("\n").append(snippet);
+                    content.setSpan(new android.text.style.ForegroundColorSpan(muted()),subStart,content.length(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                    content.setSpan(new android.text.style.RelativeSizeSpan(0.9f),subStart,content.length(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                }
+                row.setLineSpacing(dp(3),1f);
+                row.setText(content);
                 row.setTextColor(foreground());
                 row.setPadding(dp(24),dp(12),dp(24),dp(12));
                 AppTypography.apply(row);
@@ -515,8 +530,8 @@ public final class HomeConversationView extends FrameLayout {
         lastInteraction=System.currentTimeMillis();
         LinearLayout list=new LinearLayout(activity);list.setOrientation(LinearLayout.VERTICAL);list.setPadding(dp(18),0,dp(18),0);
         TextView loading=label("正在读取提醒…",13);loading.setTextColor(Color.parseColor(dark?"#E5EDE3":"#263C31"));list.addView(loading);
-        if(!resultText.isEmpty()){TextView latest=label(resultText,15);latest.setTextColor(Color.parseColor(dark?"#E5EDE3":"#263C31"));latest.setPadding(0,dp(12),0,dp(16));latest.setTextIsSelectable(true);android.text.util.Linkify.addLinks(latest,android.text.util.Linkify.WEB_URLS);latest.setOnClickListener(v->showText("最近结果",resultText));list.addView(latest);}
-        List<AssistantStore.Message> records=store.recentMessages(200);for(int i=records.size()-1;i>=0;i--){AssistantStore.Message m=records.get(i);if(!m.role.equals("tool")||m.content.equals(resultText))continue;TextView row=label(m.content,15);row.setTextColor(Color.parseColor(dark?"#E5EDE3":"#263C31"));row.setPadding(0,dp(12),0,dp(16));row.setTextIsSelectable(true);android.text.util.Linkify.addLinks(row,android.text.util.Linkify.WEB_URLS);row.setOnClickListener(v->showText("内容详情",m.content));list.addView(row);}
+        if(!resultText.isEmpty()){TextView latest=label("",15);latest.setText(RichText.format(activity,resultText,dark));latest.setTextColor(Color.parseColor(dark?"#E5EDE3":"#263C31"));latest.setPadding(0,dp(12),0,dp(16));latest.setTextIsSelectable(true);android.text.util.Linkify.addLinks(latest,android.text.util.Linkify.WEB_URLS);latest.setOnClickListener(v->showText("最近结果",resultText));list.addView(latest);}
+        List<AssistantStore.Message> records=store.recentMessages(200);for(int i=records.size()-1;i>=0;i--){AssistantStore.Message m=records.get(i);if(!m.role.equals("tool")||m.content.equals(resultText))continue;TextView row=label("",15);row.setText(RichText.format(activity,m.content,dark));row.setTextColor(Color.parseColor(dark?"#E5EDE3":"#263C31"));row.setPadding(0,dp(12),0,dp(16));row.setTextIsSelectable(true);android.text.util.Linkify.addLinks(row,android.text.util.Linkify.WEB_URLS);row.setOnClickListener(v->showText("内容详情",m.content));list.addView(row);}
         ScrollView scroll=new ScrollView(activity);scroll.addView(list);showDialog("工具与最近结果",scroll);
         background.execute(()->{try{JSONArray reminders=AssistantApi.reminders(activity);main.post(()->{if(closed)return;loading.setText(reminders.length()==0?"暂无待办提醒":"待办提醒");int at=1;
             for(int i=0;i<reminders.length();i++){JSONObject item=reminders.optJSONObject(i);if(item==null)continue;

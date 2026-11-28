@@ -83,6 +83,7 @@ public final class BriefingActivity extends Activity {
                 + "h3,h4{font-size:1.1rem}p,ul,ol,pre,blockquote,table{margin:0 0 1em}"
                 + "ul,ol{padding-left:1.55em}li{margin:.35em 0}li>p{margin:.25em 0}"
                 + "a{color:" + accent + ";text-underline-offset:.18em}"
+                + "del,s{color:" + muted + ";text-decoration:line-through}"
                 + "blockquote,pre,th,article>h2:first-of-type+ul{background:" + panel + "}"
                 + "article>h2:first-of-type+ul{padding:.65em 1em .65em 2em;border-radius:.75em}"
                 + "blockquote{padding:.65em 1em;border-left:3px solid " + accent + ";border-radius:0 .5em .5em 0}"

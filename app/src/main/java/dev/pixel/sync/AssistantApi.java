@@ -119,6 +119,20 @@ public final class AssistantApi {
         try{return new JSONObject(post(url+"/v1/home",token,new JSONObject().put("messages",new JSONArray()).put("calendar",new JSONObject().put("events",events)).put("timezone",java.util.TimeZone.getDefault().getID()))).optString("content",fallback);}catch(Exception unavailable){return fallback;}
     }
 
+    public static void syncCalendarBriefing(Context context)throws Exception{
+        String url=serverUrl(context),token=secret(context,"device_token");if(url.isEmpty()||token.isEmpty())return;
+        java.time.LocalDate today=java.time.LocalDate.now();JSONArray raw,filtered=new JSONArray();
+        try(CalendarStore calendar=new CalendarStore(context)){raw=calendar.events(today.minusDays(7),today.plusDays(2));}
+        String todayStr=today.toString();
+        for(int i=0;i<raw.length()&&filtered.length()<80;i++){
+            JSONObject e=raw.optJSONObject(i);if(e==null)continue;
+            String occ=e.optString("occurrence"),type="todo".equals(e.optString("event_type"))?"todo":"date";
+            boolean completed=e.optBoolean("completed");
+            if(occ.compareTo(todayStr)<0&&(!"todo".equals(type)||completed))continue;
+            filtered.put(new JSONObject().put("title",e.optString("title")).put("occurrence",occ).put("event_type",type).put("completed",completed).put("days_until",e.optInt("days_until",0)));
+        }
+        post(url+"/v1/briefing/calendar",token,new JSONObject().put("timezone",java.util.TimeZone.getDefault().getID()).put("events",filtered));
+    }
     private static void requireNewsConnection(Context context)throws Exception{
         if(serverUrl(context).isEmpty()||secret(context,"device_token").isEmpty())throw new IOException("请先在助理设置中配对服务，再管理新闻订阅");
     }

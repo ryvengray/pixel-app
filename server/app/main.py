@@ -329,7 +329,7 @@ A short affirmative answer to your immediately preceding offer to save a life re
 Only claim an action succeeded when its tool result confirms success. Never claim an unavailable tool ran. Calendar tools run on the phone and return real results. Query records before editing to obtain exact ids and expected_revision. Treat 大姨妈 predictions separately from actual records; never claim safe days, diagnose, or store these facts in general memory. Use 大姨妈 in user-facing wording, not 经期. Never call calendar mutations for hypothetical questions; only explicit user changes. For birthdays given only as month/day, use year_known=false with month/day; do not invent a birth year or age.
 Use memories only when relevant; they may be outdated and the user's correction wins. Do not mention hidden memory unless useful.
 For a stable, explicit preference or fact, call save_memory. Do not infer personality from one event and do not save sensitive information. Upcoming events and temporary worries belong to time-bounded topics, not stable memory. Topic extraction happens asynchronously after the reply; do not claim a new topic is already saved or a follow-up scheduled unless a successful tool result confirms it.
-For news requests use subscribe_news/list_news/cancel_news. subscribe_news searches Google News topics only; for following a specific X account or RSS feed, direct the user to 新闻订阅 → 新闻源与 X 账号, never claim a topic search follows that account directly. Daily news requires an explicit topic and local hour (08–22); ask if absent. News fetching runs on the server; do not claim you searched or read articles in chat.
+For briefing and news requests use subscribe_news/list_news/cancel_news. Built-in presets are '个人晨报' (daily agenda/reminders + 2–3 day curated AI/engineering digest, or a historical story when quiet), 'AI 与技术动态' (real-time push for major AI/open-source breakthroughs + 2–3 day digest), and '副业痛点周报' (one concise side-project pain-point inspiration card every 2–3 days with target audience, pain quote and monetization angle); '社会热点' and '国际大事' presets are retired. Custom subscribe_news topics search Google News; for following a specific X account or RSS feed, direct the user to 晨报与技术动态 → 新闻源与 X 账号, never claim a topic search follows that account directly. Subscriptions require an explicit topic and local hour (08–22); ask if absent. News fetching runs on the server; do not claim you searched or read articles in chat.
 For explicit requests to operate the phone (including opening apps or sending a WeChat message), use start_phone_task with a faithful goal preserving the exact recipient and message. Ask only for genuinely missing details. This starts a background phone Agent using this same LLM, which decides each next action from fresh local Qwen screen observations; do not invent a fixed navigation plan or claim completion from task startup. Running means started, not completed. Use get_phone_task for progress, stop_phone_task when asked to stop. Do not busy-poll during this chat turn; completion is delivered to the existing inbox. Phone capability does not cover unsupported gestures, invisible controls or arbitrary Unicode input.
 For a requested reminder with an unambiguous date/time, call create_reminder. If the time is unclear, ask a short follow-up.
 Current synchronized memories:\n{memory_text}
@@ -913,6 +913,27 @@ class NewsSubscriptionRequest(BaseModel):
     locator: str = Field(default="", max_length=2048)
     hour: int = Field(ge=8, le=22)
     timezone: str = Field(min_length=1, max_length=100)
+
+
+class CalendarSnapshotItem(BaseModel):
+    title: str = Field(min_length=1, max_length=160)
+    occurrence: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    event_type: Literal["date", "todo"] = "date"
+    completed: bool = False
+    days_until: int = Field(default=0, ge=-366, le=366)
+
+
+class CalendarSnapshotRequest(BaseModel):
+    timezone: str = Field(default="Asia/Shanghai", max_length=100)
+    events: list[CalendarSnapshotItem] = Field(default_factory=list, max_length=80)
+
+
+@app.post("/v1/briefing/calendar")
+async def save_briefing_calendar(request: CalendarSnapshotRequest, device: dict = Depends(require_device)) -> dict[str, Any]:
+    try:
+        return news.save_calendar_snapshot(connect, device["id"], request.timezone, [e.model_dump() for e in request.events])
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
 
 
 @app.post("/v1/news/x-notifications/settings")

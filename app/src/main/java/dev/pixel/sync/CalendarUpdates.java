@@ -45,6 +45,7 @@ public final class CalendarUpdates extends BroadcastReceiver {
             }
             AlarmManager alarms=context.getSystemService(AlarmManager.class);PendingIntent alarm=PendingIntent.getBroadcast(context,0,new Intent(context,CalendarUpdates.class).setAction("dev.pixel.sync.CALENDAR_TICK"),PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
             alarms.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP,Math.max(now+60000,next),alarm);
+            try{AssistantApi.syncCalendarBriefing(context);}catch(Exception ignored){}
         }catch(Exception error){android.util.Log.w("GretaCalendar","Unable to refresh calendar: "+error.getClass().getSimpleName());}
     }
 }
