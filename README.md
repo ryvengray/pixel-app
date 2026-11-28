@@ -125,128 +125,57 @@ $env:JAVA_HOME='你的 JDK 17 目录'
 
 APK 和 SHA256 校验文件输出至 `dist/`。后续更新只运行构建脚本，不要重新生成签名密钥。
 
-### GitHub Releases
+### GitHub Releases（源码放 Gitee + 本地打包分发）
 
-源码仓库：[ryvengray/pixel-app](https://github.com/ryvengray/pixel-app)。Obtainium 中添加此链接即可跟踪正式版更新。GitHub Actions 配置在 `.github/workflows/release.yml`。首次需在 GitHub 仓库的 Actions Secrets 中配置签名信息；已经登录 GitHub CLI 时可以执行：
+源码保留在当前私有 Gitee 仓库；公开的 `ryvengray/pixel-app-releases` 仓库仅保存说明文件和 Release 附件（不包含源码）。Obtainium 中添加 `https://github.com/ryvengray/pixel-app-releases` 即可跟踪正式版更新。
 
-```powershell
-.\scripts\Set-GitHubSigningSecrets.ps1 -Repository 'ryvengray/pixel-app'
-git push origin main
-git tag v1.0.0
-git push origin v1.0.0
-```
+#### 首次准备
 
-推送 `v*` 标签将自动测试、构建、验证签名，并发布一个含 APK 的 GitHub Release。标签必须与 `app/version.properties` 的 `VERSION_NAME` 一致，例如 `v1.0.0`。Obtainium 添加该 GitHub 仓库链接即可获取 Release APK，不需要自己下载 Actions artifacts。每个 Release 仅提供一个通用 APK，适用于 Pixel 9 Pro。
+1. 安装 GitHub CLI（macOS 可执行 `brew install gh`），并登录：
 
-后续发布前，将 `VERSION_CODE` 增加为更大的整数，并更新 `VERSION_NAME`；提交推送后创建对应新标签。不更换包名或签名密钥，不复用旧标签。
+   ```bash
+   gh auth login
+   ```
 
-### Ubuntu 自动发布
+2. 准备好本地构建凭据（均已被 `.gitignore` 忽略，不要提交到仓库）：
+   - 将备份的 `.signing/release.jks` 与 `.signing/signing.properties` 放到项目根目录（若首次创建新签名可执行 `python3 scripts/release.py init-signing`）。
+   - 将 `google-services.json` 放到 `app/google-services.json`（构建 `prodRelease` 必需）。
+   - 配置好 JDK 17 与 Android SDK 35（设置 `ANDROID_HOME` 或在 `local.properties` 配置 `sdk.dir`）。
 
-以下步骤用于全新 Ubuntu 发布机。`gh` 使用 HTTPS 凭据推送代码和标签；GitHub Actions 已配置的签名 Secrets 会留在仓库中，不需要因更换电脑重新设置。
+3. 如果公开分发仓库尚未创建，首次发布时加上 `--create-repo`（仅写入 [distribution/README.md](distribution/README.md)，绝不推送源码历史）：
 
-#### 安装 GitHub CLI、JDK 和 Android SDK
+   ```bash
+   python3 scripts/release.py publish --create-repo
+   ```
 
-安装系统依赖和 GitHub CLI 官方 APT 源（命令参考 [GitHub CLI Linux 安装说明](https://github.com/cli/cli/blob/trunk/docs/install_linux.md)）：
+#### 日常一键发布
 
-```bash
-sudo apt update
-sudo apt install -y ca-certificates curl gnupg git openjdk-17-jdk unzip zip
-
-sudo install -d -m 0755 /etc/apt/keyrings
-curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
-  | sudo tee /etc/apt/keyrings/githubcli-archive-keyring.gpg >/dev/null
-sudo chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg
-echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
-  | sudo tee /etc/apt/sources.list.d/github-cli.list >/dev/null
-sudo apt update
-sudo apt install -y gh
-```
-
-确认系统选择的是 JDK 17。若 `java -version` 仍显示 Java 8，可切换 alternatives：
+在 macOS Finder 中双击 [publish.command](publish.command)，或在项目根目录执行：
 
 ```bash
-sudo update-alternatives --config java
-sudo update-alternatives --config javac
-java -version
-javac -version
+python3 scripts/release.py publish
 ```
 
-在两个选择菜单中都选路径包含 `java-17-openjdk` 的项目。
+脚本会自动完成：
 
-安装 Android 命令行工具，并配置项目要求的 SDK Platform 35 与 Build Tools 35.0.0。下面固定使用 Google 当前提供的命令行工具包版本；需要更新时，可从 [Android 命令行工具页面](https://developer.android.com/studio#command-line-tools-only) 获取最新 Linux 下载链接。SDK 组件安装使用官方 [`sdkmanager`](https://developer.android.com/tools/sdkmanager) 工具。
+1. 将 `app/version.properties` 的 `VERSION_NAME` 末位加一、`VERSION_CODE` 加一。
+2. 运行 `bash tests/sync-test.sh`，本地执行 `./gradlew --no-daemon assembleProdRelease` 并用 `apksigner` 校验签名，输出 `dist/gray-<版本>.apk` 与 `dist/SHA256SUMS`。
+3. 在 `ryvengray/pixel-app-releases` 创建草稿 Release，上传 APK 与校验文件后公开。
+4. 在当前源码仓库仅提交 `app/version.properties`（提交信息 `Release Android v<版本>`），并推送到当前分支配置的上游分支（例如 Gitee 的 `origin/main`）。
+
+若中途失败，脚本会保留 `release-state.json`，重新运行同一命令即可从断点继续，不会重复递增版本号。
+
+只构建不发布可执行：
 
 ```bash
-export ANDROID_HOME="$HOME/Android/Sdk"
-mkdir -p "$ANDROID_HOME/cmdline-tools"
-tools_tmp="$(mktemp -d)"
-curl -fL https://dl.google.com/android/repository/commandlinetools-linux-15859902_latest.zip \
-  -o "$tools_tmp/commandlinetools.zip"
-unzip -q "$tools_tmp/commandlinetools.zip" -d "$tools_tmp"
-mv "$tools_tmp/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest"
-rm -rf "$tools_tmp"
-
-if [ -n "${ZSH_VERSION:-}" ]; then
-  shell_rc="$HOME/.zshrc"
-else
-  shell_rc="$HOME/.bashrc"
-fi
-cat >> "$shell_rc" <<'EOF'
-export ANDROID_HOME="$HOME/Android/Sdk"
-export ANDROID_SDK_ROOT="$ANDROID_HOME"
-export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH"
-EOF
-source "$shell_rc"
-
-JAVA17_BIN="$(find /usr/lib/jvm -path '*/java-17-*/bin/java' -print -quit)"
-if [ -z "$JAVA17_BIN" ]; then echo "找不到 JDK 17，请安装 openjdk-17-jdk" >&2; exit 1; fi
-JAVA17_HOME="${JAVA17_BIN%/bin/java}"
-printf 'export JAVA_HOME="%s"\nexport PATH="$JAVA_HOME/bin:$PATH"\n' "$JAVA17_HOME" >> "$shell_rc"
-source "$shell_rc"
-
-sdkmanager --licenses
-sdkmanager --install "platform-tools" "platforms;android-35" "build-tools;35.0.0"
-java -version
-gh --version
-sdkmanager --list_installed
+python3 scripts/release.py build
 ```
 
-`sdkmanager --licenses` 会逐项显示 Android SDK 许可；阅读并接受后再继续安装组件。
-
-#### 登录并准备项目
-
-使用有 `ryvengray/pixel-app` 写入权限的 GitHub 账号登录。终端会显示一次性验证码，按提示在浏览器完成授权：
+验证发布脚本逻辑（不调用 GitHub 或 Gradle）：
 
 ```bash
-gh auth login --hostname github.com --git-protocol https --web
-gh auth setup-git
-gh auth status
-gh repo clone ryvengray/pixel-app
-cd pixel-app
+python3 -m unittest tests/test_release.py -v
 ```
-
-将旧电脑备份的**同一份** `.signing/` 目录复制到项目根目录；不要重新运行 `New-ReleaseKey.sh`，否则会生成无法更新现有正式版的新密钥。`app/google-services.json` 也需要从旧电脑安全复制，或从 Firebase Console 下载到 `app/`，供这台电脑本地构建 `prodRelease` 使用。两个文件都被 Git 忽略，不要提交。
-
-```bash
-chmod 700 .signing
-chmod 600 .signing/*
-```
-
-GitHub Actions 的仓库 Secrets 已经存在时，无需再次运行 `Setup-GitHubSigningSecrets.sh`。仅当仓库 Secrets 尚未配置或签名密钥确实更换时，才需要重新配置；更换密钥会导致已安装正式版无法通过普通更新安装。
-
-#### 发布
-```
-
-发布时不传版本号，脚本会显示当前版本，并提供“主版本升级”“功能更新”“修复更新”三项选择；也可直接传入确定的版本号以跳过菜单。随后脚本自动递增 `VERSION_CODE`、构建及校验已签名 APK、提交版本修改、推送分支和 `v*` 标签：
-
-```bash
-bash scripts/release-ubuntu.sh
-# 或直接指定版本号
-bash scripts/release-ubuntu.sh 1.2.0
-```
-
-标签推送会触发 GitHub Actions 创建 GitHub Release，Obtainium 继续使用同一仓库链接追踪更新。脚本会拒绝脏工作区、已存在标签、缺失 SDK 或签名文件，避免发布不可安装的更新。
-
-Gitee 不运行 GitHub Actions；若只保留 Gitee，可先用本地构建脚本生成签名 APK，再上传到 Gitee 的 Release，但 Obtainium 需要另行验证并配置通用 HTML 来源。
 
 ## 失败处理与测试
 
